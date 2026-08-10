@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { chmod, mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -10,6 +10,7 @@ import {
   FileVerificationJournal,
   VerificationSignedJournalEntrySchema,
   verificationArtifactEntry,
+  verificationSignedEntry,
   type VerificationRunnerTarget,
 } from "../src/index.js";
 
@@ -18,9 +19,9 @@ const temporaryRoots: string[] = [];
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(
-    temporaryRoots.splice(0).map((root) =>
-      rm(root, { recursive: true, force: true }),
-    ),
+    temporaryRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -46,11 +47,17 @@ const target: VerificationRunnerTarget = {
 const artifact = new TextEncoder().encode("<html>可信预览</html>");
 const artifactHash =
   "6d161a76d3146278ed0339a5bb3ef099883fed91c30d88a98396383c94410a4e";
+const integrityKey = new Uint8Array(32).fill(0x5a);
+const testJournalOptions = {
+  assertWindowsPrivatePath: async () => Promise.resolve(),
+};
 const artifactEntry = verificationArtifactEntry({
   target,
   evidenceKey: "80000000-0000-4000-8000-000000000008",
   artifact,
   artifactHash,
+  verificationCompletedAt: "2026-08-11T03:00:00.000Z",
+  integrityKey,
   checks: [
     {
       criterionKey: target.acceptanceCriteria[0]!.criterionKey,
@@ -64,12 +71,13 @@ describe("FileVerificationJournal", () => {
   it("原子保存 Preview 与已签名证据，重启后恢复完全相同内容", async () => {
     const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
     temporaryRoots.push(root);
-    await mkdir(root, { recursive: true });
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") await chmod(root, 0o700);
     const filePath = path.join(root, "verification-journal.json");
-    const journal = new FileVerificationJournal(filePath);
+    const journal = new FileVerificationJournal(filePath, testJournalOptions);
     await journal.saveArtifact(artifactEntry);
     await expect(
-      new FileVerificationJournal(filePath).load(),
+      new FileVerificationJournal(filePath, testJournalOptions).load(),
     ).resolves.toEqual(artifactEntry);
 
     const { privateKey } = generateKeyPairSync("ed25519");
@@ -95,17 +103,20 @@ describe("FileVerificationJournal", () => {
       artifactHash,
       checks: artifactEntry.checks,
     });
-    const signedEntry = VerificationSignedJournalEntrySchema.parse({
-      ...artifactEntry,
-      stage: "evidence_signed",
+    const signedEntry = verificationSignedEntry({
+      artifactEntry,
       signedEvidence,
+      integrityKey,
     });
     await journal.saveSigned(signedEntry);
     await expect(
-      new FileVerificationJournal(filePath).load(),
+      new FileVerificationJournal(filePath, testJournalOptions).load(),
     ).resolves.toEqual(signedEntry);
 
-    await journal.clear();
+    await expect(journal.clear(artifactEntry.integrityTag)).rejects.toThrow(
+      "已经变化",
+    );
+    await journal.clear(signedEntry.integrityTag);
     await expect(journal.load()).resolves.toBeNull();
     await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
       code: "ENOENT",
@@ -115,9 +126,11 @@ describe("FileVerificationJournal", () => {
   it("拒绝用另一任务覆盖未完成日志", async () => {
     const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
     temporaryRoots.push(root);
-    await mkdir(root, { recursive: true });
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") await chmod(root, 0o700);
     const journal = new FileVerificationJournal(
       path.join(root, "verification-journal.json"),
+      testJournalOptions,
     );
     await journal.saveArtifact(artifactEntry);
 

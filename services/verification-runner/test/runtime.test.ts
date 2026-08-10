@@ -8,6 +8,7 @@ import {
   Ed25519RunnerEvidenceSigner,
   InMemoryVerificationJournal,
   VerificationRunnerRuntime,
+  verificationArtifactEntry,
   type VerificationRunnerTarget,
 } from "../src/index.js";
 
@@ -301,5 +302,176 @@ describe("VerificationRunnerRuntime", () => {
     await expect(runtime.runOnce()).rejects.toThrow("完整性");
     expect(controlPlane.publishPreview).not.toHaveBeenCalled();
     expect(controlPlane.submitEvidence).not.toHaveBeenCalled();
+  });
+
+  it("恢复窗过期后拒绝刷新旧验证结果的证据时间", async () => {
+    const { signer } = signerFixture();
+    const entry = verificationArtifactEntry({
+      target,
+      evidenceKey: "80000000-0000-4000-8000-000000000008",
+      artifact: preview,
+      artifactHash,
+      checks: passedVerification.checks,
+      verificationCompletedAt: "2026-08-11T03:00:00.000Z",
+      integrityKey: journalIntegrityKey,
+    });
+    const controlPlane = {
+      listPending: vi.fn(async () => [target]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: { tenantKey, projectKey, repositoryKey, runnerKey, keyId },
+      controlPlane,
+      verifier: { verify: vi.fn() },
+      signer,
+      journal: {
+        load: vi.fn(async () => entry),
+        saveArtifact: vi.fn(),
+        saveSigned: vi.fn(),
+        clear: vi.fn(),
+      },
+      journalIntegrityKey,
+      maxArtifactRecoveryAgeMs: 10 * 60_000,
+      clock: () => new Date("2026-08-11T03:11:00.000Z"),
+    });
+
+    await expect(runtime.runOnce()).rejects.toThrow("恢复窗口已经过期");
+    expect(controlPlane.publishPreview).not.toHaveBeenCalled();
+    expect(controlPlane.submitEvidence).not.toHaveBeenCalled();
+  });
+
+  it("恢复时权威需求或验收条件变化会拒绝旧制品", async () => {
+    const { signer } = signerFixture();
+    const entry = verificationArtifactEntry({
+      target,
+      evidenceKey: "80000000-0000-4000-8000-000000000008",
+      artifact: preview,
+      artifactHash,
+      checks: passedVerification.checks,
+      verificationCompletedAt: "2026-08-11T03:00:00.000Z",
+      integrityKey: journalIntegrityKey,
+    });
+    const changedTarget = {
+      ...target,
+      acceptanceCriteria: [
+        {
+          ...target.acceptanceCriteria[0]!,
+          description: "需求已经变化，必须显示新的预约结果",
+        },
+      ],
+    };
+    const controlPlane = {
+      listPending: vi.fn(async () => [changedTarget]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: { tenantKey, projectKey, repositoryKey, runnerKey, keyId },
+      controlPlane,
+      verifier: { verify: vi.fn() },
+      signer,
+      journal: {
+        load: vi.fn(async () => entry),
+        saveArtifact: vi.fn(),
+        saveSigned: vi.fn(),
+        clear: vi.fn(),
+      },
+      journalIntegrityKey,
+      clock: () => new Date("2026-08-11T03:01:00.000Z"),
+    });
+
+    await expect(runtime.runOnce()).rejects.toThrow("权威验证任务不一致");
+    expect(controlPlane.publishPreview).not.toHaveBeenCalled();
+  });
+
+  it("同一完整性密钥下也不能把其他租户项目的恢复日志重新签名", async () => {
+    const { signer } = signerFixture();
+    const entry = verificationArtifactEntry({
+      target,
+      evidenceKey: "80000000-0000-4000-8000-000000000008",
+      artifact: preview,
+      artifactHash,
+      checks: passedVerification.checks,
+      verificationCompletedAt: "2026-08-11T03:00:00.000Z",
+      integrityKey: journalIntegrityKey,
+    });
+    const controlPlane = {
+      listPending: vi.fn(async () => [target]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: {
+        tenantKey: "11000000-0000-4000-8000-000000000001",
+        projectKey: "22000000-0000-4000-8000-000000000002",
+        repositoryKey,
+        runnerKey,
+        keyId,
+      },
+      controlPlane,
+      verifier: { verify: vi.fn() },
+      signer,
+      journal: {
+        load: vi.fn(async () => entry),
+        saveArtifact: vi.fn(),
+        saveSigned: vi.fn(),
+        clear: vi.fn(),
+      },
+      journalIntegrityKey,
+      clock: () => new Date("2026-08-11T03:01:00.000Z"),
+    });
+
+    await expect(runtime.runOnce()).rejects.toThrow("授权范围");
+    expect(controlPlane.publishPreview).not.toHaveBeenCalled();
+    expect(controlPlane.submitEvidence).not.toHaveBeenCalled();
+  });
+
+  it("同一 Runtime 不允许两个 runOnce 并发签署同一任务", async () => {
+    const { signer } = signerFixture();
+    let releaseFirst!: () => void;
+    const firstMayContinue = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const controlPlane = {
+      listPending: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await firstMayContinue;
+          return [target];
+        })
+        .mockResolvedValueOnce([]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: { tenantKey, projectKey, repositoryKey, runnerKey, keyId },
+      controlPlane,
+      verifier: {
+        verify: vi.fn(async () => ({
+          artifact: preview,
+          checks: [
+            {
+              criterionKey,
+              status: "failed" as const,
+              testRunKey: "suite-failed",
+            },
+          ],
+        })),
+      },
+      signer,
+      journal: new InMemoryVerificationJournal(),
+      journalIntegrityKey,
+    });
+
+    const first = runtime.runOnce();
+    const second = runtime.runOnce();
+    releaseFirst();
+
+    await expect(second).rejects.toThrow("正在处理");
+    await expect(first).resolves.toMatchObject({
+      kind: "verification_failed",
+    });
+    expect(controlPlane.listPending).toHaveBeenCalledOnce();
   });
 });
