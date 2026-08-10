@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   FixedSuiteVerificationEngine,
+  VerificationSuitePlanSchema,
   verificationSuitePlanHash,
   type VerificationRunnerTarget,
   type VerificationSuitePlan,
@@ -56,6 +57,43 @@ const anchorFor = (trustedPlan: VerificationSuitePlan) => ({
 });
 
 describe("FixedSuiteVerificationEngine", () => {
+  it("验证计划摘要绑定实际容器镜像、命令和超时", () => {
+    const candidate = {
+      ...plan([]),
+      suites: [
+        {
+          suiteKey: "unit",
+          name: "单元测试",
+          criterionKeys: target.acceptanceCriteria.map(
+            (criterion) => criterion.criterionKey,
+          ),
+          execution: {
+            image: `registry.example.test/forgex/node@sha256:${"a".repeat(64)}`,
+            command: ["npm", "test", "--", "--runInBand"],
+            timeoutMs: 120_000,
+          },
+        },
+      ],
+    };
+    const first = VerificationSuitePlanSchema.safeParse(candidate);
+    expect(first.success).toBe(true);
+    if (!first.success) return;
+    const changed = VerificationSuitePlanSchema.parse({
+      ...candidate,
+      suites: candidate.suites.map((suite) => ({
+        ...suite,
+        execution: {
+          ...suite.execution,
+          command: ["npm", "run", "fake-pass"],
+        },
+      })),
+    });
+
+    expect(verificationSuitePlanHash(first.data)).not.toBe(
+      verificationSuitePlanHash(changed),
+    );
+  });
+
   it("只验证权威提交，以固定套件结果覆盖全部验收条件并生成确定性 Preview", async () => {
     const trustedPlan = plan([
       {
