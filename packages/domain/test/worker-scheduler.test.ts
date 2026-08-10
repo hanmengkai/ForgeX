@@ -5,19 +5,24 @@ import { DeliveryQueue, WorkerRegistry } from "../src/index.js";
 const worker = (index: number) => ({
   deviceName: `研发电脑 ${index}`,
   accountName: `Codex 账户 ${index}`,
-  accountFingerprint: `fingerprint-${index}`,
+  accountFingerprint: index.toString(16).padStart(64, "0"),
   capabilities: ["typescript", "browser"]
+});
+
+const registryOptions = (maxAccounts = 5) => ({
+  tenantKey: "tenant-a",
+  maxAccounts
 });
 
 describe("WorkerRegistry", () => {
   it("拒绝无效的账户上限", () => {
-    expect(() => new WorkerRegistry({ maxAccounts: 0 })).toThrow(
+    expect(() => new WorkerRegistry(registryOptions(0))).toThrow(
       "Codex 账户上限必须是正整数"
     );
   });
 
   it("一个租户最多登记五个 Codex 账户", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
 
     for (let index = 1; index <= 5; index += 1) {
       registry.register(worker(index), new Date("2026-08-10T00:00:00Z"));
@@ -29,7 +34,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("普通视图只展示可读信息，不暴露内部标识和账户指纹", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
     registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
 
     const [item] = registry.listForPeople(new Date("2026-08-10T00:00:05Z"));
@@ -45,7 +50,7 @@ describe("WorkerRegistry", () => {
   });
 
   it("同一账户重新连接时更新设备信息但不占用新名额", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 1 });
+    const registry = new WorkerRegistry(registryOptions(1));
     const firstKey = registry.register(
       worker(1),
       new Date("2026-08-10T00:00:00Z")
@@ -59,7 +64,7 @@ describe("WorkerRegistry", () => {
       new Date("2026-08-10T00:00:10Z")
     );
 
-    expect(secondKey).toBe(firstKey);
+    expect(secondKey.workerKey).toBe(firstKey.workerKey);
     expect(registry.listForPeople(new Date("2026-08-10T00:00:11Z"))[0]).toMatchObject({
       deviceName: "重新连接的研发电脑",
       status: "空闲"
@@ -71,7 +76,7 @@ describe("WorkerRegistry", () => {
     [{ ...worker(1), accountName: "" }, "请为 Codex 账户填写昵称"],
     [{ ...worker(1), accountFingerprint: "" }, "账户指纹不能为空"]
   ])("拒绝不完整的设备登记信息", (registration, message) => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
 
     expect(() =>
       registry.register(registration, new Date("2026-08-10T00:00:00Z"))
@@ -79,7 +84,10 @@ describe("WorkerRegistry", () => {
   });
 
   it("心跳超时后显示离线且不再领取工作", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5, offlineAfterMs: 1_000 });
+    const registry = new WorkerRegistry({
+      ...registryOptions(),
+      offlineAfterMs: 1_000
+    });
     registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
 
     expect(registry.listForPeople(new Date("2026-08-10T00:00:02Z"))[0]).toEqual({
@@ -94,9 +102,19 @@ describe("WorkerRegistry", () => {
   });
 
   it("找不到设备时返回可读错误", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
 
-    expect(() => registry.heartbeat("missing", new Date())).toThrow(
+    expect(() =>
+      registry.heartbeat(
+        {
+          tenantKey: "tenant-a",
+          workerKey: "missing",
+          sessionKey: "missing",
+          generation: 1
+        },
+        new Date()
+      )
+    ).toThrow(
       "找不到对应的 Codex 设备"
     );
   });
@@ -104,7 +122,7 @@ describe("WorkerRegistry", () => {
 
 describe("DeliveryQueue", () => {
   it("拒绝无效租约时长", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
 
     expect(() => new DeliveryQueue(registry, { leaseDurationMs: 0 })).toThrow(
       "任务租约时间必须大于零"
@@ -112,7 +130,7 @@ describe("DeliveryQueue", () => {
   });
 
   it("把多个需求并行分配给不同的空闲账户", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
     registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
     registry.register(worker(2), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 60_000 });
@@ -141,7 +159,7 @@ describe("DeliveryQueue", () => {
   });
 
   it("同一账户在完成前不会领取第二个需求", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
     registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 60_000 });
     queue.enqueue({ key: "work-a", title: "需求一", requiredCapabilities: [] });
@@ -152,7 +170,7 @@ describe("DeliveryQueue", () => {
   });
 
   it("租约超时后把需求重新排队，不伪造完成状态", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
     registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 1_000 });
     queue.enqueue({ key: "work-a", title: "容易中断的需求", requiredCapabilities: [] });
@@ -167,14 +185,17 @@ describe("DeliveryQueue", () => {
   });
 
   it("完成当前需求后账户可以继续领取下一项", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
     registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 60_000 });
     queue.enqueue({ key: "work-a", title: "需求一", requiredCapabilities: [] });
     queue.enqueue({ key: "work-b", title: "需求二", requiredCapabilities: [] });
     const [first] = queue.dispatch(new Date("2026-08-10T00:00:01Z"));
 
-    queue.complete(first!.assignmentKey);
+    queue.completeLease({
+      assignment: first!,
+      completedAt: new Date("2026-08-10T00:00:01.500Z")
+    });
 
     expect(queue.dispatch(new Date("2026-08-10T00:00:02Z"))[0]?.workTitle).toBe(
       "需求二"
@@ -182,7 +203,7 @@ describe("DeliveryQueue", () => {
   });
 
   it("没有匹配能力时保留等待状态", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
     registry.register(
       { ...worker(1), capabilities: ["typescript"] },
       new Date("2026-08-10T00:00:00Z")
@@ -197,7 +218,7 @@ describe("DeliveryQueue", () => {
   });
 
   it("拒绝空标题和重复入队", () => {
-    const queue = new DeliveryQueue(new WorkerRegistry({ maxAccounts: 5 }), {
+    const queue = new DeliveryQueue(new WorkerRegistry(registryOptions()), {
       leaseDurationMs: 60_000
     });
 
@@ -212,21 +233,36 @@ describe("DeliveryQueue", () => {
   });
 
   it("支持续租，并对失效租约给出可读错误", () => {
-    const registry = new WorkerRegistry({ maxAccounts: 5 });
+    const registry = new WorkerRegistry(registryOptions());
     registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 1_000 });
     queue.enqueue({ key: "work-a", title: "长时间需求", requiredCapabilities: [] });
     const [assignment] = queue.dispatch(new Date("2026-08-10T00:00:01Z"));
 
     expect(
-      queue.renew(assignment!.assignmentKey, new Date("2026-08-10T00:00:01.500Z"))
-    ).toEqual(new Date("2026-08-10T00:00:02.500Z"));
+      queue.renewLease({
+        assignment: assignment!,
+        renewedAt: new Date("2026-08-10T00:00:01.500Z")
+      })
+    ).toBe("2026-08-10T00:00:02.500Z");
     expect(queue.reclaimExpired(new Date("2026-08-10T00:00:02Z"))).toEqual([]);
-    expect(() => queue.renew("missing", new Date())).toThrow(
+    expect(() =>
+      queue.renewLease({
+        assignment: {
+          assignmentKey: "missing",
+          tenantKey: "tenant-a",
+          workKey: "missing",
+          workTitle: "missing",
+          workerKey: "missing",
+          sessionKey: "missing",
+          generation: 1,
+          fencingToken: 1,
+          leasedUntil: new Date().toISOString()
+        },
+        renewedAt: new Date()
+      })
+    ).toThrow(
       "任务租约已经失效，请重新领取"
-    );
-    expect(() => queue.complete("missing")).toThrow(
-      "找不到正在执行的交付任务"
     );
   });
 });
