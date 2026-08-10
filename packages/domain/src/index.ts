@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 
+export { RequirementWorkflow } from "./requirement-workflow.js";
+export type {
+  RequirementPeopleView,
+  RequirementRevisionInput,
+  VerificationEvidence
+} from "./requirement-workflow.js";
+
 export interface WorkerRegistration {
   deviceName: string;
   accountName: string;
@@ -302,4 +309,3 @@ export class DeliveryQueue {
     };
   }
 }
-

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+*.tsbuildinfo
 .env
 .env.*
 !.env.example
@@ -8,4 +9,3 @@ coverage/
 *.log
 .idea/
 .vscode/
-
