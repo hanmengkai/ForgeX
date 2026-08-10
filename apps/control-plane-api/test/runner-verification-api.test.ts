@@ -23,10 +23,7 @@ import {
   type RunnerSessionAuthenticator,
   type SessionAuthenticator,
 } from "@forgex/application";
-import {
-  RequirementSpecSchema,
-  type EvidencePayload,
-} from "@forgex/contracts";
+import { RequirementSpecSchema, type EvidencePayload } from "@forgex/contracts";
 import { EvidenceAuthority, RequirementWorkflow } from "@forgex/domain";
 import {
   McpHealthAuthority,
@@ -252,9 +249,7 @@ describe("独立验证 Runner API", () => {
       producedAt: "2026-08-11T03:01:00.000Z",
       artifactHashAlgorithm: "sha256",
       artifactHash,
-      checks: [
-        { criterionKey, status: "passed", testRunKey: "runner-api-1" },
-      ],
+      checks: [{ criterionKey, status: "passed", testRunKey: "runner-api-1" }],
     };
     const evidence = await app.inject({
       method: "POST",
