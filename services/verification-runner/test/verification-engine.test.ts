@@ -43,12 +43,38 @@ describe("FixedSuiteVerificationEngine", () => {
     const sandbox = {
       run: vi.fn(async () => ({
         suites: [
-          { name: "单元测试", status: "passed" as const },
-          { name: "生产构建", status: "passed" as const },
+          { suiteKey: "unit", status: "passed" as const },
+          { suiteKey: "build", status: "passed" as const },
         ],
       })),
     };
-    const engine = new FixedSuiteVerificationEngine({ workspace, sandbox });
+    const planProvider = {
+      planFor: vi.fn(async () => ({
+        schemaVersion: 1 as const,
+        planKey: "project-node-v1",
+        requirementKey: target.requirementKey,
+        requirementRevision: target.requirementRevision,
+        gitHashAlgorithm: target.gitHashAlgorithm,
+        commitSha: target.commitSha,
+        suites: [
+          {
+            suiteKey: "unit",
+            name: "单元测试",
+            criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
+          },
+          {
+            suiteKey: "build",
+            name: "生产构建",
+            criterionKeys: [target.acceptanceCriteria[1]!.criterionKey],
+          },
+        ],
+      })),
+    };
+    const engine = new FixedSuiteVerificationEngine({
+      workspace,
+      sandbox,
+      planProvider,
+    });
 
     const first = await engine.verify(target);
     const second = await engine.verify(target);
@@ -58,6 +84,7 @@ describe("FixedSuiteVerificationEngine", () => {
       gitHashAlgorithm: target.gitHashAlgorithm,
       commitSha: target.commitSha,
     });
+    expect(planProvider.planFor).toHaveBeenCalledWith(target);
     expect(first.checks).toEqual([
       {
         criterionKey: target.acceptanceCriteria[0]!.criterionKey,
@@ -92,19 +119,73 @@ describe("FixedSuiteVerificationEngine", () => {
       sandbox: {
         run: vi.fn(async () => ({
           suites: [
-            { name: "单元测试", status: "failed" as const },
-            { name: "生产构建", status: "passed" as const },
+            { suiteKey: "unit", status: "failed" as const },
+            { suiteKey: "build", status: "passed" as const },
+          ],
+        })),
+      },
+      planProvider: {
+        planFor: vi.fn(async () => ({
+          schemaVersion: 1 as const,
+          planKey: "project-node-v1",
+          requirementKey: target.requirementKey,
+          requirementRevision: target.requirementRevision,
+          gitHashAlgorithm: target.gitHashAlgorithm,
+          commitSha: target.commitSha,
+          suites: [
+            {
+              suiteKey: "unit",
+              name: "单元测试",
+              criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
+            },
+            {
+              suiteKey: "build",
+              name: "生产构建",
+              criterionKeys: [target.acceptanceCriteria[1]!.criterionKey],
+            },
           ],
         })),
       },
     });
 
     await expect(engine.verify(target)).resolves.toMatchObject({
-      checks: [
-        { status: "failed" },
-        { status: "failed" },
-      ],
+      checks: [{ status: "failed" }, { status: "passed" }],
     });
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("拒绝缺少验收条件绑定或返回未知套件的验证计划", async () => {
+    const engine = new FixedSuiteVerificationEngine({
+      workspace: {
+        prepare: vi.fn(async () => ({
+          path: path.resolve("verification-workspaces", "run-c"),
+          dispose: vi.fn(async () => Promise.resolve()),
+        })),
+      },
+      sandbox: {
+        run: vi.fn(async () => ({
+          suites: [{ suiteKey: "smuggled", status: "passed" as const }],
+        })),
+      },
+      planProvider: {
+        planFor: vi.fn(async () => ({
+          schemaVersion: 1 as const,
+          planKey: "project-node-v1",
+          requirementKey: target.requirementKey,
+          requirementRevision: target.requirementRevision,
+          gitHashAlgorithm: target.gitHashAlgorithm,
+          commitSha: target.commitSha,
+          suites: [
+            {
+              suiteKey: "unit",
+              name: "单元测试",
+              criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
+            },
+          ],
+        })),
+      },
+    });
+
+    await expect(engine.verify(target)).rejects.toThrow();
   });
 });
