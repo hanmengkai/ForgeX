@@ -31,6 +31,7 @@ import type { PreviewArtifactReference } from "./preview-artifact-store.js";
 export interface RequirementApplicationServiceOptions {
   repository: RequirementRepository;
   projectKey: string;
+  repositoryKey?: string;
   clock?: () => Date;
 }
 
@@ -93,6 +94,7 @@ const decodeCursor = (cursor: string): number => {
 export class RequirementApplicationService {
   readonly #repository: RequirementRepository;
   readonly #projectKey: string;
+  readonly #repositoryKey: string;
   readonly #clock: () => Date;
 
   constructor(options: RequirementApplicationServiceOptions) {
@@ -101,6 +103,11 @@ export class RequirementApplicationService {
     }
     this.#repository = options.repository;
     this.#projectKey = options.projectKey.trim().toLowerCase();
+    const repositoryKey = options.repositoryKey ?? options.projectKey;
+    if (!internalKeyPattern.test(repositoryKey.trim())) {
+      throw new Error("仓库范围必须使用有效的内部标识");
+    }
+    this.#repositoryKey = repositoryKey.trim().toLowerCase();
     this.#clock = options.clock ?? (() => new Date());
   }
 
@@ -217,6 +224,7 @@ export class RequirementApplicationService {
           dispatchKey: randomUUID(),
           tenantKey: record.tenantKey,
           projectKey: record.projectKey,
+          repositoryKey: this.#repositoryKey,
           requirementKey: record.requirementKey,
           requirementRevision: record.workflow.currentRevision,
           title: record.spec.title,

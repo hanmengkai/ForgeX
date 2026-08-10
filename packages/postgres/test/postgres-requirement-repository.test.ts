@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { WORKER_REQUIREMENT_COMPLETION_SUMMARY } from "@forgex/contracts";
+
 import type { RequirementSpec } from "@forgex/contracts";
 import { RequirementWorkflow } from "@forgex/domain";
 
@@ -127,6 +129,7 @@ describe("PostgresRequirementRepository", () => {
         dispatchKey,
         tenantKey,
         projectKey,
+        repositoryKey: projectKey,
         requirementKey,
         requirementRevision: 1,
         title: spec.title,
@@ -282,6 +285,7 @@ describe("PostgresRequirementRepository", () => {
               {
                 dispatch_key: dispatchKey,
                 project_key: projectKey,
+                repository_key: projectKey,
                 requirement_key: requirementKey,
                 requirement_revision: 1,
                 title: spec.title,
@@ -390,6 +394,77 @@ describe("PostgresRequirementRepository", () => {
       repository.transaction(tenantV7, projectV7, () => "已锁定"),
     ).resolves.toBe("已锁定");
     expect(database.queries[1]?.values).toEqual([`${tenantV7}:${projectV7}`]);
+  });
+
+  it("持久化并按永久租约凭据收敛设备交付结果", async () => {
+    const assignmentKey = "77777777-7777-4777-8777-777777777777";
+    const database = fakeDatabase({
+      respond: (text) =>
+        text.startsWith("UPDATE forgex_delivery_runs")
+          ? [{ requirement_key: requirementKey }]
+          : undefined,
+    });
+    const repository = new PostgresRequirementRepository(database.pool);
+    await repository.transaction(tenantKey, projectKey, (transaction) => {
+      transaction.saveDeliveryRunResult({
+        tenantKey,
+        projectKey,
+        repositoryKey: projectKey,
+        requirementKey,
+        requirementRevision: 1,
+        assignmentKey,
+        fencingToken: 9,
+        gitHashAlgorithm: "sha1",
+        baseCommit: "a".repeat(40),
+        commitSha: "b".repeat(40),
+        branchName: `forgex/${projectKey.slice(0, 8)}/${assignmentKey}`,
+        summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+        status: "completion_pending",
+        submittedAt: now,
+        completedAt: null,
+      });
+    });
+    expect(
+      database.queries.some((query) =>
+        query.text.includes("INSERT INTO forgex_delivery_runs"),
+      ),
+    ).toBe(true);
+
+    await expect(
+      repository.transaction(tenantKey, projectKey, (transaction) =>
+        transaction.markDeliveryRunCompleted(
+          requirementKey,
+          1,
+          { assignmentKey, fencingToken: 9 },
+          now,
+        ),
+      ),
+    ).resolves.toBe(true);
+    expect(
+      database.queries.some((query) =>
+        query.text.includes("status = 'completed'"),
+      ),
+    ).toBe(true);
+  });
+
+  it("交付运行迁移绑定仓库、提交和完成审计", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0011_delivery_runs.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migration).toContain("ALTER TABLE forgex_delivery_outbox");
+    expect(migration).toContain("repository_key uuid");
+    expect(migration).toContain(
+      "CREATE TABLE IF NOT EXISTS forgex_delivery_runs",
+    );
+    expect(migration).toContain(
+      "UNIQUE (tenant_key, assignment_key, fencing_token)",
+    );
+    expect(migration).toContain(
+      "CHECK (summary = '已生成本地提交，等待独立验证')",
+    );
+    expect(migration).toContain("'delivery.completed'");
+    expect(migration).toContain("WHERE status = 'completion_pending'");
   });
 
   it("迁移脚本建立需求、审计和可靠 outbox 的数据库约束", () => {

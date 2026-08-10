@@ -13,6 +13,7 @@ export interface WorkerFleetSnapshot {
 export interface WorkerCompletionProof {
   assignmentKey: string;
   fencingToken: number;
+  completionDigest?: string;
 }
 
 export interface WorkerFleetTransaction {
@@ -103,7 +104,9 @@ export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
         if (stored === undefined) return false;
         return proof
           ? stored?.assignmentKey === proof.assignmentKey &&
-              stored.fencingToken === proof.fencingToken
+              stored.fencingToken === proof.fencingToken &&
+              (proof.completionDigest === undefined ||
+                stored.completionDigest === proof.completionDigest)
           : true;
       },
       markCompletedWork: async (

@@ -7,6 +7,10 @@ import type {
   RequirementListOptions,
   RequirementListPage,
 } from "./requirement-repository.js";
+import {
+  DeliveryRunResultSchema,
+  type DeliveryRunResult,
+} from "./requirement-repository.js";
 
 const scopedKey = (
   tenantKey: string,
@@ -14,11 +18,20 @@ const scopedKey = (
   requirementKey: string,
 ): string => `${tenantKey}:${projectKey}:${requirementKey}`;
 
+const deliveryRunKey = (
+  tenantKey: string,
+  projectKey: string,
+  requirementKey: string,
+  requirementRevision: number,
+): string =>
+  `${tenantKey}:${projectKey}:${requirementKey}:${requirementRevision}`;
+
 export class InMemoryRequirementRepository implements RequirementRepository {
   readonly #records = new Map<string, RequirementRecord>();
   readonly #positions = new Map<string, number>();
   readonly #auditEvents: RequirementAuditEvent[] = [];
   readonly #deliveryDispatches = new Map<string, DeliveryDispatchRecord>();
+  readonly #deliveryRunResults = new Map<string, DeliveryRunResult>();
   readonly #scopeTails = new Map<string, Promise<void>>();
   #nextPosition = 0;
 
@@ -43,6 +56,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     const loadedRecords = new Map<string, RequirementRecord>();
     const pendingAuditEvents: RequirementAuditEvent[] = [];
     const pendingDeliveryDispatches = new Map<string, DeliveryDispatchRecord>();
+    const pendingDeliveryRunResults = new Map<string, DeliveryRunResult>();
     const transaction: RequirementTransaction = {
       find: async (requirementKey) => {
         const key = scopedKey(
@@ -137,6 +151,86 @@ export class InMemoryRequirementRepository implements RequirementRepository {
         });
         return true;
       },
+      findDeliveryDispatch: async (requirementKey, requirementRevision) => {
+        const matches = [
+          ...this.#deliveryDispatches.values(),
+          ...pendingDeliveryDispatches.values(),
+        ].filter(
+          (record) =>
+            record.tenantKey === normalizedTenantKey &&
+            record.projectKey === normalizedProjectKey &&
+            record.requirementKey === requirementKey.toLowerCase() &&
+            record.requirementRevision === requirementRevision,
+        );
+        const latest = matches.at(-1);
+        return latest ? this.#copyDeliveryDispatch(latest) : null;
+      },
+      findDeliveryRunResult: async (requirementKey, requirementRevision) => {
+        const key = deliveryRunKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          requirementKey.toLowerCase(),
+          requirementRevision,
+        );
+        const result =
+          pendingDeliveryRunResults.get(key) ??
+          this.#deliveryRunResults.get(key);
+        return result ? structuredClone(result) : null;
+      },
+      saveDeliveryRunResult: (run) => {
+        const parsed = DeliveryRunResultSchema.parse(run);
+        this.#assertDeliveryRunScope(
+          parsed,
+          normalizedTenantKey,
+          normalizedProjectKey,
+        );
+        const key = deliveryRunKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          parsed.requirementKey,
+          parsed.requirementRevision,
+        );
+        const existing =
+          pendingDeliveryRunResults.get(key) ??
+          this.#deliveryRunResults.get(key);
+        if (existing && JSON.stringify(existing) !== JSON.stringify(parsed)) {
+          throw new Error("同一需求版本不能覆盖已经提交的交付运行结果");
+        }
+        pendingDeliveryRunResults.set(key, structuredClone(parsed));
+      },
+      markDeliveryRunCompleted: async (
+        requirementKey,
+        requirementRevision,
+        proof,
+        completedAt,
+      ) => {
+        const key = deliveryRunKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          requirementKey.toLowerCase(),
+          requirementRevision,
+        );
+        const current =
+          pendingDeliveryRunResults.get(key) ??
+          this.#deliveryRunResults.get(key);
+        if (!current) throw new Error("没有找到待完成的交付运行记录");
+        if (
+          current.assignmentKey !== proof.assignmentKey.toLowerCase() ||
+          current.fencingToken !== proof.fencingToken
+        ) {
+          throw new Error("交付运行完成凭据不匹配");
+        }
+        if (current.status === "completed") return false;
+        pendingDeliveryRunResults.set(
+          key,
+          DeliveryRunResultSchema.parse({
+            ...structuredClone(current),
+            status: "completed",
+            completedAt,
+          }),
+        );
+        return true;
+      },
     };
 
     try {
@@ -151,6 +245,9 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       this.#auditEvents.push(...pendingAuditEvents);
       for (const [key, dispatch] of pendingDeliveryDispatches) {
         this.#deliveryDispatches.set(key, this.#copyDeliveryDispatch(dispatch));
+      }
+      for (const [key, run] of pendingDeliveryRunResults) {
+        this.#deliveryRunResults.set(key, structuredClone(run));
       }
       return result;
     } finally {
@@ -237,6 +334,45 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       .map((record) => this.#copyDeliveryDispatch(record));
   }
 
+  async listPendingDeliveryRunResults(
+    tenantKey: string,
+    limit: number,
+  ): Promise<DeliveryRunResult[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("待收敛交付结果查询上限必须在 1 到 100 之间");
+    }
+    const normalizedTenantKey = tenantKey.toLowerCase();
+    return [...this.#deliveryRunResults.values()]
+      .filter(
+        (run) =>
+          run.tenantKey === normalizedTenantKey &&
+          run.status === "completion_pending",
+      )
+      .sort(
+        (left, right) =>
+          left.submittedAt.localeCompare(right.submittedAt) ||
+          left.assignmentKey.localeCompare(right.assignmentKey),
+      )
+      .slice(0, limit)
+      .map((run) => structuredClone(DeliveryRunResultSchema.parse(run)));
+  }
+
+  async findDeliveryRunResultByProof(
+    tenantKey: string,
+    proof: { assignmentKey: string; fencingToken: number },
+  ): Promise<DeliveryRunResult | null> {
+    const normalizedTenantKey = tenantKey.toLowerCase();
+    const result = [...this.#deliveryRunResults.values()].find(
+      (run) =>
+        run.tenantKey === normalizedTenantKey &&
+        run.assignmentKey === proof.assignmentKey.toLowerCase() &&
+        run.fencingToken === proof.fencingToken,
+    );
+    return result
+      ? structuredClone(DeliveryRunResultSchema.parse(result))
+      : null;
+  }
+
   #copyRecord(record: RequirementRecord): RequirementRecord {
     return {
       ...record,
@@ -264,6 +400,27 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       record.projectKey.toLowerCase() !== projectKey
     ) {
       throw new Error("事务不能写入其他范围的交付记录");
+    }
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        record.repositoryKey,
+      )
+    ) {
+      throw new Error("交付派发记录缺少有效的仓库范围");
+    }
+  }
+
+  #assertDeliveryRunScope(
+    run: DeliveryRunResult,
+    tenantKey: string,
+    projectKey: string,
+  ): void {
+    if (
+      run.tenantKey.toLowerCase() !== tenantKey ||
+      run.projectKey.toLowerCase() !== projectKey ||
+      DeliveryRunResultSchema.safeParse(run).success === false
+    ) {
+      throw new Error("事务不能写入无效或跨范围的交付运行结果");
     }
   }
 }

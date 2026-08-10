@@ -1,0 +1,20 @@
+{
+  "name": "@forgex/device-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "bin": {
+    "forgex-codex-isolation-launcher": "./dist/isolation-launcher-main.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@forgex/contracts": "0.1.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@openai/codex-sdk": "0.147.0",
+    "zod": "^4.4.3"
+  }
+}

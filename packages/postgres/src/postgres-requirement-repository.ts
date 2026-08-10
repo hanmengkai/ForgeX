@@ -8,15 +8,17 @@ import {
   type EvidenceAuthority,
   type RequirementWorkflowSnapshot,
 } from "@forgex/domain";
-import type {
-  DeliveryDispatchRecord,
-  RequirementAuditAction,
-  RequirementAuditEvent,
-  RequirementListOptions,
-  RequirementListPage,
-  RequirementRecord,
-  RequirementRepository,
-  RequirementTransaction,
+import {
+  DeliveryRunResultSchema,
+  type DeliveryDispatchRecord,
+  type DeliveryRunResult,
+  type RequirementAuditAction,
+  type RequirementAuditEvent,
+  type RequirementListOptions,
+  type RequirementListPage,
+  type RequirementRecord,
+  type RequirementRepository,
+  type RequirementTransaction,
 } from "@forgex/application";
 
 import type {
@@ -33,6 +35,7 @@ const auditActions = new Set<RequirementAuditAction>([
   "requirement.accepted",
   "delivery.requested",
   "delivery.dispatched",
+  "delivery.completed",
 ]);
 
 export interface PostgresRequirementRepositoryOptions {
@@ -101,6 +104,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       const pendingRecords = new Map<string, RequirementRecord>();
       const pendingAudit: RequirementAuditEvent[] = [];
       const pendingDispatches = new Map<string, DeliveryDispatchRecord>();
+      const pendingDeliveryRuns = new Map<string, DeliveryRunResult>();
       const transaction: RequirementTransaction = {
         find: async (requirementKey) => {
           const key = parseInternalKey(requirementKey, "需求标识");
@@ -163,6 +167,106 @@ export class PostgresRequirementRepository implements RequirementRepository {
           );
           return updated.rows.length > 0;
         },
+        findDeliveryDispatch: async (requirementKey, requirementRevision) => {
+          const requirement = parseInternalKey(requirementKey, "需求标识");
+          const pending = [...pendingDispatches.values()].find(
+            (dispatch) =>
+              dispatch.requirementKey === requirement &&
+              dispatch.requirementRevision === requirementRevision,
+          );
+          if (pending) return this.#copyDispatch(pending);
+          const result = await client.query(
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            [tenant, project, requirement, requirementRevision],
+          );
+          const row = result.rows[0];
+          return row ? this.#dispatchFromRow(row, tenant) : null;
+        },
+        findDeliveryRunResult: async (requirementKey, requirementRevision) => {
+          const requirement = parseInternalKey(requirementKey, "需求标识");
+          const key = `${requirement}:${requirementRevision}`;
+          const pending = pendingDeliveryRuns.get(key);
+          if (pending) return structuredClone(pending);
+          const result = await client.query(
+            "SELECT repository_key, requirement_key, requirement_revision, assignment_key, fencing_token, git_hash_algorithm, base_commit, commit_sha, branch_name, summary, status, submitted_at, completed_at FROM forgex_delivery_runs WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            [tenant, project, requirement, requirementRevision],
+          );
+          const row = result.rows[0];
+          return row ? this.#deliveryRunFromRow(row, tenant, project) : null;
+        },
+        saveDeliveryRunResult: (run) => {
+          const parsed = DeliveryRunResultSchema.parse(run);
+          this.#assertDeliveryRunScope(parsed, tenant, project);
+          pendingDeliveryRuns.set(
+            `${parsed.requirementKey}:${parsed.requirementRevision}`,
+            structuredClone(parsed),
+          );
+        },
+        markDeliveryRunCompleted: async (
+          requirementKey,
+          requirementRevision,
+          proof,
+          completedAt,
+        ) => {
+          const requirement = parseInternalKey(requirementKey, "需求标识");
+          const assignment = parseInternalKey(
+            proof.assignmentKey,
+            "任务租约标识",
+          );
+          if (
+            !Number.isSafeInteger(proof.fencingToken) ||
+            proof.fencingToken < 1
+          ) {
+            throw new Error("任务租约 fencing 无效");
+          }
+          const key = `${requirement}:${requirementRevision}`;
+          const pending = pendingDeliveryRuns.get(key);
+          if (pending) {
+            if (
+              pending.assignmentKey !== assignment ||
+              pending.fencingToken !== proof.fencingToken
+            ) {
+              throw new Error("交付运行完成凭据不匹配");
+            }
+            if (pending.status === "completed") return false;
+            pendingDeliveryRuns.set(
+              key,
+              DeliveryRunResultSchema.parse({
+                ...pending,
+                status: "completed",
+                completedAt,
+              }),
+            );
+            return true;
+          }
+          const updated = await client.query(
+            "UPDATE forgex_delivery_runs SET status = 'completed', completed_at = $7 WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4 AND assignment_key = $5 AND fencing_token = $6 AND status = 'completion_pending' RETURNING requirement_key",
+            [
+              tenant,
+              project,
+              requirement,
+              requirementRevision,
+              assignment,
+              proof.fencingToken,
+              parseIsoDate(completedAt, "交付完成时间"),
+            ],
+          );
+          if (updated.rows.length > 0) return true;
+          const existing = await client.query(
+            "SELECT assignment_key, fencing_token, status FROM forgex_delivery_runs WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            [tenant, project, requirement, requirementRevision],
+          );
+          const row = existing.rows[0];
+          if (
+            isRecord(row) &&
+            row.assignment_key === assignment &&
+            Number(row.fencing_token) === proof.fencingToken &&
+            row.status === "completed"
+          ) {
+            return false;
+          }
+          throw new Error("没有找到与完成凭据匹配的交付运行记录");
+        },
       };
 
       const result = await operation(transaction);
@@ -196,17 +300,40 @@ export class PostgresRequirementRepository implements RequirementRepository {
       }
       for (const dispatch of pendingDispatches.values()) {
         await client.query(
-          "INSERT INTO forgex_delivery_outbox (dispatch_key, tenant_key, project_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)",
+          "INSERT INTO forgex_delivery_outbox (dispatch_key, tenant_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)",
           [
             dispatch.dispatchKey,
             tenant,
             project,
+            dispatch.repositoryKey,
             dispatch.requirementKey,
             dispatch.requirementRevision,
             dispatch.title,
             JSON.stringify(dispatch.requiredCapabilities),
             dispatch.requestedAt,
             dispatch.dispatchedAt,
+          ],
+        );
+      }
+      for (const run of pendingDeliveryRuns.values()) {
+        await client.query(
+          "INSERT INTO forgex_delivery_runs (tenant_key, project_key, repository_key, requirement_key, requirement_revision, assignment_key, fencing_token, git_hash_algorithm, base_commit, commit_sha, branch_name, summary, status, submitted_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+          [
+            tenant,
+            project,
+            run.repositoryKey,
+            run.requirementKey,
+            run.requirementRevision,
+            run.assignmentKey,
+            run.fencingToken,
+            run.gitHashAlgorithm,
+            run.baseCommit,
+            run.commitSha,
+            run.branchName,
+            run.summary,
+            run.status,
+            run.submittedAt,
+            run.completedAt,
           ],
         );
       }
@@ -335,14 +462,64 @@ export class PostgresRequirementRepository implements RequirementRepository {
     return this.#withClient(async (client) => {
       const result = project
         ? await client.query(
-            "SELECT dispatch_key, project_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $3",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $3",
             [tenant, project, limit],
           )
         : await client.query(
-            "SELECT dispatch_key, project_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $2",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $2",
             [tenant, limit],
           );
       return result.rows.map((row) => this.#dispatchFromRow(row, tenant));
+    });
+  }
+
+  async listPendingDeliveryRunResults(
+    tenantKey: string,
+    limit: number,
+  ): Promise<DeliveryRunResult[]> {
+    const tenant = parseInternalKey(tenantKey, "租户标识");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("待收敛交付结果查询上限必须在 1 到 100 之间");
+    }
+    return this.#withClient(async (client) => {
+      const result = await client.query(
+        "SELECT project_key, repository_key, requirement_key, requirement_revision, assignment_key, fencing_token, git_hash_algorithm, base_commit, commit_sha, branch_name, summary, status, submitted_at, completed_at FROM forgex_delivery_runs WHERE tenant_key = $1 AND status = 'completion_pending' ORDER BY submitted_at ASC, assignment_key ASC LIMIT $2",
+        [tenant, limit],
+      );
+      return result.rows.map((row) => {
+        if (!isRecord(row)) {
+          throw new Error("数据库中的交付运行记录格式无效");
+        }
+        return this.#deliveryRunFromRow(
+          row,
+          tenant,
+          parseInternalKey(String(row.project_key), "项目标识"),
+        );
+      });
+    });
+  }
+
+  async findDeliveryRunResultByProof(
+    tenantKey: string,
+    proof: { assignmentKey: string; fencingToken: number },
+  ): Promise<DeliveryRunResult | null> {
+    const tenant = parseInternalKey(tenantKey, "租户标识");
+    const assignment = parseInternalKey(proof.assignmentKey, "任务租约标识");
+    if (!Number.isSafeInteger(proof.fencingToken) || proof.fencingToken < 1) {
+      throw new Error("任务租约 fencing 无效");
+    }
+    return this.#withClient(async (client) => {
+      const result = await client.query(
+        "SELECT project_key, repository_key, requirement_key, requirement_revision, assignment_key, fencing_token, git_hash_algorithm, base_commit, commit_sha, branch_name, summary, status, submitted_at, completed_at FROM forgex_delivery_runs WHERE tenant_key = $1 AND assignment_key = $2 AND fencing_token = $3",
+        [tenant, assignment, proof.fencingToken],
+      );
+      const row = result.rows[0];
+      if (!row || !isRecord(row)) return null;
+      return this.#deliveryRunFromRow(
+        row,
+        tenant,
+        parseInternalKey(String(row.project_key), "项目标识"),
+      );
     });
   }
 
@@ -470,6 +647,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       throw new Error("需求事务不能写入无效的交付派发记录");
     }
     parseInternalKey(dispatch.dispatchKey, "派发标识");
+    parseInternalKey(dispatch.repositoryKey, "仓库标识");
     parseInternalKey(dispatch.requirementKey, "需求标识");
     const requestedAt = parseIsoDate(dispatch.requestedAt, "交付请求时间");
     const capabilities = StartDeliveryCommandSchema.safeParse({
@@ -518,6 +696,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       dispatchKey: parseInternalKey(String(row.dispatch_key), "派发标识"),
       tenantKey,
       projectKey: parseInternalKey(String(row.project_key), "项目标识"),
+      repositoryKey: parseInternalKey(String(row.repository_key), "仓库标识"),
       requirementKey: parseInternalKey(String(row.requirement_key), "需求标识"),
       requirementRevision: revision,
       title,
@@ -525,6 +704,47 @@ export class PostgresRequirementRepository implements RequirementRepository {
       requestedAt,
       dispatchedAt,
     };
+  }
+
+  #assertDeliveryRunScope(
+    run: DeliveryRunResult,
+    tenantKey: string,
+    projectKey: string,
+  ): void {
+    const parsed = DeliveryRunResultSchema.parse(run);
+    if (parsed.tenantKey !== tenantKey || parsed.projectKey !== projectKey) {
+      throw new Error("需求事务不能写入其他范围的交付运行结果");
+    }
+  }
+
+  #deliveryRunFromRow(
+    row: unknown,
+    tenantKey: string,
+    projectKey: string,
+  ): DeliveryRunResult {
+    if (!isRecord(row)) {
+      throw new Error("数据库中的交付运行记录格式无效");
+    }
+    return DeliveryRunResultSchema.parse({
+      tenantKey,
+      projectKey,
+      repositoryKey: row.repository_key,
+      requirementKey: row.requirement_key,
+      requirementRevision: Number(row.requirement_revision),
+      assignmentKey: row.assignment_key,
+      fencingToken: Number(row.fencing_token),
+      gitHashAlgorithm: row.git_hash_algorithm,
+      baseCommit: row.base_commit,
+      commitSha: row.commit_sha,
+      branchName: row.branch_name,
+      summary: row.summary,
+      status: row.status,
+      submittedAt: parseIsoDate(row.submitted_at, "交付结果提交时间"),
+      completedAt:
+        row.completed_at === null
+          ? null
+          : parseIsoDate(row.completed_at, "交付完成时间"),
+    });
   }
 
   #parseActorName(value: unknown): string {

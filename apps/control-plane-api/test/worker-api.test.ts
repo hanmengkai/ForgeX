@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+  type WorkerRequirementCompletionPayload,
+} from "@forgex/contracts";
 
 import {
   InMemoryRequirementRepository,
@@ -11,6 +16,8 @@ import {
   InMemorySkillArtifactStore,
   InMemorySkillRegistryRepository,
   InMemoryWorkerFleetRepository,
+  WorkerFleetService,
+  requirementCompletionDigest,
   type AuthenticatedPrincipal,
   type RequirementTransaction,
   type SessionAuthenticator,
@@ -91,6 +98,52 @@ class FailFirstDispatchMarkRepository extends InMemoryRequirementRepository {
   }
 }
 
+class FailFirstDeliveryRunSaveRepository extends InMemoryRequirementRepository {
+  #shouldFailSave = true;
+
+  override transaction<T>(
+    scopedTenantKey: string,
+    scopedProjectKey: string,
+    operation: (transaction: RequirementTransaction) => Promise<T> | T,
+  ): Promise<T> {
+    return super.transaction(scopedTenantKey, scopedProjectKey, (transaction) =>
+      operation({
+        ...transaction,
+        saveDeliveryRunResult: (result) => {
+          if (this.#shouldFailSave) {
+            this.#shouldFailSave = false;
+            throw new Error("模拟交付结果首次落库失败");
+          }
+          transaction.saveDeliveryRunResult(result);
+        },
+      }),
+    );
+  }
+}
+
+class FailFirstDeliveryRunFinalizeRepository extends InMemoryRequirementRepository {
+  #shouldFailFinalize = true;
+
+  override transaction<T>(
+    scopedTenantKey: string,
+    scopedProjectKey: string,
+    operation: (transaction: RequirementTransaction) => Promise<T> | T,
+  ): Promise<T> {
+    return super.transaction(scopedTenantKey, scopedProjectKey, (transaction) =>
+      operation({
+        ...transaction,
+        markDeliveryRunCompleted: (...args) => {
+          if (this.#shouldFailFinalize) {
+            this.#shouldFailFinalize = false;
+            throw new Error("模拟交付结果收敛失败");
+          }
+          return transaction.markDeliveryRunCompleted(...args);
+        },
+      }),
+    );
+  }
+}
+
 const requirementSpec = (title: string) => ({
   schemaVersion: 1,
   title,
@@ -138,6 +191,7 @@ const createTestApp = (
     previewArtifactStore: new InMemoryPreviewArtifactStore(),
     workerFleetRepository,
     projectKey: scopedProjectKey,
+    repositoryKey: scopedProjectKey,
     clock: () => new Date(now.getTime()),
   });
   return {
@@ -299,6 +353,21 @@ describe("Codex 设备网关 API", () => {
     });
     expect(firstPoll.statusCode).toBe(200);
     expect(secondPoll.statusCode).toBe(200);
+    expect(firstPoll.json().data.assignment.execution).toMatchObject({
+      schemaVersion: 1,
+      taskType: "requirement_delivery",
+      projectKey,
+      requirementRevision: 1,
+      executionPolicy: {
+        workspaceIsolation: "dedicated_worktree",
+        productionAccess: "denied",
+        credentialHandling: "device_local_only",
+        completionEvidence: "independent_runner_required",
+      },
+    });
+    expect(firstPoll.json().data.assignment.execution.spec.title).toBe(
+      firstPoll.json().data.assignment.title,
+    );
     expect(firstPoll.json().data.assignment.requirementKey).not.toBe(
       secondPoll.json().data.assignment.requirementKey,
     );
@@ -419,7 +488,11 @@ describe("Codex 设备网关 API", () => {
   });
 
   it("租约可续期，完成上报幂等且不会把协议标识展示在设备列表", async () => {
-    const { app, advanceTo } = createTestApp();
+    const requirementRepository = new InMemoryRequirementRepository();
+    const { app, advanceTo } = createTestApp(
+      new InMemoryWorkerFleetRepository(),
+      requirementRepository,
+    );
     const connection = await connectWorker(app, 1);
     const { queued } = await requestConfirmedDelivery(app, "完善访客预约", []);
     expect(queued.statusCode).toBe(202);
@@ -435,6 +508,18 @@ describe("Codex 设备网关 API", () => {
       assignmentKey: assignment.assignmentKey,
       fencingToken: assignment.fencingToken,
     };
+    const completionCommand = {
+      ...command,
+      projectKey: assignment.projectKey,
+      repositoryKey: assignment.execution.repositoryKey,
+      requirementKey: assignment.requirementKey,
+      requirementRevision: assignment.requirementRevision,
+      gitHashAlgorithm: "sha1",
+      baseCommit: "a".repeat(40),
+      commitSha: "b".repeat(40),
+      branchName: `forgex/${assignment.projectKey.slice(0, 8)}/${assignment.assignmentKey}`,
+      summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+    };
 
     advanceTo("2026-08-10T05:00:10.000Z");
     const renewed = await app.inject({
@@ -446,27 +531,338 @@ describe("Codex 设备网关 API", () => {
     expect(renewed.statusCode).toBe(200);
     expect(renewed.json().data.leasedUntil).toBe("2026-08-10T05:01:10.000Z");
 
+    const freeTextSummary = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/complete",
+      headers: workerHeaders(connection),
+      payload: {
+        ...completionCommand,
+        summary: "LEAK_MARKER_DO_NOT_UPLOAD",
+      },
+    });
+    expect(freeTextSummary.statusCode).toBe(422);
+    expect(freeTextSummary.body).not.toContain("LEAK_MARKER_DO_NOT_UPLOAD");
+
+    const wrongRepository = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/complete",
+      headers: workerHeaders(connection),
+      payload: {
+        ...completionCommand,
+        repositoryKey: "77777777-7777-4777-8777-777777777777",
+      },
+    });
+    expect(wrongRepository.statusCode).toBe(409);
+    expect(wrongRepository.json().error.code).toBe("delivery_completion_stale");
+
     const firstCompletion = await app.inject({
       method: "POST",
       url: "/api/v1/worker-connection/complete",
       headers: workerHeaders(connection),
-      payload: command,
+      payload: completionCommand,
     });
     const repeatedCompletion = await app.inject({
       method: "POST",
       url: "/api/v1/worker-connection/complete",
       headers: workerHeaders(connection),
-      payload: command,
+      payload: completionCommand,
     });
     expect(firstCompletion.json().data).toEqual({ alreadyCompleted: false });
     expect(repeatedCompletion.json().data).toEqual({ alreadyCompleted: true });
+    const result = await requirementRepository.findDeliveryRunResultByProof(
+      tenantKey,
+      {
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      },
+    );
+    expect(result).toMatchObject({
+      repositoryKey: projectKey,
+      commitSha: "b".repeat(40),
+      status: "completed",
+    });
+    const audit = await requirementRepository.listAuditEvents(
+      tenantKey,
+      projectKey,
+    );
+    expect(
+      audit.filter((event) => event.action === "delivery.completed"),
+    ).toHaveLength(1);
+    await app.close();
+  });
+
+  it("设备完成已提交但结果首次落库失败时，重试依靠永久证明收敛", async () => {
+    const requirementRepository = new FailFirstDeliveryRunSaveRepository();
+    const { app } = createTestApp(
+      new InMemoryWorkerFleetRepository(),
+      requirementRepository,
+    );
+    const connection = await connectWorker(app, 1);
+    await requestConfirmedDelivery(app, "恢复交付结果", []);
+    const poll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders(connection),
+      payload: {},
+    });
+    const assignment = poll.json().data.assignment;
+    const completion = {
+      schemaVersion: 1,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      projectKey: assignment.projectKey,
+      repositoryKey: assignment.execution.repositoryKey,
+      requirementKey: assignment.requirementKey,
+      requirementRevision: assignment.requirementRevision,
+      gitHashAlgorithm: "sha1",
+      baseCommit: "c".repeat(40),
+      commitSha: "d".repeat(40),
+      branchName: `forgex/${assignment.projectKey.slice(0, 8)}/${assignment.assignmentKey}`,
+      summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+    };
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/complete",
+      headers: workerHeaders(connection),
+      payload: completion,
+    });
+    expect(first.statusCode).toBe(500);
+
+    const replaced = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/complete",
+      headers: workerHeaders(connection),
+      payload: {
+        ...completion,
+        commitSha: "e".repeat(40),
+        summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+      },
+    });
+    expect(replaced.statusCode).toBe(409);
+    expect(replaced.json().error.code).toBe("invalid_lease");
+    await expect(
+      requirementRepository.findDeliveryRunResultByProof(tenantKey, {
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      }),
+    ).resolves.toBeNull();
+
+    const retried = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/complete",
+      headers: workerHeaders(connection),
+      payload: completion,
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().data).toEqual({ alreadyCompleted: true });
+    await expect(
+      requirementRepository.findDeliveryRunResultByProof(tenantKey, {
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    await app.close();
+  });
+
+  it("并发提交不同结果时只接受永久证明绑定的那一份", async () => {
+    const requirementRepository = new InMemoryRequirementRepository();
+    const { app } = createTestApp(
+      new InMemoryWorkerFleetRepository(),
+      requirementRepository,
+    );
+    const connection = await connectWorker(app, 1);
+    await requestConfirmedDelivery(app, "并发完成证明", []);
+    const poll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders(connection),
+      payload: {},
+    });
+    const assignment = poll.json().data.assignment;
+    const completionA: WorkerRequirementCompletionPayload = {
+      schemaVersion: 1,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      projectKey: assignment.projectKey,
+      repositoryKey: assignment.execution.repositoryKey,
+      requirementKey: assignment.requirementKey,
+      requirementRevision: assignment.requirementRevision,
+      gitHashAlgorithm: "sha1",
+      baseCommit: "1".repeat(40),
+      commitSha: "2".repeat(40),
+      branchName: `forgex/${assignment.projectKey.slice(0, 8)}/${assignment.assignmentKey}`,
+      summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+    };
+    const completionB: WorkerRequirementCompletionPayload = {
+      ...completionA,
+      commitSha: "3".repeat(40),
+    };
+    const digestA = requirementCompletionDigest(completionA);
+    const originalGetCurrentLease =
+      WorkerFleetService.prototype.getCurrentLease;
+    const originalComplete = WorkerFleetService.prototype.complete;
+    let leasesRead = 0;
+    let releaseLeaseReads!: () => void;
+    const bothLeasesRead = new Promise<void>((resolve) => {
+      releaseLeaseReads = resolve;
+    });
+    let confirmProofA!: () => void;
+    const proofAStored = new Promise<void>((resolve) => {
+      confirmProofA = resolve;
+    });
+    let releaseCompletionA!: () => void;
+    const completionACanReturn = new Promise<void>((resolve) => {
+      releaseCompletionA = resolve;
+    });
+    const leaseSpy = vi
+      .spyOn(WorkerFleetService.prototype, "getCurrentLease")
+      .mockImplementation(async function (
+        this: WorkerFleetService,
+        connectionValue,
+        commandValue,
+      ) {
+        const result = await originalGetCurrentLease.call(
+          this,
+          connectionValue,
+          commandValue,
+        );
+        leasesRead += 1;
+        if (leasesRead === 2) releaseLeaseReads();
+        await bothLeasesRead;
+        return result;
+      });
+    const completeSpy = vi
+      .spyOn(WorkerFleetService.prototype, "complete")
+      .mockImplementation(async function (
+        this: WorkerFleetService,
+        connectionValue,
+        commandValue,
+        digest,
+      ) {
+        if (digest === digestA) {
+          const result = await originalComplete.call(
+            this,
+            connectionValue,
+            commandValue,
+            digest,
+          );
+          confirmProofA();
+          await completionACanReturn;
+          return result;
+        }
+        await proofAStored;
+        return originalComplete.call(
+          this,
+          connectionValue,
+          commandValue,
+          digest,
+        );
+      });
+
+    try {
+      const requestA = app.inject({
+        method: "POST",
+        url: "/api/v1/worker-connection/complete",
+        headers: workerHeaders(connection),
+        payload: completionA,
+      });
+      const requestB = app.inject({
+        method: "POST",
+        url: "/api/v1/worker-connection/complete",
+        headers: workerHeaders(connection),
+        payload: completionB,
+      });
+      const rejectedB = await requestB;
+      expect(rejectedB.statusCode).toBe(409);
+      expect(rejectedB.json().error.code).toBe("delivery_completion_mismatch");
+      releaseCompletionA();
+      const acceptedA = await requestA;
+      expect(acceptedA.statusCode).toBe(200);
+      await expect(
+        requirementRepository.findDeliveryRunResultByProof(tenantKey, {
+          assignmentKey: assignment.assignmentKey,
+          fencingToken: assignment.fencingToken,
+        }),
+      ).resolves.toMatchObject({ commitSha: completionA.commitSha });
+    } finally {
+      releaseCompletionA();
+      leaseSpy.mockRestore();
+      completeSpy.mockRestore();
+      await app.close();
+    }
+  });
+
+  it("完成证明与结果均已落库但首次收敛失败时，下一次轮询自动补偿", async () => {
+    const requirementRepository = new FailFirstDeliveryRunFinalizeRepository();
+    const { app } = createTestApp(
+      new InMemoryWorkerFleetRepository(),
+      requirementRepository,
+    );
+    const connection = await connectWorker(app, 1);
+    await requestConfirmedDelivery(app, "补偿交付审计", []);
+    const firstPoll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders(connection),
+      payload: {},
+    });
+    const assignment = firstPoll.json().data.assignment;
+    const completion = {
+      schemaVersion: 1,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      projectKey: assignment.projectKey,
+      repositoryKey: assignment.execution.repositoryKey,
+      requirementKey: assignment.requirementKey,
+      requirementRevision: assignment.requirementRevision,
+      gitHashAlgorithm: "sha1",
+      baseCommit: "e".repeat(40),
+      commitSha: "f".repeat(40),
+      branchName: `forgex/${assignment.projectKey.slice(0, 8)}/${assignment.assignmentKey}`,
+      summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+    };
+    const completed = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/complete",
+      headers: workerHeaders(connection),
+      payload: completion,
+    });
+    expect(completed.statusCode).toBe(500);
+    await expect(
+      requirementRepository.findDeliveryRunResultByProof(tenantKey, {
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      }),
+    ).resolves.toMatchObject({ status: "completion_pending" });
+
+    const recoveryPoll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders(connection),
+      payload: {},
+    });
+    expect(recoveryPoll.statusCode).toBe(200);
+    await expect(
+      requirementRepository.findDeliveryRunResultByProof(tenantKey, {
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    const audit = await requirementRepository.listAuditEvents(
+      tenantKey,
+      projectKey,
+    );
+    expect(
+      audit.filter((event) => event.action === "delivery.completed"),
+    ).toHaveLength(1);
     await app.close();
   });
 
   it("多个 API 副本共享五账户上限和交付租约", async () => {
     const repository = new InMemoryWorkerFleetRepository();
-    const { app: firstApp } = createTestApp(repository);
-    const { app: secondApp } = createTestApp(repository);
+    const requirementRepository = new InMemoryRequirementRepository();
+    const { app: firstApp } = createTestApp(repository, requirementRepository);
+    const { app: secondApp } = createTestApp(repository, requirementRepository);
     const connections = [];
     for (let index = 1; index <= 5; index += 1) {
       connections.push(

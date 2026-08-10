@@ -63,7 +63,9 @@ const hasMatchingCompletionProof = (
 ): boolean =>
   isRecord(row) &&
   row.completion_assignment_key === proof.assignmentKey.toLowerCase() &&
-  Number(row.completion_fencing_token) === proof.fencingToken;
+  Number(row.completion_fencing_token) === proof.fencingToken &&
+  (proof.completionDigest === undefined ||
+    row.completion_digest === proof.completionDigest);
 
 export class PostgresWorkerFleetRepository implements WorkerFleetRepository {
   readonly #pool: PostgresPool;
@@ -116,7 +118,7 @@ export class PostgresWorkerFleetRepository implements WorkerFleetRepository {
           );
           const normalizedWorkKey = assertInternalKey(workKey, "需求标识");
           const result = await client.query(
-            "SELECT completion_assignment_key, completion_fencing_token FROM forgex_completed_delivery_work WHERE tenant_key = $1 AND project_key = $2 AND work_key = $3 AND requirement_revision = $4 AND work_kind = $5",
+            "SELECT completion_assignment_key, completion_fencing_token, completion_digest FROM forgex_completed_delivery_work WHERE tenant_key = $1 AND project_key = $2 AND work_key = $3 AND requirement_revision = $4 AND work_kind = $5",
             [
               normalizedTenantKey,
               normalizedProjectKey,
@@ -153,8 +155,14 @@ export class PostgresWorkerFleetRepository implements WorkerFleetRepository {
           ) {
             throw new Error("任务隔离令牌格式不正确");
           }
+          if (
+            proof?.completionDigest !== undefined &&
+            !/^[a-f0-9]{64}$/u.test(proof.completionDigest)
+          ) {
+            throw new Error("任务完成内容摘要格式不正确");
+          }
           await client.query(
-            "INSERT INTO forgex_completed_delivery_work (tenant_key, project_key, work_key, requirement_revision, work_kind, completion_assignment_key, completion_fencing_token) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (tenant_key, project_key, work_key, requirement_revision, work_kind) DO NOTHING",
+            "INSERT INTO forgex_completed_delivery_work (tenant_key, project_key, work_key, requirement_revision, work_kind, completion_assignment_key, completion_fencing_token, completion_digest) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (tenant_key, project_key, work_key, requirement_revision, work_kind) DO NOTHING",
             [
               normalizedTenantKey,
               normalizedProjectKey,
@@ -163,6 +171,7 @@ export class PostgresWorkerFleetRepository implements WorkerFleetRepository {
               workKind,
               normalizedAssignmentKey,
               proof?.fencingToken ?? null,
+              proof?.completionDigest ?? null,
             ],
           );
         },

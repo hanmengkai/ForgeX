@@ -16,7 +16,10 @@ import {
 
 import type { AuthenticatedPrincipal, PlatformRole } from "./auth.js";
 import { ApplicationError } from "./errors.js";
-import type { DeliveryDispatchRecord } from "./requirement-repository.js";
+import type {
+  DeliveryDispatchRecord,
+  DeliveryRunResult,
+} from "./requirement-repository.js";
 import type {
   WorkerFleetRepository,
   WorkerFleetSnapshot,
@@ -384,6 +387,38 @@ export class WorkerFleetService {
     );
   }
 
+  async isRequirementDeliveryCompleted(
+    run: Pick<
+      DeliveryRunResult,
+      "tenantKey" | "projectKey" | "requirementKey" | "requirementRevision"
+    >,
+    completion: {
+      assignmentKey: string;
+      fencingToken: number;
+      completionDigest: string;
+    },
+  ): Promise<boolean> {
+    if (
+      !internalKeyPattern.test(completion.assignmentKey) ||
+      !Number.isSafeInteger(completion.fencingToken) ||
+      completion.fencingToken < 1
+    ) {
+      throw new Error("交付完成凭据格式无效");
+    }
+    if (!/^[a-f0-9]{64}$/u.test(completion.completionDigest)) {
+      throw new Error("交付完成内容摘要格式无效");
+    }
+    return this.#repository.transaction(run.tenantKey, (transaction) =>
+      transaction.hasCompletedWork(
+        run.projectKey,
+        run.requirementKey,
+        run.requirementRevision,
+        "requirement_delivery",
+        completion,
+      ),
+    );
+  }
+
   async heartbeat(
     input: WorkerConnectionCredentialPayload,
   ): Promise<{ status: "在线" }> {
@@ -460,9 +495,13 @@ export class WorkerFleetService {
   async complete(
     connection: WorkerConnectionCredentialPayload,
     input: WorkerLeaseCommandPayload,
+    completionDigest: string,
   ): Promise<{ alreadyCompleted: boolean }> {
     const credential = this.#parseConnection(connection);
     const command = this.#parseLeaseCommand(input);
+    if (!/^[a-f0-9]{64}$/u.test(completionDigest)) {
+      throw new Error("交付完成内容摘要格式无效");
+    }
     return this.#repository.transaction(
       credential.tenantKey,
       async (transaction) => {
@@ -490,6 +529,11 @@ export class WorkerFleetService {
             current.workKey,
             current.requirementRevision,
             "requirement_delivery",
+            {
+              assignmentKey: current.assignmentKey,
+              fencingToken: current.fencingToken,
+              completionDigest,
+            },
           );
         }
         this.#saveFleet(transaction, fleet);
@@ -588,6 +632,35 @@ export class WorkerFleetService {
           409,
           "invalid_lease",
           "MCP 调用租约已经失效，请重新领取",
+        );
+      }
+      return this.#toLeaseView(current, fleet.registry);
+    });
+  }
+
+  async getRequirementLease(
+    connection: WorkerConnectionCredentialPayload,
+    input: WorkerLeaseCommandPayload,
+  ): Promise<WorkerLeaseView> {
+    const credential = this.#parseConnection(connection);
+    const command = this.#parseLeaseCommand(input);
+    return this.#repository.transaction(credential.tenantKey, (transaction) => {
+      const fleet = this.#requireFleet(transaction, credential.tenantKey);
+      const current = this.#runDomain(() =>
+        fleet.queue.currentAssignmentForWorker(this.#sessionOf(credential)),
+      );
+      if (
+        !current ||
+        (current.workKind ?? "requirement_delivery") !==
+          "requirement_delivery" ||
+        current.assignmentKey !== command.assignmentKey ||
+        current.fencingToken !== command.fencingToken ||
+        Date.parse(current.leasedUntil) <= this.#now().getTime()
+      ) {
+        throw new ApplicationError(
+          409,
+          "invalid_lease",
+          "交付任务租约已经失效，请重新领取",
         );
       }
       return this.#toLeaseView(current, fleet.registry);

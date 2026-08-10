@@ -42,6 +42,7 @@ const enqueue = (
     dispatchKey: input.requirementKey,
     tenantKey,
     projectKey,
+    repositoryKey: projectKey,
     requirementKey: input.requirementKey,
     requirementRevision: input.requirementRevision ?? 1,
     title: input.title,
@@ -175,16 +176,16 @@ describe("WorkerFleetService", () => {
       fencingToken: assignment.fencingToken,
     };
 
-    await expect(service.complete(currentConnection, command)).resolves.toEqual(
-      {
-        alreadyCompleted: false,
-      },
-    );
-    await expect(service.complete(currentConnection, command)).resolves.toEqual(
-      {
-        alreadyCompleted: true,
-      },
-    );
+    await expect(
+      service.complete(currentConnection, command, "d".repeat(64)),
+    ).resolves.toEqual({
+      alreadyCompleted: false,
+    });
+    await expect(
+      service.complete(currentConnection, command, "d".repeat(64)),
+    ).resolves.toEqual({
+      alreadyCompleted: true,
+    });
   });
 
   it("设备带着进行中任务重连时立即回收旧租约并重新派发", async () => {
@@ -234,7 +235,7 @@ describe("WorkerFleetService", () => {
         assignmentKey: assignment.assignmentKey,
         fencingToken: assignment.fencingToken,
       };
-      await service.complete(connection, command);
+      await service.complete(connection, command, "d".repeat(64));
       return command;
     };
     const first = await completeWork(
@@ -247,10 +248,12 @@ describe("WorkerFleetService", () => {
       "需求二",
     );
 
-    await expect(service.complete(connection, first)).rejects.toThrow(
-      "任务租约已经失效，请重新领取",
-    );
-    await expect(service.complete(connection, second)).resolves.toEqual({
+    await expect(
+      service.complete(connection, first, "d".repeat(64)),
+    ).rejects.toThrow("任务租约已经失效，请重新领取");
+    await expect(
+      service.complete(connection, second, "d".repeat(64)),
+    ).resolves.toEqual({
       alreadyCompleted: true,
     });
   });
@@ -280,11 +283,15 @@ describe("WorkerFleetService", () => {
       requiredCapabilities: [],
     });
     const firstLease = (await secondService.poll(connections[0]!)).assignment!;
-    await secondService.complete(connections[0]!, {
-      schemaVersion: 1,
-      assignmentKey: firstLease.assignmentKey,
-      fencingToken: firstLease.fencingToken,
-    });
+    await secondService.complete(
+      connections[0]!,
+      {
+        schemaVersion: 1,
+        assignmentKey: firstLease.assignmentKey,
+        fencingToken: firstLease.fencingToken,
+      },
+      "d".repeat(64),
+    );
 
     await enqueue(secondService, {
       requirementKey: "77777777-7777-4777-8777-777777777777",
@@ -311,11 +318,15 @@ describe("WorkerFleetService", () => {
         requiredCapabilities: [],
       });
       const assignment = (await service.poll(connection)).assignment!;
-      await service.complete(connection, {
-        schemaVersion: 1,
-        assignmentKey: assignment.assignmentKey,
-        fencingToken: assignment.fencingToken,
-      });
+      await service.complete(
+        connection,
+        {
+          schemaVersion: 1,
+          assignmentKey: assignment.assignmentKey,
+          fencingToken: assignment.fencingToken,
+        },
+        "d".repeat(64),
+      );
     };
     const firstRequirementKey = "88888888-8888-4888-8888-888888888888";
     await complete(firstRequirementKey, "最早完成的需求");

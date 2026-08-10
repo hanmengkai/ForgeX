@@ -16,6 +16,8 @@
     "apps/*/test/**/*.ts",
     "apps/*/test/**/*.tsx",
     "packages/*/src/**/*.ts",
-    "packages/*/test/**/*.ts"
+    "packages/*/test/**/*.ts",
+    "services/*/src/**/*.ts",
+    "services/*/test/**/*.ts"
   ]
 }

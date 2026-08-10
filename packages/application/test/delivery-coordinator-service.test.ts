@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { RequirementSpec } from "@forgex/contracts";
+import {
+  WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+  type RequirementSpec,
+} from "@forgex/contracts";
 
 import {
   DeliveryCoordinatorService,
@@ -8,6 +11,7 @@ import {
   InMemoryWorkerFleetRepository,
   RequirementApplicationService,
   WorkerFleetService,
+  requirementCompletionDigest,
   type AuthenticatedPrincipal,
   type RequirementRepository,
   type RequirementTransaction,
@@ -15,6 +19,7 @@ import {
 
 const tenantKey = "11111111-1111-4111-8111-111111111111";
 const projectKey = "22222222-2222-4222-8222-222222222222";
+const repositoryKey = "44444444-4444-4444-8444-444444444444";
 const principal: AuthenticatedPrincipal = {
   actorKey: "33333333-3333-4333-8333-333333333333",
   actorName: "产品负责人",
@@ -69,6 +74,11 @@ class FailFirstDispatchMarkRepository implements RequirementRepository {
   listAuditEvents = this.#inner.listAuditEvents.bind(this.#inner);
   listPendingDeliveryDispatches =
     this.#inner.listPendingDeliveryDispatches.bind(this.#inner);
+  listPendingDeliveryRunResults =
+    this.#inner.listPendingDeliveryRunResults.bind(this.#inner);
+  findDeliveryRunResultByProof = this.#inner.findDeliveryRunResultByProof.bind(
+    this.#inner,
+  );
 }
 
 describe("DeliveryCoordinatorService", () => {
@@ -77,6 +87,7 @@ describe("DeliveryCoordinatorService", () => {
     const requirements = new RequirementApplicationService({
       repository: requirementRepository,
       projectKey,
+      repositoryKey,
     });
     const workers = new WorkerFleetService({
       repository: new InMemoryWorkerFleetRepository(),
@@ -117,6 +128,29 @@ describe("DeliveryCoordinatorService", () => {
       title: spec.title,
     });
     expect(repeated).toEqual(first);
+    await expect(
+      coordinator.executionForWorker(tenantKey, {
+        workKind: "requirement_delivery",
+        projectKey: first!.projectKey,
+        requirementKey: first!.requirementKey,
+        requirementRevision: first!.requirementRevision,
+        title: first!.title,
+      }),
+    ).resolves.toEqual({
+      schemaVersion: 1,
+      taskType: "requirement_delivery",
+      projectKey,
+      repositoryKey,
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      spec,
+      executionPolicy: {
+        workspaceIsolation: "dedicated_worktree",
+        productionAccess: "denied",
+        credentialHandling: "device_local_only",
+        completionEvidence: "independent_runner_required",
+      },
+    });
     const audit = await requirementRepository.listAuditEvents(
       tenantKey,
       projectKey,
@@ -124,5 +158,154 @@ describe("DeliveryCoordinatorService", () => {
     expect(
       audit.filter((event) => event.action === "delivery.dispatched"),
     ).toHaveLength(1);
+  });
+
+  it("设备执行信封拒绝错项目、错版本和调用方伪造的标题", async () => {
+    const requirementRepository = new InMemoryRequirementRepository();
+    const requirements = new RequirementApplicationService({
+      repository: requirementRepository,
+      projectKey,
+      repositoryKey,
+    });
+    const workers = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+    });
+    const coordinator = new DeliveryCoordinatorService({
+      requirements,
+      requirementRepository,
+      workers,
+    });
+    const created = await requirements.create(principal, spec);
+    await requirements.submitForConfirmation(principal, created.requirementKey);
+    await requirements.confirm(principal, created.requirementKey);
+    await coordinator.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+
+    await expect(
+      coordinator.executionForWorker(tenantKey, {
+        workKind: "requirement_delivery",
+        projectKey,
+        requirementKey: created.requirementKey,
+        requirementRevision: 2,
+        title: "调用方伪造标题",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "delivery_assignment_stale",
+    });
+  });
+
+  it("交付提交只在永久设备完成证明存在后收敛，并且重复上报不重复审计", async () => {
+    let now = new Date("2026-08-10T06:00:00.000Z");
+    const requirementRepository = new InMemoryRequirementRepository();
+    const requirements = new RequirementApplicationService({
+      repository: requirementRepository,
+      projectKey,
+      repositoryKey,
+      clock: () => new Date(now),
+    });
+    const workers = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+      clock: () => new Date(now),
+    });
+    const coordinator = new DeliveryCoordinatorService({
+      requirements,
+      requirementRepository,
+      workers,
+      clock: () => new Date(now),
+    });
+    const connection = (
+      await workers.connect(principal, {
+        schemaVersion: 1,
+        deviceName: "研发电脑",
+        accountName: "Codex 账号",
+        accountFingerprint: "b".repeat(64),
+        capabilities: [],
+      })
+    ).connection;
+    const created = await requirements.create(principal, spec);
+    await requirements.submitForConfirmation(principal, created.requirementKey);
+    await requirements.confirm(principal, created.requirementKey);
+    await coordinator.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+    const assignment = (await workers.poll(connection)).assignment!;
+    const completion = {
+      schemaVersion: 1 as const,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      projectKey,
+      repositoryKey,
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      gitHashAlgorithm: "sha1" as const,
+      baseCommit: "a".repeat(40),
+      commitSha: "b".repeat(40),
+      branchName: `forgex/${projectKey.slice(0, 8)}/${assignment.assignmentKey}`,
+      summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+    };
+    const resultBinding = {
+      workKind: "requirement_delivery" as const,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      projectKey,
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+    };
+    const run = await coordinator.submitExecutionResult(
+      tenantKey,
+      resultBinding,
+      completion,
+    );
+    await expect(coordinator.finalizeExecutionResult(run)).resolves.toBe(false);
+
+    now = new Date("2026-08-10T06:00:10.000Z");
+    await workers.complete(
+      connection,
+      {
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      },
+      requirementCompletionDigest(completion),
+    );
+    await expect(coordinator.flushCompleted(tenantKey)).resolves.toBe(1);
+    await expect(coordinator.flushCompleted(tenantKey)).resolves.toBe(0);
+    await expect(
+      coordinator.submitExecutionResult(tenantKey, resultBinding, completion),
+    ).resolves.toMatchObject({ status: "completed" });
+    const persisted = await requirementRepository.findDeliveryRunResultByProof(
+      tenantKey,
+      {
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      },
+    );
+    expect(persisted).toMatchObject({
+      repositoryKey,
+      baseCommit: "a".repeat(40),
+      commitSha: "b".repeat(40),
+      status: "completed",
+    });
+    const audit = await requirementRepository.listAuditEvents(
+      tenantKey,
+      projectKey,
+    );
+    expect(
+      audit.filter((event) => event.action === "delivery.completed"),
+    ).toHaveLength(1);
+
+    await expect(
+      coordinator.submitExecutionResult(tenantKey, resultBinding, {
+        ...completion,
+        repositoryKey: projectKey,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "delivery_completion_stale",
+    });
   });
 });

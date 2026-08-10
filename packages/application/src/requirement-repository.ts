@@ -1,4 +1,8 @@
-import type { RequirementSpec } from "@forgex/contracts";
+import {
+  WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+  type RequirementSpec,
+} from "@forgex/contracts";
+import { z } from "zod";
 import type {
   RequirementAllowedAction,
   RequirementPeopleView,
@@ -11,12 +15,14 @@ export type RequirementAuditAction =
   | "requirement.confirmed"
   | "requirement.accepted"
   | "delivery.requested"
-  | "delivery.dispatched";
+  | "delivery.dispatched"
+  | "delivery.completed";
 
 export interface DeliveryDispatchRecord {
   dispatchKey: string;
   tenantKey: string;
   projectKey: string;
+  repositoryKey: string;
   requirementKey: string;
   requirementRevision: number;
   title: string;
@@ -24,6 +30,77 @@ export interface DeliveryDispatchRecord {
   requestedAt: string;
   dispatchedAt: string | null;
 }
+
+const deliveryInternalKey = z
+  .string()
+  .uuid()
+  .transform((value) => value.toLowerCase());
+const sha1Pattern = /^[a-f0-9]{40}$/u;
+const sha256Pattern = /^[a-f0-9]{64}$/u;
+
+export const DeliveryRunResultSchema = z
+  .object({
+    tenantKey: deliveryInternalKey,
+    projectKey: deliveryInternalKey,
+    repositoryKey: deliveryInternalKey,
+    requirementKey: deliveryInternalKey,
+    requirementRevision: z.number().int().positive().max(10_000),
+    assignmentKey: deliveryInternalKey,
+    fencingToken: z.number().int().positive(),
+    gitHashAlgorithm: z.enum(["sha1", "sha256"]),
+    baseCommit: z.string(),
+    commitSha: z.string(),
+    branchName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(250)
+      .regex(/^forgex\/[a-f0-9-]+\/[a-f0-9-]+$/u),
+    summary: z.literal(WORKER_REQUIREMENT_COMPLETION_SUMMARY),
+    status: z.enum(["completion_pending", "completed"]),
+    submittedAt: z.iso.datetime(),
+    completedAt: z.iso.datetime().nullable(),
+  })
+  .strict()
+  .superRefine((result, context) => {
+    const hashPattern =
+      result.gitHashAlgorithm === "sha1" ? sha1Pattern : sha256Pattern;
+    for (const field of ["baseCommit", "commitSha"] as const) {
+      if (!hashPattern.test(result[field])) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message: `${field} 必须是完整的 ${result.gitHashAlgorithm} 摘要`,
+        });
+      }
+    }
+    if (result.baseCommit === result.commitSha) {
+      context.addIssue({
+        code: "custom",
+        path: ["commitSha"],
+        message: "交付提交必须不同于任务基线",
+      });
+    }
+    if ((result.status === "completed") !== (result.completedAt !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["completedAt"],
+        message: "交付运行状态与完成时间不一致",
+      });
+    }
+    if (
+      result.completedAt !== null &&
+      Date.parse(result.completedAt) < Date.parse(result.submittedAt)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["completedAt"],
+        message: "完成时间不能早于结果提交时间",
+      });
+    }
+  });
+
+export type DeliveryRunResult = z.infer<typeof DeliveryRunResultSchema>;
 
 export interface RequirementAuditEvent {
   eventKey: string;
@@ -70,6 +147,21 @@ export interface RequirementTransaction {
     dispatchKey: string,
     dispatchedAt: string,
   ): Promise<boolean>;
+  findDeliveryDispatch(
+    requirementKey: string,
+    requirementRevision: number,
+  ): Promise<DeliveryDispatchRecord | null>;
+  findDeliveryRunResult(
+    requirementKey: string,
+    requirementRevision: number,
+  ): Promise<DeliveryRunResult | null>;
+  saveDeliveryRunResult(result: DeliveryRunResult): void;
+  markDeliveryRunCompleted(
+    requirementKey: string,
+    requirementRevision: number,
+    proof: { assignmentKey: string; fencingToken: number },
+    completedAt: string,
+  ): Promise<boolean>;
 }
 
 export interface RequirementRepository {
@@ -92,4 +184,12 @@ export interface RequirementRepository {
     projectKey: string | null,
     limit: number,
   ): Promise<DeliveryDispatchRecord[]>;
+  listPendingDeliveryRunResults(
+    tenantKey: string,
+    limit: number,
+  ): Promise<DeliveryRunResult[]>;
+  findDeliveryRunResultByProof(
+    tenantKey: string,
+    proof: { assignmentKey: string; fencingToken: number },
+  ): Promise<DeliveryRunResult | null>;
 }

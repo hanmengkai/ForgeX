@@ -45,7 +45,11 @@ interface RecordedQuery {
 const fakeDatabase = (options?: {
   storedState?: WorkerFleetSnapshot;
   completed?: boolean;
-  completionProof?: { assignmentKey: string; fencingToken: number };
+  completionProof?: {
+    assignmentKey: string;
+    fencingToken: number;
+    completionDigest?: string;
+  };
 }) => {
   const queries: RecordedQuery[] = [];
   let released = false;
@@ -67,6 +71,8 @@ const fakeDatabase = (options?: {
                         options.completionProof.assignmentKey,
                       completion_fencing_token:
                         options.completionProof.fencingToken,
+                      completion_digest:
+                        options.completionProof.completionDigest ?? null,
                     }
                   : {},
               ]
@@ -119,6 +125,7 @@ describe("PostgresWorkerFleetRepository", () => {
       workKey,
       2,
       "requirement_delivery",
+      null,
       null,
       null,
     ]);
@@ -189,6 +196,58 @@ describe("PostgresWorkerFleetRepository", () => {
     });
   });
 
+  it("需求永久完成证明同时绑定完整交付内容摘要", async () => {
+    const proof = {
+      assignmentKey: "44444444-4444-4444-8444-444444444444",
+      fencingToken: 7,
+      completionDigest: "a".repeat(64),
+    };
+    const database = fakeDatabase({ completed: true, completionProof: proof });
+    const repository = new PostgresWorkerFleetRepository(database.pool);
+
+    await repository.transaction(tenantKey, async (transaction) => {
+      await expect(
+        transaction.hasCompletedWork(
+          projectKey,
+          workKey,
+          2,
+          "requirement_delivery",
+          proof,
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        transaction.hasCompletedWork(
+          projectKey,
+          workKey,
+          2,
+          "requirement_delivery",
+          { ...proof, completionDigest: "b".repeat(64) },
+        ),
+      ).resolves.toBe(false);
+      await transaction.markCompletedWork(
+        projectKey,
+        workKey,
+        2,
+        "requirement_delivery",
+        proof,
+      );
+    });
+    expect(
+      database.queries.find((query) =>
+        query.text.includes("INSERT INTO forgex_completed_delivery_work"),
+      )?.values,
+    ).toEqual([
+      tenantKey,
+      projectKey,
+      workKey,
+      2,
+      "requirement_delivery",
+      proof.assignmentKey,
+      proof.fencingToken,
+      proof.completionDigest,
+    ]);
+  });
+
   it("工作类型迁移兼容旧交付记录并把类型纳入唯一键", () => {
     const migration = readFileSync(
       new URL("../migrations/0009_worker_work_kinds.sql", import.meta.url),
@@ -203,5 +262,17 @@ describe("PostgresWorkerFleetRepository", () => {
     expect(migration).toContain("completion_assignment_key uuid");
     expect(migration).toContain("completion_fencing_token > 0");
     expect(migration).toContain("requirement_revision,\n    work_kind\n  )");
+  });
+
+  it("交付结果迁移要求新需求完成证明绑定内容摘要", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0011_delivery_runs.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migration).toContain("ADD COLUMN IF NOT EXISTS completion_digest");
+    expect(migration).toContain("completion_digest ~ '^[a-f0-9]{64}$'");
+    expect(migration).toContain(
+      "work_kind = 'mcp_invocation' AND\n      completion_assignment_key IS NOT NULL",
+    );
   });
 });

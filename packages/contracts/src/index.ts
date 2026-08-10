@@ -223,10 +223,80 @@ export const WorkerLeaseCommandSchema = z
   })
   .strict();
 
-export const WorkerMcpCompletionSchema = WorkerLeaseCommandSchema.extend({
-  outcome: z.enum(["succeeded", "failed"]),
-  summary: readableText("执行结果", 2, 500),
-}).strict();
+export const RequirementExecutionEnvelopeSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    taskType: z.literal("requirement_delivery"),
+    projectKey: internalKey,
+    repositoryKey: internalKey,
+    requirementKey: internalKey,
+    requirementRevision: z.number().int().positive().max(10_000),
+    spec: RequirementSpecSchema,
+    executionPolicy: z
+      .object({
+        workspaceIsolation: z.literal("dedicated_worktree"),
+        productionAccess: z.literal("denied"),
+        credentialHandling: z.literal("device_local_only"),
+        completionEvidence: z.literal("independent_runner_required"),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const WORKER_REQUIREMENT_COMPLETION_SUMMARY =
+  "已生成本地提交，等待独立验证" as const;
+export const WORKER_MCP_SUCCEEDED_SUMMARY = "本地工具操作已完成" as const;
+export const WORKER_MCP_FAILED_SUMMARY = "本地工具操作未完成" as const;
+
+export const WorkerRequirementCompletionSchema =
+  WorkerLeaseCommandSchema.extend({
+    projectKey: internalKey,
+    repositoryKey: internalKey,
+    requirementKey: internalKey,
+    requirementRevision: z.number().int().positive().max(10_000),
+    gitHashAlgorithm: z.enum(["sha1", "sha256"]),
+    baseCommit: z.string(),
+    commitSha: z.string(),
+    branchName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(250)
+      .regex(/^forgex\/[a-f0-9-]+\/[a-f0-9-]+$/u),
+    summary: z.literal(WORKER_REQUIREMENT_COMPLETION_SUMMARY),
+  })
+    .strict()
+    .superRefine((result, context) => {
+      const pattern =
+        result.gitHashAlgorithm === "sha1" ? sha1Pattern : sha256Pattern;
+      for (const field of ["baseCommit", "commitSha"] as const) {
+        if (!pattern.test(result[field])) {
+          context.addIssue({
+            code: "custom",
+            path: [field],
+            message: `${field} 必须是完整的 ${result.gitHashAlgorithm} 摘要`,
+          });
+        }
+      }
+      if (result.baseCommit === result.commitSha) {
+        context.addIssue({
+          code: "custom",
+          path: ["commitSha"],
+          message: "交付提交必须不同于任务基线",
+        });
+      }
+    });
+
+export const WorkerMcpCompletionSchema = z.discriminatedUnion("outcome", [
+  WorkerLeaseCommandSchema.extend({
+    outcome: z.literal("succeeded"),
+    summary: z.literal(WORKER_MCP_SUCCEEDED_SUMMARY),
+  }).strict(),
+  WorkerLeaseCommandSchema.extend({
+    outcome: z.literal("failed"),
+    summary: z.literal(WORKER_MCP_FAILED_SUMMARY),
+  }).strict(),
+]);
 
 const extensionKeyPath =
   "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
@@ -306,6 +376,12 @@ export type StartDeliveryCommandPayload = z.infer<
 >;
 export type WorkerLeaseCommandPayload = z.infer<
   typeof WorkerLeaseCommandSchema
+>;
+export type RequirementExecutionEnvelope = z.infer<
+  typeof RequirementExecutionEnvelopeSchema
+>;
+export type WorkerRequirementCompletionPayload = z.infer<
+  typeof WorkerRequirementCompletionSchema
 >;
 export type WorkerMcpCompletionPayload = z.infer<
   typeof WorkerMcpCompletionSchema

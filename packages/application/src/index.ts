@@ -96,6 +96,7 @@ export {
   DeliveryCoordinatorService,
   type DeliveryCoordinatorServiceOptions,
 } from "./delivery-coordinator-service.js";
+export { requirementCompletionDigest } from "./delivery-completion.js";
 export { canPerformRequirementAction } from "./requirement-authorization.js";
 export type { RequirementAuthorizedAction } from "./requirement-authorization.js";
 export { InMemoryPreviewArtifactStore } from "./preview-artifact-store.js";
@@ -116,6 +117,7 @@ export {
 } from "./requirement-service.js";
 export type {
   DeliveryDispatchRecord,
+  DeliveryRunResult,
   RequirementAuditAction,
   RequirementAuditEvent,
   RequirementRecord,
@@ -125,6 +127,7 @@ export type {
   RequirementListOptions,
   RequirementListPage,
 } from "./requirement-repository.js";
+export { DeliveryRunResultSchema } from "./requirement-repository.js";
 export {
   InMemoryWorkerFleetRepository,
   type WorkerCompletionProof,

@@ -21,6 +21,7 @@ import {
   SkillRegistryApplicationService,
   WorkerFleetService,
   canPerformRequirementAction,
+  requirementCompletionDigest,
   type AuthenticatedPrincipal,
   type ExtensionCatalogRepository,
   type McpRegistryRepository,
@@ -43,6 +44,7 @@ import {
   WorkerConnectionCredentialSchema,
   WorkerLeaseCommandSchema,
   WorkerMcpCompletionSchema,
+  WorkerRequirementCompletionSchema,
   WorkerRegistrationSchema,
   type WorkerConnectionCredentialPayload,
   type McpInvocationRequestPayload,
@@ -75,6 +77,7 @@ export interface ControlPlaneApiOptions {
   previewArtifactStore: PreviewArtifactStore;
   workerFleetRepository: WorkerFleetRepository;
   projectKey: string;
+  repositoryKey: string;
   clock?: () => Date;
   logger?: FastifyServerOptions["logger"];
 }
@@ -427,6 +430,7 @@ export const buildControlPlaneApi = (
   const requirements = new RequirementApplicationService({
     repository: options.requirementRepository,
     projectKey: options.projectKey,
+    repositoryKey: options.repositoryKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
   const knowledgeBases = new KnowledgeBaseApplicationService({
@@ -1352,6 +1356,7 @@ export const buildControlPlaneApi = (
     }
     const connection = workerConnectionFrom(request);
     await workers.assertConnection(connection);
+    await deliveries.flushCompleted(connection.tenantKey);
     await deliveries.flushPending(connection.tenantKey);
     await mcpInvocations.flushQueuedToWorkers(connection.tenantKey, workers);
     const result = await workers.poll(connection);
@@ -1363,8 +1368,23 @@ export const buildControlPlaneApi = (
           ...assignment
         }) => assignment)(result.assignment)
       : null;
-    if (result.assignment?.workKind !== "mcp_invocation") {
-      return reply.send({ data: { assignment: assignmentForWorker } });
+    if (result.assignment?.workKind === "requirement_delivery") {
+      const execution = await deliveries.executionForWorker(
+        connection.tenantKey,
+        {
+          workKind: "requirement_delivery",
+          projectKey: result.assignment.projectKey,
+          requirementKey: result.assignment.requirementKey,
+          requirementRevision: result.assignment.requirementRevision,
+          title: result.assignment.title,
+        },
+      );
+      return reply.send({
+        data: { assignment: { ...assignmentForWorker!, execution } },
+      });
+    }
+    if (!result.assignment) {
+      return reply.send({ data: { assignment: null } });
     }
     try {
       const execution = await mcpInvocations.leaseForExecution(
@@ -1448,7 +1468,7 @@ export const buildControlPlaneApi = (
   });
 
   app.post("/api/v1/worker-connection/complete", async (request, reply) => {
-    const command = WorkerLeaseCommandSchema.safeParse(request.body);
+    const command = WorkerRequirementCompletionSchema.safeParse(request.body);
     if (!command.success) {
       throw new ApplicationError(
         422,
@@ -1457,9 +1477,112 @@ export const buildControlPlaneApi = (
         validationDetails(command.error),
       );
     }
-    return reply.send({
-      data: await workers.complete(workerConnectionFrom(request), command.data),
-    });
+    const connection = workerConnectionFrom(request);
+    const leaseCommand = {
+      schemaVersion: 1 as const,
+      assignmentKey: command.data.assignmentKey,
+      fencingToken: command.data.fencingToken,
+    };
+    const deliveryScope = {
+      tenantKey: connection.tenantKey,
+      projectKey: command.data.projectKey,
+      requirementKey: command.data.requirementKey,
+      requirementRevision: command.data.requirementRevision,
+    };
+    const completionProof = {
+      assignmentKey: command.data.assignmentKey,
+      fencingToken: command.data.fencingToken,
+      completionDigest: requirementCompletionDigest(command.data),
+    };
+    let completionResult: { alreadyCompleted: boolean };
+    try {
+      const assignment = await workers.getCurrentLease(
+        connection,
+        leaseCommand,
+      );
+      if (assignment.workKind !== "requirement_delivery") {
+        throw new ApplicationError(
+          409,
+          "mcp_completion_required",
+          "MCP 调用必须通过受控结果入口完成",
+        );
+      }
+      if (
+        assignment.projectKey !== command.data.projectKey ||
+        assignment.requirementKey !== command.data.requirementKey ||
+        assignment.requirementRevision !== command.data.requirementRevision
+      ) {
+        throw new ApplicationError(
+          409,
+          "delivery_completion_mismatch",
+          "交付结果没有绑定当前设备任务",
+        );
+      }
+      const execution = await deliveries.executionForWorker(
+        connection.tenantKey,
+        {
+          workKind: "requirement_delivery",
+          projectKey: assignment.projectKey,
+          requirementKey: assignment.requirementKey,
+          requirementRevision: assignment.requirementRevision,
+          title: assignment.title,
+        },
+      );
+      if (
+        execution.repositoryKey !== command.data.repositoryKey ||
+        command.data.branchName !==
+          `forgex/${assignment.projectKey.slice(0, 8)}/${assignment.assignmentKey}`
+      ) {
+        throw new ApplicationError(
+          409,
+          "delivery_completion_stale",
+          "交付结果不再对应当前需求、仓库或设备租约",
+        );
+      }
+      completionResult = await workers.complete(
+        connection,
+        leaseCommand,
+        completionProof.completionDigest,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof ApplicationError) ||
+        error.code !== "invalid_lease" ||
+        !(await workers.isRequirementDeliveryCompleted(
+          deliveryScope,
+          completionProof,
+        ))
+      ) {
+        throw error;
+      }
+      completionResult = { alreadyCompleted: true };
+    }
+    if (
+      !(await workers.isRequirementDeliveryCompleted(
+        deliveryScope,
+        completionProof,
+      ))
+    ) {
+      throw new ApplicationError(
+        409,
+        "delivery_completion_mismatch",
+        "交付结果与设备永久完成证明不一致",
+      );
+    }
+    const run = await deliveries.submitExecutionResult(
+      connection.tenantKey,
+      {
+        workKind: "requirement_delivery",
+        assignmentKey: command.data.assignmentKey,
+        fencingToken: command.data.fencingToken,
+        projectKey: command.data.projectKey,
+        requirementKey: command.data.requirementKey,
+        requirementRevision: command.data.requirementRevision,
+      },
+      command.data,
+    );
+    await deliveries.finalizeExecutionResult(run);
+    return reply.send({ data: completionResult });
   });
 
   app.post("/api/v1/worker-connection/mcp-complete", async (request, reply) => {

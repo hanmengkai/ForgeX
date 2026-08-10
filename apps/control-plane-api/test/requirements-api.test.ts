@@ -8,6 +8,11 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  WORKER_MCP_SUCCEEDED_SUMMARY,
+  WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+} from "@forgex/contracts";
+
+import {
   InMemoryRequirementRepository,
   InMemoryExtensionCatalogRepository,
   InMemoryMcpRegistryRepository,
@@ -136,6 +141,7 @@ const createTestApp = (
     previewArtifactStore,
     workerFleetRepository: new InMemoryWorkerFleetRepository(),
     projectKey,
+    repositoryKey: projectKey,
     clock: () => new Date("2026-08-10T03:00:00.000Z"),
   });
   return {
@@ -596,6 +602,15 @@ describe("需求 API", () => {
         schemaVersion: 1,
         assignmentKey: assignment.assignmentKey,
         fencingToken: assignment.fencingToken,
+        projectKey: assignment.projectKey,
+        repositoryKey: assignment.projectKey,
+        requirementKey: assignment.requirementKey,
+        requirementRevision: assignment.requirementRevision,
+        gitHashAlgorithm: "sha1",
+        baseCommit: "a".repeat(40),
+        commitSha: "b".repeat(40),
+        branchName: `forgex/${assignment.projectKey.slice(0, 8)}/${assignment.assignmentKey}`,
+        summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
       },
     });
     expect(ordinaryCompletion.statusCode).toBe(409);
@@ -610,7 +625,7 @@ describe("需求 API", () => {
         assignmentKey: assignment.assignmentKey,
         fencingToken: assignment.fencingToken,
         outcome: "succeeded",
-        summary: "不应被接受的结果",
+        summary: WORKER_MCP_SUCCEEDED_SUMMARY,
       },
     });
     expect(unauthorizedCompletion.statusCode).toBe(401);
@@ -626,7 +641,7 @@ describe("需求 API", () => {
         assignmentKey: assignment.assignmentKey,
         fencingToken: assignment.fencingToken,
         outcome: "succeeded",
-        summary: "不应跨租户接受的结果",
+        summary: WORKER_MCP_SUCCEEDED_SUMMARY,
       },
     });
     expect(crossTenantCompletion.statusCode).toBe(401);
@@ -660,7 +675,7 @@ describe("需求 API", () => {
         assignmentKey: assignment.assignmentKey,
         fencingToken: assignment.fencingToken,
         outcome: "succeeded",
-        summary: "交付分支创建完成",
+        summary: WORKER_MCP_SUCCEEDED_SUMMARY,
       },
     });
     expect(interrupted.statusCode).toBe(500);
@@ -676,7 +691,7 @@ describe("需求 API", () => {
         assignmentKey: assignment.assignmentKey,
         fencingToken: assignment.fencingToken,
         outcome: "succeeded",
-        summary: "交付分支创建完成",
+        summary: WORKER_MCP_SUCCEEDED_SUMMARY,
       },
     });
     expect(completed.statusCode, completed.body).toBe(200);
@@ -698,7 +713,10 @@ describe("需求 API", () => {
       (await mcpInvocationRepository.list(tenantKey, projectKey))[0],
     ).toMatchObject({
       status: "succeeded",
-      result: { outcome: "succeeded", summary: "交付分支创建完成" },
+      result: {
+        outcome: "succeeded",
+        summary: WORKER_MCP_SUCCEEDED_SUMMARY,
+      },
     });
     const cancellable = await app.inject({
       method: "POST",
