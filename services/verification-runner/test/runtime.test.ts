@@ -42,6 +42,7 @@ const preview = new TextEncoder().encode(
   "<!doctype html><html><body>验证通过</body></html>",
 );
 const artifactHash = createHash("sha256").update(preview).digest("hex");
+const journalIntegrityKey = new Uint8Array(32).fill(0x5a);
 
 const signerFixture = () => {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -125,6 +126,7 @@ describe("VerificationRunnerRuntime", () => {
       verifier,
       signer,
       journal,
+      journalIntegrityKey,
       clock: () => new Date("2026-08-11T03:01:00.000Z"),
       createEvidenceKey: () => "80000000-0000-4000-8000-000000000008",
     });
@@ -169,6 +171,7 @@ describe("VerificationRunnerRuntime", () => {
       verifier,
       signer,
       journal,
+      journalIntegrityKey,
       clock: () => new Date("2026-08-11T03:01:00.000Z"),
       createEvidenceKey: () => "80000000-0000-4000-8000-000000000008",
     } as const;
@@ -206,6 +209,7 @@ describe("VerificationRunnerRuntime", () => {
       verifier,
       signer,
       journal,
+      journalIntegrityKey,
       clock: () => new Date("2026-08-11T03:01:00.000Z"),
       createEvidenceKey: () => "80000000-0000-4000-8000-000000000008",
     } as const;
@@ -218,7 +222,7 @@ describe("VerificationRunnerRuntime", () => {
     ).resolves.toEqual({ kind: "submitted", title: target.title });
 
     expect(verifier.verify).toHaveBeenCalledOnce();
-    expect(controlPlane.listPending).toHaveBeenCalledOnce();
+    expect(controlPlane.listPending).toHaveBeenCalledTimes(2);
     expect(controlPlane.publishPreview).toHaveBeenCalledTimes(2);
   });
 
@@ -248,6 +252,7 @@ describe("VerificationRunnerRuntime", () => {
       verifier,
       signer,
       journal,
+      journalIntegrityKey,
     });
 
     await expect(runtime.runOnce()).resolves.toEqual({
@@ -257,5 +262,44 @@ describe("VerificationRunnerRuntime", () => {
     expect(controlPlane.publishPreview).not.toHaveBeenCalled();
     expect(controlPlane.submitEvidence).not.toHaveBeenCalled();
     await expect(journal.load()).resolves.toBeNull();
+  });
+
+  it("拒绝为缺少本地完整性认证的 artifact_ready 日志签发新鲜证据", async () => {
+    const { signer } = signerFixture();
+    const forgedEntry = {
+      schemaVersion: 1,
+      stage: "artifact_ready",
+      target,
+      evidenceKey: "80000000-0000-4000-8000-000000000008",
+      artifactHashAlgorithm: "sha256",
+      artifactHash,
+      artifactContentBase64: Buffer.from(preview).toString("base64"),
+      checks: passedVerification.checks,
+      verificationCompletedAt: "2026-08-11T03:00:00.000Z",
+      integrityTag: "0".repeat(64),
+    } as const;
+    const controlPlane = {
+      listPending: vi.fn(async () => [target]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: { tenantKey, projectKey, repositoryKey, runnerKey, keyId },
+      controlPlane,
+      verifier: { verify: vi.fn() },
+      signer,
+      journal: {
+        load: vi.fn(async () => forgedEntry),
+        saveArtifact: vi.fn(),
+        saveSigned: vi.fn(),
+        clear: vi.fn(),
+      },
+      journalIntegrityKey,
+      clock: () => new Date("2026-08-11T03:01:00.000Z"),
+    });
+
+    await expect(runtime.runOnce()).rejects.toThrow("完整性");
+    expect(controlPlane.publishPreview).not.toHaveBeenCalled();
+    expect(controlPlane.submitEvidence).not.toHaveBeenCalled();
   });
 });
