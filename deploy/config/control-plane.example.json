@@ -2,6 +2,8 @@
   "schemaVersion": 1,
   "host": "0.0.0.0",
   "port": 3000,
+  "sessionCookieSecure": false,
+  "sessionCookieMaxAgeSeconds": 28800,
   "projectKey": "22222222-2222-4222-8222-222222222222",
   "repositoryKey": "33333333-3333-4333-8333-333333333333",
   "sessions": [

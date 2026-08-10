@@ -92,6 +92,8 @@ export interface ControlPlaneApiOptions {
   repositoryKey: string;
   readiness?: () => Promise<void>;
   serviceVersion?: string;
+  sessionCookieSecure?: boolean;
+  sessionCookieMaxAgeSeconds?: number;
   clock?: () => Date;
   logger?: FastifyServerOptions["logger"];
 }
@@ -595,6 +597,67 @@ export const buildControlPlaneApi = (
     }
     return parsed.data;
   };
+
+  const sessionCookieMaxAgeSeconds =
+    options.sessionCookieMaxAgeSeconds ?? 8 * 60 * 60;
+  if (
+    !Number.isSafeInteger(sessionCookieMaxAgeSeconds) ||
+    sessionCookieMaxAgeSeconds < 60 ||
+    sessionCookieMaxAgeSeconds > 30 * 24 * 60 * 60
+  ) {
+    throw new Error("浏览器会话有效期配置不正确");
+  }
+  const sessionCookie = (token: string, maxAge: number): string =>
+    [
+      `${SESSION_COOKIE_NAME}=${token}`,
+      "Path=/",
+      "HttpOnly",
+      "SameSite=Strict",
+      `Max-Age=${maxAge}`,
+      ...(options.sessionCookieSecure === false ? [] : ["Secure"]),
+    ].join("; ");
+
+  app.post("/api/v1/session", async (request, reply) => {
+    const authorization = request.headers.authorization;
+    const token = authorization?.startsWith("Bearer ")
+      ? authorization.slice("Bearer ".length)
+      : "";
+    if (!sessionCookieValuePattern.test(token)) {
+      throw new ApplicationError(
+        401,
+        "invalid_session",
+        "访问令牌无效，请检查后重试",
+      );
+    }
+    const principal = await authenticate(authorization);
+    return reply
+      .header("Cache-Control", "no-store")
+      .header("Set-Cookie", sessionCookie(token, sessionCookieMaxAgeSeconds))
+      .send({ data: { actorName: principal.actorName } });
+  });
+
+  app.get("/api/v1/session", async (request, reply) => {
+    const credential = requestSessionCredential(request);
+    const principal = await authenticate(credential.authorization);
+    return reply
+      .header("Cache-Control", "no-store")
+      .send({ data: { actorName: principal.actorName } });
+  });
+
+  app.delete("/api/v1/session", async (request, reply) => {
+    if (request.headers["x-forgex-csrf"] !== "1") {
+      throw new ApplicationError(
+        403,
+        "csrf_validation_failed",
+        "页面验证已失效，请刷新后重试",
+      );
+    }
+    return reply
+      .header("Cache-Control", "no-store")
+      .header("Set-Cookie", sessionCookie("deleted", 0))
+      .status(204)
+      .send();
+  });
 
   app.addHook("onRequest", async (request) => {
     const path = request.url.split("?")[0] ?? "";

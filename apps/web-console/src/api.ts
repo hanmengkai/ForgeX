@@ -151,8 +151,24 @@ export interface KnowledgeSourcePublishInput {
 
 export type ExtensionCatalogItem = ExtensionItemForPeople;
 export type ExtensionCatalogOverview = ExtensionCatalogOverviewForPeople;
+export interface SessionProfile {
+  actorName: string;
+}
+
+export class ForgeXHttpError extends Error {
+  readonly statusCode: number;
+
+  constructor(statusCode: number, message: string) {
+    super(message);
+    this.name = "ForgeXHttpError";
+    this.statusCode = statusCode;
+  }
+}
 
 export interface ForgeXClient {
+  startSession(token: string): Promise<SessionProfile>;
+  getSession(): Promise<SessionProfile>;
+  endSession(): Promise<void>;
   listRequirements(): Promise<RequirementListPage>;
   listWorkers(): Promise<WorkerFleetOverview>;
   listExtensions(): Promise<ExtensionCatalogOverview>;
@@ -190,6 +206,12 @@ const requirementStatuses = [
   "等待产品验收",
   "已完成",
 ] as const;
+const sessionResponseSchema = z
+  .object({
+    data: z.object({ actorName: z.string().trim().min(2).max(100) }).strict(),
+  })
+  .strict();
+const accessTokenPattern = /^[A-Za-z0-9._~-]{24,512}$/u;
 const requirementSelfPattern =
   /^\/api\/v1\/requirements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const actionSuffixes = {
@@ -730,7 +752,7 @@ export const createHttpForgeXClient = (
     if (init.method && !["GET", "HEAD", "OPTIONS"].includes(init.method)) {
       headers.set("X-ForgeX-CSRF", "1");
     }
-    if (options.authorization) {
+    if (options.authorization && !headers.has("Authorization")) {
       headers.set("Authorization", options.authorization);
     }
     const response = await fetcher(`${baseUrl}${path}`, {
@@ -739,12 +761,40 @@ export const createHttpForgeXClient = (
       credentials: "include",
     });
     if (!response.ok) {
-      throw new Error(await readErrorMessage(response));
+      throw new ForgeXHttpError(
+        response.status,
+        await readErrorMessage(response),
+      );
     }
     return response;
   };
 
   return {
+    startSession: async (token) => {
+      if (!accessTokenPattern.test(token)) {
+        throw new Error("访问令牌格式不正确，请检查后重试");
+      }
+      const response = await request("/api/v1/session", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const parsed = sessionResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        throw new Error("登录响应格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
+    },
+    getSession: async () => {
+      const response = await request("/api/v1/session");
+      const parsed = sessionResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        throw new Error("登录状态格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
+    },
+    endSession: async () => {
+      await request("/api/v1/session", { method: "DELETE" });
+    },
     listRequirements: async () => {
       const response = await request("/api/v1/requirements?limit=100");
       const parsed = requirementListResponseSchema.safeParse(

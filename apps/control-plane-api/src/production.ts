@@ -68,6 +68,8 @@ export const createProductionControlPlane = (
     previewArtifactStore: new PostgresPreviewArtifactStore(options.pool),
     projectKey: options.config.projectKey,
     repositoryKey: options.config.repositoryKey,
+    sessionCookieSecure: options.config.sessionCookieSecure,
+    sessionCookieMaxAgeSeconds: options.config.sessionCookieMaxAgeSeconds,
     requirementRepository: new PostgresRequirementRepository(options.pool, {
       evidenceAuthority,
     }),

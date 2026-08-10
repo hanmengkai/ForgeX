@@ -56,6 +56,13 @@ export const ControlPlaneRuntimeConfigSchema = z
       .max(253)
       .regex(/^[A-Za-z0-9:.-]+$/u),
     port: z.number().int().min(1).max(65_535),
+    sessionCookieSecure: z.boolean().default(true),
+    sessionCookieMaxAgeSeconds: z
+      .number()
+      .int()
+      .min(60)
+      .max(30 * 24 * 60 * 60)
+      .default(8 * 60 * 60),
     projectKey: internalKey,
     repositoryKey: internalKey,
     sessions: z

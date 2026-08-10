@@ -56,6 +56,9 @@ const queued: McpInvocationListItem = {
 };
 
 const createClient = (): ForgeXClient => ({
+  startSession: vi.fn(),
+  getSession: vi.fn(),
+  endSession: vi.fn(),
   listRequirements: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [],

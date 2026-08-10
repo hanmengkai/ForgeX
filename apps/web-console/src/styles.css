@@ -50,6 +50,72 @@ body {
     #f3f5f0;
 }
 
+.session-page {
+  display: grid;
+  min-height: 100vh;
+  padding: 28px;
+  place-items: center;
+}
+
+.session-card {
+  width: min(100%, 460px);
+  padding: 38px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+}
+
+.session-card h1 {
+  margin: 12px 0 8px;
+  font-size: clamp(28px, 6vw, 38px);
+}
+
+.session-card > p,
+.session-card > small {
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.session-card form {
+  display: grid;
+  gap: 10px;
+  margin: 24px 0 18px;
+}
+
+.session-card label {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.session-card input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  color: var(--ink);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.session-card .button {
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.session-brand-mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 22px;
+  place-items: center;
+  color: #17372e;
+  background: #90ddbb;
+  border-radius: 15px;
+}
+
 button,
 input,
 textarea,
@@ -172,6 +238,52 @@ select:focus-visible,
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-profile {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  color: #eaf1ed;
+  background: rgb(255 255 255 / 5%);
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 14px;
+}
+
+.session-profile span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.session-profile small {
+  color: #98aaa4;
+  font-size: 10px;
+}
+
+.session-profile strong {
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-profile button {
+  flex: none;
+  padding: 7px 9px;
+  color: #dff9eb;
+  background: transparent;
+  border: 1px solid rgb(169 237 202 / 35%);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.session-profile button:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 nav {

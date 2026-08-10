@@ -49,6 +49,9 @@ const items: RequirementListItem[] = [
 ];
 
 const createClient = (): ForgeXClient => ({
+  startSession: vi.fn(),
+  getSession: vi.fn(),
+  endSession: vi.fn(),
   listRequirements: vi.fn().mockResolvedValue({ items, nextCursor: null }),
   listExtensions: vi.fn().mockResolvedValue({
     businessKnowledge: [],

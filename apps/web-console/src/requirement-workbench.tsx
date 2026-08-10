@@ -15,6 +15,9 @@ import { WorkerCenter } from "./worker-center.js";
 interface RequirementWorkbenchProps {
   client: ForgeXClient;
   projectName?: string;
+  actorName?: string;
+  onSignOut?: () => Promise<void>;
+  signingOut?: boolean;
 }
 
 const actionEntries = (
@@ -211,6 +214,9 @@ function RequirementCard({
 export function RequirementWorkbench({
   client,
   projectName = "我的项目",
+  actorName,
+  onSignOut,
+  signingOut = false,
 }: RequirementWorkbenchProps) {
   const [items, setItems] = useState<RequirementListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -391,6 +397,21 @@ export function RequirementWorkbench({
             <span>◇</span>扩展中心
           </button>
         </nav>
+        {actorName && onSignOut ? (
+          <div className="session-profile">
+            <span>
+              <small>当前用户</small>
+              <strong>{actorName}</strong>
+            </span>
+            <button
+              type="button"
+              disabled={signingOut}
+              onClick={() => void onSignOut()}
+            >
+              {signingOut ? "正在退出…" : "退出登录"}
+            </button>
+          </div>
+        ) : null}
         <div className="sidebar-note">
           <CheckIcon />
           <span>
