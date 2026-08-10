@@ -8,6 +8,7 @@
     { "path": "./packages/postgres" },
     { "path": "./apps/control-plane-api" },
     { "path": "./apps/web-console" },
-    { "path": "./services/device-worker" }
+    { "path": "./services/device-worker" },
+    { "path": "./services/verification-runner" }
   ]
 }
