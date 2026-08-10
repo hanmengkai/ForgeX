@@ -7,6 +7,7 @@ import { loadDeviceWorkerConfig } from "./config.js";
 import { WorkerControlPlaneClient } from "./control-plane-client.js";
 import { DeviceWorkerRuntime, runDeviceWorkerLoop } from "./runtime.js";
 import { DeviceWorkerInstanceLock } from "./instance-lock.js";
+import { OfficialMcpExecutionAdapter } from "./local-mcp.js";
 import { GitWorktreeWorkspaceProvider } from "./workspace.js";
 
 const configPath = process.env.FORGEX_WORKER_CONFIG;
@@ -45,6 +46,13 @@ const runtime = new DeviceWorkerRuntime({
   completionJournal: new FileWorkerCompletionJournal(
     config.completionJournalPath,
   ),
+  ...(config.mcpConnections.length > 0
+    ? {
+        mcp: new OfficialMcpExecutionAdapter({
+          connections: config.mcpConnections,
+        }),
+      }
+    : {}),
 });
 const abort = new AbortController();
 process.once("SIGINT", () => abort.abort("SIGINT"));

@@ -86,6 +86,15 @@ export interface McpExecutionEnvelope {
   serviceName: string;
   toolName: string;
   technicalName: string;
+  transport: "stdio" | "streamable_http";
+  effect: "read" | "write" | "external_action";
+  serverRevision: number;
+  manifestHashAlgorithm: "sha256";
+  manifestHash: string;
+  inputSchemaHashAlgorithm: "sha256";
+  inputSchemaHash: string;
+  argumentsHashAlgorithm: "sha256";
+  argumentsHash: string;
   arguments: Record<string, unknown>;
 }
 
@@ -1043,6 +1052,15 @@ export class McpInvocationApplicationService {
             serviceName: record.serverName,
             toolName: record.toolDisplayName,
             technicalName: record.technicalName,
+            transport: trusted!.manifest.transport,
+            effect: record.effect,
+            serverRevision: record.serverRevision,
+            manifestHashAlgorithm: record.manifestHashAlgorithm,
+            manifestHash: record.manifestHash,
+            inputSchemaHashAlgorithm: record.inputSchemaHashAlgorithm,
+            inputSchemaHash: record.inputSchemaHash,
+            argumentsHashAlgorithm: record.argumentsHashAlgorithm,
+            argumentsHash: record.argumentsHash,
             arguments: args,
           },
         };

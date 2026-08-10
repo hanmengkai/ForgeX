@@ -37,6 +37,123 @@ const absolutePath = z
   .max(1_000)
   .refine((value) => path.isAbsolute(value), "工作区路径必须是绝对路径");
 
+const sha256Hash = z.string().regex(/^[a-f0-9]{64}$/u);
+const technicalName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u);
+const localSecretValue = z
+  .string()
+  .max(8_192)
+  .refine(
+    (value) => !/[\u0000\r\n]/u.test(value),
+    "本地连接配置不能包含换行或空字符",
+  );
+const mcpConnectionBase = {
+  schemaVersion: z.literal(1),
+  connectionBindingKey: internalKey,
+  allowedTools: z.array(technicalName).min(1).max(50),
+  timeoutMs: z.number().int().min(1_000).max(300_000).default(30_000),
+} as const;
+
+export const DeviceMcpConnectionSchema = z
+  .discriminatedUnion("transport", [
+    z
+      .object({
+        ...mcpConnectionBase,
+        transport: z.literal("stdio"),
+        commandPath: absolutePath,
+        commandSha256: sha256Hash,
+        args: z
+          .array(
+            z
+              .string()
+              .max(1_000)
+              .refine((value) => !value.includes("\u0000")),
+          )
+          .max(50)
+          .default([]),
+        environment: z
+          .record(
+            z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,99}$/u),
+            localSecretValue,
+          )
+          .default({}),
+        workingDirectory: absolutePath.optional(),
+      })
+      .strict(),
+    z
+      .object({
+        ...mcpConnectionBase,
+        transport: z.literal("streamable_http"),
+        url: z.url().refine((value) => {
+          try {
+            const url = new URL(value);
+            return (
+              url.username === "" &&
+              url.password === "" &&
+              url.search === "" &&
+              url.hash === "" &&
+              (url.protocol === "https:" ||
+                (url.protocol === "http:" &&
+                  ["127.0.0.1", "localhost", "::1"].includes(url.hostname)))
+            );
+          } catch {
+            return false;
+          }
+        }, "远程 MCP 必须使用无 URL 凭据的 HTTPS；本机可使用 HTTP"),
+        headers: z
+          .record(
+            z
+              .string()
+              .regex(/^[A-Za-z][A-Za-z0-9-]{0,99}$/u)
+              .refine(
+                (name) =>
+                  ![
+                    "accept",
+                    "connection",
+                    "content-length",
+                    "content-type",
+                    "host",
+                    "mcp-protocol-version",
+                    "mcp-session-id",
+                    "origin",
+                    "transfer-encoding",
+                  ].includes(name.toLowerCase()),
+                "不能覆盖 MCP 传输保留请求头",
+              ),
+            localSecretValue,
+          )
+          .default({}),
+      })
+      .strict(),
+  ])
+  .superRefine((connection, context) => {
+    if (
+      new Set(connection.allowedTools).size !== connection.allowedTools.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["allowedTools"],
+        message: "本地 MCP 工具白名单不能重复",
+      });
+    }
+    if (
+      connection.transport === "streamable_http" &&
+      Object.keys(connection.headers).length > 50
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["headers"],
+        message: "本地 MCP 请求头不能超过 50 项",
+      });
+    }
+  });
+
+export type DeviceMcpConnection = z.infer<typeof DeviceMcpConnectionSchema>;
+
 export const ControlPlaneOriginSchema = z
   .url()
   .transform((value) => new URL(value))
@@ -98,6 +215,7 @@ export const DeviceWorkerConfigSchema = z
       .strict(),
     completionJournalPath: absolutePath,
     projects: z.array(DeviceWorkerProjectSchema).min(1).max(100),
+    mcpConnections: z.array(DeviceMcpConnectionSchema).max(50).default([]),
     idlePollIntervalMs: z.number().int().min(500).max(60_000).default(3_000),
     requestTimeoutMs: z.number().int().min(500).max(10_000).default(5_000),
     renewIntervalMs: z.number().int().min(1_000).max(30_000).default(15_000),
@@ -109,6 +227,7 @@ export const DeviceWorkerConfigSchema = z
   .strict()
   .superRefine((config, context) => {
     const keys = new Set<string>();
+    const mcpBindingKeys = new Set<string>();
     const journalPath = path.resolve(config.completionJournalPath);
     const codexHomePath = path.resolve(config.codexHomePath);
     const isolationLauncherPath = path.resolve(
@@ -164,6 +283,16 @@ export const DeviceWorkerConfigSchema = z
           }
         }
       }
+    });
+    config.mcpConnections.forEach((connection, index) => {
+      if (mcpBindingKeys.has(connection.connectionBindingKey)) {
+        context.addIssue({
+          code: "custom",
+          path: ["mcpConnections", index, "connectionBindingKey"],
+          message: "同一本地 MCP 连接绑定不能重复配置",
+        });
+      }
+      mcpBindingKeys.add(connection.connectionBindingKey);
     });
     config.allowedEnvironmentVariables.forEach((name, index) => {
       if (

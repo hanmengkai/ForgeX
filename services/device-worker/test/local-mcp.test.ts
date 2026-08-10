@@ -7,11 +7,7 @@ import {
   OfficialMcpExecutionAdapter,
   canonicalMcpJsonHash,
 } from "../src/local-mcp.js";
-import {
-  assignmentKey,
-  projectKey,
-  requirementKey,
-} from "./fixtures.js";
+import { assignmentKey, projectKey, requirementKey } from "./fixtures.js";
 
 const invocationKey = requirementKey;
 const connectionBindingKey = "77777777-7777-4777-8777-777777777777";
@@ -83,12 +79,12 @@ describe("OfficialMcpExecutionAdapter", () => {
       connect,
     });
 
-    await expect(adapter.execute({ assignment: assignment() })).resolves.toEqual(
-      {
-        outcome: "succeeded",
-        summary: "本地工具操作已完成",
-      },
-    );
+    await expect(
+      adapter.execute({ assignment: assignment() }),
+    ).resolves.toEqual({
+      outcome: "succeeded",
+      summary: "本地工具操作已完成",
+    });
     expect(connect).toHaveBeenCalledWith(connection, expect.any(AbortSignal));
     expect(callTool).toHaveBeenCalledWith(
       {
@@ -147,11 +143,11 @@ describe("OfficialMcpExecutionAdapter", () => {
       }),
     });
 
-    await expect(adapter.execute({ assignment: assignment() })).resolves.toEqual(
-      {
-        outcome: "failed",
-        summary: "本地工具操作未完成",
-      },
-    );
+    await expect(
+      adapter.execute({ assignment: assignment() }),
+    ).resolves.toEqual({
+      outcome: "failed",
+      summary: "本地工具操作未完成",
+    });
   });
 });

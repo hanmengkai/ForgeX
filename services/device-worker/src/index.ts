@@ -4,5 +4,6 @@ export * from "./completion-journal.js";
 export * from "./config.js";
 export * from "./control-plane-client.js";
 export * from "./isolation-launcher.js";
+export * from "./local-mcp.js";
 export * from "./runtime.js";
 export * from "./workspace.js";

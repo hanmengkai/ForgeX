@@ -61,6 +61,15 @@ const McpExecutionEnvelopeSchema = z
       .min(1)
       .max(200)
       .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u),
+    transport: z.enum(["stdio", "streamable_http"]),
+    effect: z.enum(["read", "write", "external_action"]),
+    serverRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    manifestHashAlgorithm: z.literal("sha256"),
+    manifestHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    inputSchemaHashAlgorithm: z.literal("sha256"),
+    inputSchemaHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    argumentsHashAlgorithm: z.literal("sha256"),
+    argumentsHash: z.string().regex(/^[a-f0-9]{64}$/u),
     arguments: z.record(z.string(), z.unknown()),
   })
   .strict();

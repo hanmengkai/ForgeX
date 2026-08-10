@@ -14,6 +14,7 @@ import {
   InMemoryWorkerFleetRepository,
   McpInvocationApplicationService,
   WorkerFleetService,
+  canonicalizeMcpArguments,
   canonicalizeMcpInputSchema,
   type AuthenticatedPrincipal,
   type McpInvocationRepository,
@@ -654,6 +655,15 @@ describe("McpInvocationApplicationService", () => {
       serviceName: "代码仓库助手",
       toolName: "读取项目结构",
       technicalName: "repository.read_structure",
+      transport: "stdio",
+      effect: "read",
+      serverRevision: manifest.revision,
+      manifestHashAlgorithm: "sha256",
+      manifestHash: McpHealthAuthority.manifestHash(manifest),
+      inputSchemaHashAlgorithm: "sha256",
+      inputSchemaHash: schemaHash,
+      argumentsHashAlgorithm: "sha256",
+      argumentsHash: canonicalizeMcpArguments({ target: "src" }).hash,
       arguments: { target: "src" },
     });
     const command = {
