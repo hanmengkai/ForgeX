@@ -1,5 +1,9 @@
 import { DeviceWorkerConfigSchema } from "../src/config.js";
-import { RequirementWorkerAssignmentSchema } from "../src/control-plane-client.js";
+import {
+  McpWorkerAssignmentSchema,
+  RequirementWorkerAssignmentSchema,
+} from "../src/control-plane-client.js";
+import { canonicalMcpJsonHash } from "../src/local-mcp.js";
 
 export const tenantKey = "11111111-1111-4111-8111-111111111111";
 export const projectKey = "22222222-2222-4222-8222-222222222222";
@@ -43,6 +47,44 @@ export const requirementAssignment = RequirementWorkerAssignmentSchema.parse({
       credentialHandling: "device_local_only",
       completionEvidence: "independent_runner_required",
     },
+  },
+});
+
+export const mcpConnectionBindingKey =
+  "77777777-7777-4777-8777-777777777777";
+export const mcpInputSchema = {
+  type: "object",
+  properties: {
+    target: { type: "string", title: "目标环境", writeOnly: false },
+  },
+  required: ["target"],
+  additionalProperties: false,
+};
+export const mcpAssignment = McpWorkerAssignmentSchema.parse({
+  workKind: "mcp_invocation",
+  assignmentKey,
+  fencingToken: 7,
+  projectKey,
+  requirementKey,
+  requirementRevision: 1,
+  invocationKey: requirementKey,
+  title: "发送上线通知",
+  leasedUntil: "2026-08-10T10:01:00.000Z",
+  execution: {
+    connectionBindingKey: mcpConnectionBindingKey,
+    serviceName: "团队通知",
+    toolName: "发送上线通知",
+    technicalName: "notifications.send",
+    transport: "stdio",
+    effect: "external_action",
+    serverRevision: 3,
+    manifestHashAlgorithm: "sha256",
+    manifestHash: "a".repeat(64),
+    inputSchemaHashAlgorithm: "sha256",
+    inputSchemaHash: canonicalMcpJsonHash(mcpInputSchema),
+    argumentsHashAlgorithm: "sha256",
+    argumentsHash: canonicalMcpJsonHash({ target: "production" }),
+    arguments: { target: "production" },
   },
 });
 

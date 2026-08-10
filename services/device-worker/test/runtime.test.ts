@@ -7,11 +7,120 @@ import { InMemoryWorkerCompletionJournal } from "../src/completion-journal.js";
 import { ControlPlaneClientError } from "../src/control-plane-client.js";
 import {
   assignmentKey,
+  mcpAssignment,
   requirementAssignment,
   workerConfig,
 } from "./fixtures.js";
 
 describe("DeviceWorkerRuntime", () => {
+  it("非只读 MCP 在调用边界异常后只上报结果未知，不会自动重复副作用", async () => {
+    const journal = new InMemoryWorkerCompletionJournal();
+    const controlPlane = {
+      heartbeat: vi.fn(async () => Promise.resolve()),
+      poll: vi.fn(async () => Promise.resolve(mcpAssignment)),
+      renew: vi.fn(async () => Promise.resolve("2026-08-10T10:02:00.000Z")),
+      completeRequirement: vi.fn(async () => Promise.resolve(false)),
+      completeMcp: vi.fn(async () => Promise.resolve(false)),
+    };
+    const mcp = {
+      execute: vi.fn(async () => {
+        throw new Error("工具返回前连接中断");
+      }),
+    };
+    const runtime = new DeviceWorkerRuntime({
+      config: workerConfig({
+        repositoryRoot: path.resolve("repository"),
+        worktreeRoot: path.resolve("worktrees"),
+      }),
+      controlPlane,
+      workspaces: {
+        prepare: vi.fn(),
+        commitCompleted: vi.fn(),
+        recoverCompleted: vi.fn(),
+      },
+      codex: { execute: vi.fn() },
+      mcp,
+      completionJournal: journal,
+    });
+
+    await expect(runtime.runOnce()).rejects.toThrow("连接中断");
+    await expect(journal.load()).resolves.toMatchObject({
+      kind: "mcp_invocation_started",
+      assignment: { invocationKey: mcpAssignment.invocationKey },
+    });
+    await expect(runtime.runOnce()).resolves.toMatchObject({
+      kind: "mcp_completed",
+      title: mcpAssignment.title,
+    });
+    expect(mcp.execute).toHaveBeenCalledOnce();
+    expect(controlPlane.poll).toHaveBeenCalledOnce();
+    expect(controlPlane.completeMcp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectKey: mcpAssignment.projectKey,
+        invocationKey: mcpAssignment.invocationKey,
+      }),
+      {
+        outcome: "unknown",
+        summary: "本地工具操作结果需要人工核对",
+      },
+      undefined,
+    );
+  });
+
+  it("只读 MCP 在调用边界异常后可以从持久意图安全重试", async () => {
+    const journal = new InMemoryWorkerCompletionJournal();
+    const readAssignment = {
+      ...mcpAssignment,
+      execution: { ...mcpAssignment.execution, effect: "read" as const },
+    };
+    const controlPlane = {
+      heartbeat: vi.fn(async () => Promise.resolve()),
+      poll: vi.fn(async () => Promise.resolve(readAssignment)),
+      renew: vi.fn(async () => Promise.resolve("2026-08-10T10:02:00.000Z")),
+      completeRequirement: vi.fn(async () => Promise.resolve(false)),
+      completeMcp: vi.fn(async () => Promise.resolve(false)),
+    };
+    const mcp = {
+      execute: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("临时连接中断"))
+        .mockResolvedValueOnce({
+          outcome: "succeeded" as const,
+          summary: "本地工具操作已完成",
+        }),
+    };
+    const runtime = new DeviceWorkerRuntime({
+      config: workerConfig({
+        repositoryRoot: path.resolve("repository"),
+        worktreeRoot: path.resolve("worktrees"),
+      }),
+      controlPlane,
+      workspaces: {
+        prepare: vi.fn(),
+        commitCompleted: vi.fn(),
+        recoverCompleted: vi.fn(),
+      },
+      codex: { execute: vi.fn() },
+      mcp,
+      completionJournal: journal,
+    });
+
+    await expect(runtime.runOnce()).rejects.toThrow("临时连接中断");
+    await expect(runtime.runOnce()).resolves.toMatchObject({
+      kind: "mcp_completed",
+    });
+    expect(mcp.execute).toHaveBeenCalledTimes(2);
+    expect(controlPlane.poll).toHaveBeenCalledOnce();
+    expect(controlPlane.completeMcp).toHaveBeenCalledWith(
+      expect.any(Object),
+      {
+        outcome: "succeeded",
+        summary: "本地工具操作已完成",
+      },
+      undefined,
+    );
+  });
+
   it("只在 Codex 生成干净本地提交后完成租约", async () => {
     const controlPlane = {
       heartbeat: vi.fn(async () => Promise.resolve()),

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FileWorkerCompletionJournal } from "../src/completion-journal.js";
 import {
   assignmentKey,
+  mcpAssignment,
   projectKey,
   repositoryKey,
   requirementKey,
@@ -21,6 +22,43 @@ afterEach(async () => {
 });
 
 describe("FileWorkerCompletionJournal", () => {
+  it("持久化 MCP 开始意图，并只允许同一租约升级为已知结果或结果未知", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-journal-"));
+    temporaryRoots.push(root);
+    const journal = new FileWorkerCompletionJournal(
+      path.join(root, "completion.json"),
+    );
+    const intent = {
+      schemaVersion: 1 as const,
+      kind: "mcp_invocation_started" as const,
+      assignment: mcpAssignment,
+    };
+
+    await journal.saveMcpIntent(intent);
+    await expect(journal.load()).resolves.toEqual(intent);
+    await journal.save({
+      schemaVersion: 1,
+      kind: "mcp_invocation",
+      assignment: {
+        assignmentKey: mcpAssignment.assignmentKey,
+        fencingToken: mcpAssignment.fencingToken,
+        title: mcpAssignment.title,
+        projectKey: mcpAssignment.projectKey,
+        invocationKey: mcpAssignment.invocationKey,
+      },
+      result: {
+        outcome: "unknown",
+        summary: "本地工具操作结果需要人工核对",
+      },
+    });
+    await expect(journal.load()).resolves.toMatchObject({
+      kind: "mcp_invocation",
+      result: { outcome: "unknown" },
+    });
+    await journal.clear();
+    await expect(journal.load()).resolves.toBeNull();
+  });
+
   it("原子保存并恢复待确认提交，成功后清除", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-journal-"));
     temporaryRoots.push(root);

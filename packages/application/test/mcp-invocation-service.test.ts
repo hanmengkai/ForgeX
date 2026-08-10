@@ -961,6 +961,71 @@ describe("McpInvocationApplicationService", () => {
     );
   });
 
+  it("设备持久意图无法确认结果时可主动进入结果待核对并幂等清理租约", async () => {
+    const { service, repository } = await createService();
+    const workers = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+      clock: () => new Date(now.getTime()),
+    });
+    const connection = (
+      await workers.connect(administrator, {
+        schemaVersion: 1,
+        deviceName: "研发电脑 1",
+        accountName: "Codex 账户 1",
+        accountFingerprint: "f".repeat(64),
+        capabilities: [manifest.connectionBindingKey],
+      })
+    ).connection;
+    await service.request(developer, {
+      schemaVersion: 1,
+      requestKey: randomUUID(),
+      serverKey,
+      toolKey: writeToolKey,
+      arguments: { target: "production" },
+    });
+    const [created] = await repository.list(tenantKey, projectKey);
+    await service.approve(productOwner, created!.invocationKey);
+    await service.flushQueuedToWorkers(tenantKey, workers);
+    const assignment = (await workers.poll(connection)).assignment!;
+    await service.leaseForExecution(tenantKey, assignment);
+
+    const report = {
+      projectKey,
+      invocationKey: created!.invocationKey,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      workerKey: connection.workerKey,
+      workerGeneration: connection.generation,
+    };
+    await expect(
+      service.reportExecutionOutcomeUnknown(tenantKey, report),
+    ).resolves.toBe("pending_cleanup");
+    await expect(
+      service.reportExecutionOutcomeUnknown(tenantKey, report),
+    ).resolves.toBe("pending_cleanup");
+    await workers.cancelMcpLease(connection, {
+      schemaVersion: 1,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+    });
+    await service.finalizeOutcomeUnknownCleanup(
+      tenantKey,
+      projectKey,
+      created!.invocationKey,
+    );
+    expect((await repository.list(tenantKey, projectKey))[0]).toMatchObject({
+      status: "outcome_unknown",
+    });
+    await expect(repository.listAudit(tenantKey, projectKey)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "outcome_unknown",
+          assignmentKey: assignment.assignmentKey,
+        }),
+      ]),
+    );
+  });
+
   it("Worker 续租已提交但调用侧同步失败后，先补偿或先重试都会保持失败关闭", async () => {
     const prepare = async () => {
       let current = new Date(now.getTime());

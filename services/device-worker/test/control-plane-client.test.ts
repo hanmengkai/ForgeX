@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { WORKER_REQUIREMENT_COMPLETION_SUMMARY } from "@forgex/contracts";
+import {
+  WORKER_MCP_UNKNOWN_SUMMARY,
+  WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+} from "@forgex/contracts";
 
 import { WorkerControlPlaneClient } from "../src/control-plane-client.js";
-import { requirementAssignment, tenantKey } from "./fixtures.js";
+import { mcpAssignment, requirementAssignment, tenantKey } from "./fixtures.js";
 
 const connection = {
   schemaVersion: 1 as const,
@@ -115,6 +118,37 @@ describe("WorkerControlPlaneClient", () => {
       baseCommit: "a".repeat(40),
       commitSha: "b".repeat(40),
     });
+  });
+
+  it("非只读 MCP 崩溃恢复时上报与项目、调用和租约绑定的结果未知", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ data: { alreadyCompleted: false } }), {
+          status: 200,
+        }),
+      ),
+    );
+    const client = new WorkerControlPlaneClient({
+      baseUrl: "https://forgex.example.test",
+      connection,
+      fetch,
+    });
+
+    await client.completeMcp(
+      {
+        assignmentKey: mcpAssignment.assignmentKey,
+        fencingToken: mcpAssignment.fencingToken,
+        projectKey: mcpAssignment.projectKey,
+        invocationKey: mcpAssignment.invocationKey,
+      },
+      { outcome: "unknown", summary: WORKER_MCP_UNKNOWN_SUMMARY },
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "https://forgex.example.test/api/v1/worker-connection/mcp-complete",
+      expect.objectContaining({
+        body: expect.stringContaining('"outcome":"unknown"'),
+      }),
+    );
   });
 
   it("黑洞请求会在租约续租间隔前超时", async () => {
