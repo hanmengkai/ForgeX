@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { McpWorkerAssignment } from "../src/control-plane-client.js";
 import {
@@ -62,8 +66,62 @@ const connection = {
   allowedTools: ["notifications.send"],
   timeoutMs: 30_000,
 };
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+  for (const root of temporaryRoots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 describe("OfficialMcpExecutionAdapter", () => {
+  it("通过官方 MCP stdio 协议执行精确绑定的本地工具", async () => {
+    const commandPath = process.execPath;
+    const commandSha256 = createHash("sha256")
+      .update(await readFile(commandPath))
+      .digest("hex");
+    const sourceFixturePath = fileURLToPath(
+      new URL("./mcp-stdio-fixture.mjs", import.meta.url),
+    );
+    const fixtureContent = await readFile(sourceFixturePath, "utf8");
+    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-mcp-stdio-"));
+    temporaryRoots.push(root);
+    const fixturePath = path.join(root, "mcp-server.mjs");
+    await writeFile(fixturePath, fixtureContent, "utf8");
+    const fixtureSha256 = createHash("sha256")
+      .update(fixtureContent, "utf8")
+      .digest("hex");
+    const adapter = new OfficialMcpExecutionAdapter({
+      connections: [
+        {
+          ...connection,
+          commandPath,
+          commandSha256,
+          args: [
+            {
+              kind: "trusted_file",
+              path: fixturePath,
+              sha256: fixtureSha256,
+            },
+          ],
+          timeoutMs: 10_000,
+        },
+      ],
+    });
+
+    await expect(
+      adapter.execute({ assignment: assignment() }),
+    ).resolves.toEqual({
+      outcome: "succeeded",
+      summary: "本地工具操作已完成",
+    });
+
+    await writeFile(fixturePath, `${fixtureContent}\n// tampered\n`, "utf8");
+    await expect(adapter.execute({ assignment: assignment() })).rejects.toThrow(
+      "MCP 参数文件内容与配置的可信摘要不一致",
+    );
+  });
+
   it("按本地连接绑定、可信 Schema 和参数摘要精确执行工具", async () => {
     const callTool = vi.fn(async () => ({ content: [], isError: false }));
     const close = vi.fn(async () => Promise.resolve());

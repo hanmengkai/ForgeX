@@ -107,7 +107,10 @@ describe("设备 Worker 配置", () => {
       transport: "stdio" as const,
       commandPath: path.resolve("fixtures/mcp-launcher"),
       commandSha256: "a".repeat(64),
-      args: ["--profile", "team"],
+      args: [
+        { kind: "literal", value: "--profile" },
+        { kind: "literal", value: "team" },
+      ],
       environment: { MCP_PROFILE: "team" },
       allowedTools: ["notifications.send"],
       timeoutMs: 30_000,
@@ -240,14 +243,17 @@ describe("设备 Worker 配置", () => {
     const mcpDirectory = path.join(root, "mcp-bin");
     const isolationLauncherPath = path.join(root, "isolation-launcher.exe");
     const mcpLauncherPath = path.join(mcpDirectory, "team-mcp.exe");
+    const mcpProgramPath = path.join(mcpDirectory, "team-mcp.mjs");
     const isolationLauncherContent = "trusted isolation launcher";
     const mcpLauncherContent = "trusted mcp launcher";
+    const mcpProgramContent = "export const server = 'trusted';";
     const configPath = path.join(root, "worker.json");
     await mkdir(codexHomePath);
     await mkdir(journalDirectory);
     await mkdir(mcpDirectory);
     await writeFile(isolationLauncherPath, isolationLauncherContent, "utf8");
     await writeFile(mcpLauncherPath, mcpLauncherContent, "utf8");
+    await writeFile(mcpProgramPath, mcpProgramContent, "utf8");
     await writeFile(
       configPath,
       JSON.stringify({
@@ -270,7 +276,15 @@ describe("设备 Worker 配置", () => {
             commandSha256: createHash("sha256")
               .update(mcpLauncherContent, "utf8")
               .digest("hex"),
-            args: [],
+            args: [
+              {
+                kind: "trusted_file",
+                path: mcpProgramPath,
+                sha256: createHash("sha256")
+                  .update(mcpProgramContent, "utf8")
+                  .digest("hex"),
+              },
+            ],
             environment: {},
             allowedTools: ["notifications.send"],
             timeoutMs: 30_000,
@@ -299,6 +313,19 @@ describe("设备 Worker 配置", () => {
     expect(assertWindowsTrustedLauncherPath).toHaveBeenCalledWith(
       mcpLauncherPath,
     );
+    expect(assertWindowsTrustedLauncherPath).toHaveBeenCalledWith(
+      mcpProgramPath,
+    );
+
+    await writeFile(mcpProgramPath, "tampered mcp program", "utf8");
+    await expect(
+      loadDeviceWorkerConfig(configPath, {
+        platform: "win32",
+        assertWindowsPrivatePath,
+        assertWindowsTrustedLauncherPath,
+      }),
+    ).rejects.toThrow("MCP 参数文件内容与配置的可信摘要不一致");
+    await writeFile(mcpProgramPath, mcpProgramContent, "utf8");
 
     await writeFile(mcpLauncherPath, "tampered mcp launcher", "utf8");
     await expect(
