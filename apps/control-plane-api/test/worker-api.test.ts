@@ -6,6 +6,7 @@ import {
   InMemoryMcpRegistryRepository,
   InMemoryMcpInputSchemaStore,
   InMemoryMcpInvocationRepository,
+  InMemoryKnowledgeBaseRepository,
   InMemoryPreviewArtifactStore,
   InMemorySkillArtifactStore,
   InMemorySkillRegistryRepository,
@@ -125,6 +126,7 @@ const createTestApp = (
   const app = buildControlPlaneApi({
     authenticator,
     extensionCatalogRepository: new InMemoryExtensionCatalogRepository(),
+    knowledgeBaseRepository: new InMemoryKnowledgeBaseRepository(),
     mcpRegistryRepository: new InMemoryMcpRegistryRepository(),
     mcpHealthAuthority: new McpHealthAuthority({ verifiers: [] }),
     mcpInputSchemaStore: new InMemoryMcpInputSchemaStore(),

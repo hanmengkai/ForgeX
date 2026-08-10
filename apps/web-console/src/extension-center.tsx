@@ -5,6 +5,7 @@ import type {
   ExtensionCatalogOverview,
   ForgeXClient,
 } from "./api.js";
+import { KnowledgeBaseCenter } from "./knowledge-base-center.js";
 
 interface ExtensionCenterProps {
   client: ForgeXClient;
@@ -165,11 +166,11 @@ export function ExtensionCenter({ client }: ExtensionCenterProps) {
               <small>按权限开放的系统能力</small>
             </div>
           </section>
-          <ExtensionSection
-            title="业务资料"
-            description="让 AI 理解当前项目的规则、术语和历史决策。"
-            emptyTitle="还没有项目资料"
+          <KnowledgeBaseCenter
+            client={client}
             items={overview.businessKnowledge}
+            createAction={overview.links?.actions.createKnowledge}
+            onChanged={load}
           />
           <ExtensionSection
             title="团队能力"

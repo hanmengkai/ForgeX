@@ -16,3 +16,7 @@ export { PostgresSkillArtifactStore } from "./postgres-skill-artifact-store.js";
 export { PostgresMcpRegistryRepository } from "./postgres-mcp-registry-repository.js";
 export { PostgresMcpInputSchemaStore } from "./postgres-mcp-input-schema-store.js";
 export { PostgresMcpInvocationRepository } from "./postgres-mcp-invocation-repository.js";
+export {
+  PostgresKnowledgeBaseRepository,
+  createPostgresKnowledgeBaseRepository,
+} from "./postgres-knowledge-base-repository.js";

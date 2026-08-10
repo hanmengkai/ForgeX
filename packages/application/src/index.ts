@@ -3,6 +3,35 @@ export type {
   PlatformRole,
   SessionAuthenticator,
 } from "./auth.js";
+export {
+  InMemoryKnowledgeBaseRepository,
+  KnowledgeBaseAuditEventSchema,
+  KnowledgeChunkSchema,
+  buildKnowledgeChunks,
+  knowledgeSearchTokens,
+  normalizeKnowledgeSearchText,
+  type KnowledgeBaseAuditEvent,
+  type KnowledgeBaseRepository,
+  type KnowledgeBaseTransaction,
+  type KnowledgeChunk,
+  type KnowledgeChunkSource,
+  type KnowledgeSearchMatch,
+  type KnowledgeSearchQuery,
+} from "./knowledge-base-repository.js";
+export {
+  KnowledgeBaseApplicationService,
+  canManageKnowledgeBases,
+  KnowledgeBaseCreateCommandSchema,
+  KnowledgeSearchCommandSchema,
+  KnowledgeSourcePublishCommandSchema,
+  type KnowledgeBaseApplicationServiceOptions,
+  type KnowledgeBaseDetailForPeople,
+  type KnowledgeBaseCreateCommand,
+  type KnowledgeSearchCommand,
+  type KnowledgeSearchResultForPeople,
+  type KnowledgeSourceForPeople,
+  type KnowledgeSourcePublishCommand,
+} from "./knowledge-base-service.js";
 export { ApplicationError } from "./errors.js";
 export type { ApplicationErrorDetail } from "./errors.js";
 export {
@@ -56,6 +85,7 @@ export {
   type ExtensionCatalogOverviewForPeople,
   type ExtensionItemForPeople,
   type TrustedMcpDirectory,
+  type TrustedKnowledgeDirectory,
   type TrustedSkillDirectory,
 } from "./extension-catalog-service.js";
 export {

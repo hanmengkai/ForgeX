@@ -16,11 +16,16 @@ export type {
 import type { AuthenticatedPrincipal } from "./auth.js";
 import { ApplicationError } from "./errors.js";
 import type { ExtensionCatalogRepository } from "./extension-catalog-repository.js";
+import {
+  canManageKnowledgeBases,
+  type KnowledgeBaseApplicationService,
+} from "./knowledge-base-service.js";
 
 export interface ExtensionCatalogApplicationServiceOptions {
   repository: ExtensionCatalogRepository;
   skillRegistry: TrustedSkillDirectory;
   mcpRegistry: TrustedMcpDirectory;
+  knowledgeDirectory?: TrustedKnowledgeDirectory;
   projectKey: string;
 }
 
@@ -36,6 +41,10 @@ export interface TrustedMcpDirectory {
   ): Promise<McpServerRegistryItemForPeople[]>;
 }
 
+export interface TrustedKnowledgeDirectory {
+  listItemsForPeople: KnowledgeBaseApplicationService["listItemsForPeople"];
+}
+
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -43,6 +52,7 @@ export class ExtensionCatalogApplicationService {
   readonly #repository: ExtensionCatalogRepository;
   readonly #skillRegistry: TrustedSkillDirectory;
   readonly #mcpRegistry: TrustedMcpDirectory;
+  readonly #knowledgeDirectory: TrustedKnowledgeDirectory | null;
   readonly #projectKey: string;
 
   constructor(options: ExtensionCatalogApplicationServiceOptions) {
@@ -52,6 +62,7 @@ export class ExtensionCatalogApplicationService {
     this.#repository = options.repository;
     this.#skillRegistry = options.skillRegistry;
     this.#mcpRegistry = options.mcpRegistry;
+    this.#knowledgeDirectory = options.knowledgeDirectory ?? null;
     this.#projectKey = options.projectKey.toLowerCase();
   }
 
@@ -63,10 +74,20 @@ export class ExtensionCatalogApplicationService {
       await this.#skillRegistry.listItemsForPeople(principal);
     const trustedMcpServers =
       await this.#mcpRegistry.listItemsForPeople(principal);
+    const trustedKnowledge = this.#knowledgeDirectory
+      ? await this.#knowledgeDirectory.listItemsForPeople(principal)
+      : [];
     const overview: ExtensionCatalogOverviewForPeople = {
       businessKnowledge: [],
       teamCapabilities: [],
       externalTools: [],
+      links: {
+        actions: {
+          ...(this.#knowledgeDirectory && canManageKnowledgeBases(principal)
+            ? { createKnowledge: "/api/v1/knowledge-bases" }
+            : {}),
+        },
+      },
     };
     for (const item of catalog.listForPeople()) {
       const view = {
@@ -83,6 +104,18 @@ export class ExtensionCatalogApplicationService {
           break;
       }
     }
+    const trustedKnowledgeViews = trustedKnowledge.map((item) => ({
+      name: item.view.name,
+      summary: item.view.summary,
+      status: (item.view.status === "可使用" ? "可使用" : "需要处理") as
+        "可使用" | "需要处理",
+      detail: item.view.detail,
+      supportingText: `${item.view.classification} · 检索结果始终标注资料来源`,
+      links: { self: `/api/v1/knowledge-bases/${item.knowledgeKey}` },
+    }));
+    overview.businessKnowledge = this.#knowledgeDirectory
+      ? trustedKnowledgeViews.slice(0, 100)
+      : overview.businessKnowledge.slice(0, 100);
     overview.teamCapabilities = trustedSkills.map((item) => ({
       name: item.view.name,
       summary: item.view.summary,
@@ -110,6 +143,13 @@ export class ExtensionCatalogApplicationService {
     principal: AuthenticatedPrincipal,
     extensionKey: string,
   ): Promise<ExtensionItemForPeople> {
+    if (this.#knowledgeDirectory) {
+      throw new ApplicationError(
+        404,
+        "extension_not_found",
+        "没有找到这个扩展",
+      );
+    }
     const normalizedKey = extensionKey.toLowerCase();
     const item = (await this.#catalogFor(principal))
       .listForPeople()

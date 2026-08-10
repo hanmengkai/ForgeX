@@ -73,6 +73,7 @@ describe("ExtensionCatalogApplicationService", () => {
           },
         },
       ],
+      links: { actions: {} },
     });
     expect(JSON.stringify(overview)).not.toContain("stdio");
     expect(JSON.stringify(overview)).not.toContain("extensionKey");

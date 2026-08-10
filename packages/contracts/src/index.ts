@@ -245,7 +245,10 @@ const extensionItemSchema = (path: RegExp) =>
     })
     .strict();
 const knowledgeExtensionItemSchema = extensionItemSchema(
-  new RegExp(`^/api/v1/extensions/${extensionKeyPath}$`, "i"),
+  new RegExp(
+    `^/api/v1/(?:extensions|knowledge-bases)/${extensionKeyPath}$`,
+    "i",
+  ),
 );
 const skillExtensionItemSchema = extensionItemSchema(
   new RegExp(`^/api/v1/extensions/skills/${extensionKeyPath}$`, "i"),
@@ -265,6 +268,16 @@ export const ExtensionCatalogOverviewForPeopleSchema = z
     businessKnowledge: z.array(knowledgeExtensionItemSchema).max(100),
     teamCapabilities: z.array(skillExtensionItemSchema).max(100),
     externalTools: z.array(mcpExtensionItemSchema).max(100),
+    links: z
+      .object({
+        actions: z
+          .object({
+            createKnowledge: z.literal("/api/v1/knowledge-bases").optional(),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

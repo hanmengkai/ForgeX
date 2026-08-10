@@ -11,6 +11,10 @@ import {
   ApplicationError,
   DeliveryCoordinatorService,
   ExtensionCatalogApplicationService,
+  KnowledgeBaseApplicationService,
+  KnowledgeBaseCreateCommandSchema,
+  KnowledgeSearchCommandSchema,
+  KnowledgeSourcePublishCommandSchema,
   McpInvocationApplicationService,
   McpRegistryApplicationService,
   RequirementApplicationService,
@@ -20,6 +24,7 @@ import {
   type AuthenticatedPrincipal,
   type ExtensionCatalogRepository,
   type McpRegistryRepository,
+  type KnowledgeBaseRepository,
   type McpInputSchemaStore,
   type McpInvocationRepository,
   type PlatformRole,
@@ -58,6 +63,7 @@ declare module "fastify" {
 export interface ControlPlaneApiOptions {
   authenticator: SessionAuthenticator;
   extensionCatalogRepository: ExtensionCatalogRepository;
+  knowledgeBaseRepository: KnowledgeBaseRepository;
   mcpHealthAuthority: McpHealthAuthority;
   mcpInputSchemaStore: McpInputSchemaStore;
   mcpInvocationRepository: McpInvocationRepository;
@@ -84,6 +90,31 @@ const requirementParamsSchema = z
 const extensionParamsSchema = z
   .object({
     extensionKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const knowledgeParamsSchema = z
+  .object({
+    knowledgeKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const knowledgeSourceParamsSchema = knowledgeParamsSchema
+  .extend({
+    sourceKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const knowledgeArchiveCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    requestKey: z
       .string()
       .uuid()
       .transform((value) => value.toLowerCase()),
@@ -276,6 +307,36 @@ const mcpInvocationLinks = (
   };
 };
 
+const knowledgeLinks = (knowledgeKey: string, canManage = true) => {
+  const self = `/api/v1/knowledge-bases/${knowledgeKey}`;
+  return {
+    self,
+    actions: {
+      search: `${self}/search`,
+      ...(canManage ? { publish: `${self}/sources` } : {}),
+    },
+  };
+};
+
+const knowledgeSourceLinks = (
+  knowledgeKey: string,
+  sourceKey: string,
+  canManage = true,
+) => {
+  const self = `/api/v1/knowledge-bases/${knowledgeKey}/sources/${sourceKey}`;
+  return {
+    self,
+    actions: {
+      ...(canManage
+        ? {
+            publish: `${self}/revisions`,
+            archive: `${self}/archive`,
+          }
+        : {}),
+    },
+  };
+};
+
 const PREVIEW_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "base-uri 'none'",
@@ -293,6 +354,7 @@ const PREVIEW_CONTENT_SECURITY_POLICY = [
   "sandbox allow-scripts",
 ].join("; ");
 const PREVIEW_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
+const KNOWLEDGE_SOURCE_REQUEST_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 
 const previewWrapper = (content: Uint8Array): string => {
   const base64Content = Buffer.from(content).toString("base64");
@@ -367,6 +429,11 @@ export const buildControlPlaneApi = (
     projectKey: options.projectKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+  const knowledgeBases = new KnowledgeBaseApplicationService({
+    repository: options.knowledgeBaseRepository,
+    projectKey: options.projectKey,
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
   const skills = new SkillRegistryApplicationService({
     repository: options.skillRegistryRepository,
     artifactStore: options.skillArtifactStore,
@@ -391,6 +458,7 @@ export const buildControlPlaneApi = (
     repository: options.extensionCatalogRepository,
     skillRegistry: skills,
     mcpRegistry: mcpServers,
+    knowledgeDirectory: knowledgeBases,
     projectKey: options.projectKey,
   });
   const workers = new WorkerFleetService({
@@ -461,6 +529,8 @@ export const buildControlPlaneApi = (
       path.startsWith("/api/v1/requirements/") ||
       path === "/api/v1/extensions" ||
       path.startsWith("/api/v1/extensions/") ||
+      path === "/api/v1/knowledge-bases" ||
+      path.startsWith("/api/v1/knowledge-bases/") ||
       path === "/api/v1/mcp-invocations" ||
       path.startsWith("/api/v1/mcp-invocations/") ||
       path === "/api/v1/workers" ||
@@ -625,6 +695,250 @@ export const buildControlPlaneApi = (
       data: await extensions.overviewForPeople(principal),
     });
   });
+
+  app.post("/api/v1/knowledge-bases", async (request, reply) => {
+    const principal = principalFrom(request);
+    const command = KnowledgeBaseCreateCommandSchema.safeParse(request.body);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "知识库信息需要调整",
+        validationDetails(command.error),
+      );
+    }
+    const result = await knowledgeBases.create(principal, command.data);
+    const links = knowledgeLinks(result.knowledgeKey);
+    return reply
+      .code(201)
+      .header("Location", links.self)
+      .send({
+        data: {
+          name: result.name,
+          status: result.status,
+          links: { self: links.self },
+        },
+      });
+  });
+
+  app.get("/api/v1/knowledge-bases/:knowledgeKey", async (request, reply) => {
+    const principal = principalFrom(request);
+    const params = knowledgeParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "知识库入口需要调整",
+        validationDetails(params.error),
+      );
+    }
+    const item = await knowledgeBases.detailForPeople(
+      principal,
+      params.data.knowledgeKey,
+    );
+    return reply.send({
+      data: {
+        ...item.view,
+        sources: item.sources.map(({ sourceKey, ...source }) => ({
+          ...source,
+          links: knowledgeSourceLinks(
+            item.knowledgeKey,
+            sourceKey,
+            item.canManage,
+          ),
+        })),
+        links: knowledgeLinks(item.knowledgeKey, item.canManage),
+      },
+    });
+  });
+
+  app.get(
+    "/api/v1/knowledge-bases/:knowledgeKey/sources/:sourceKey",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = knowledgeSourceParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "业务资料入口需要调整",
+          validationDetails(params.error),
+        );
+      }
+      const item = await knowledgeBases.sourceForPeople(
+        principal,
+        params.data.knowledgeKey,
+        params.data.sourceKey,
+      );
+      const { sourceKey, ...source } = item.source;
+      return reply.send({
+        data: {
+          ...source,
+          links: knowledgeSourceLinks(
+            item.knowledgeKey,
+            sourceKey,
+            item.canManage,
+          ),
+        },
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/knowledge-bases/:knowledgeKey/sources",
+    { bodyLimit: KNOWLEDGE_SOURCE_REQUEST_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = knowledgeParamsSchema.safeParse(request.params);
+      const command = KnowledgeSourcePublishCommandSchema.safeParse(
+        request.body,
+      );
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "业务资料需要调整",
+          validationDetails(params.error),
+        );
+      }
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "业务资料需要调整",
+          validationDetails(command.error),
+        );
+      }
+      const result = await knowledgeBases.publishSource(
+        principal,
+        params.data.knowledgeKey,
+        null,
+        command.data,
+      );
+      const links = knowledgeSourceLinks(
+        params.data.knowledgeKey,
+        result.sourceKey,
+      );
+      return reply
+        .code(201)
+        .header("Location", links.self)
+        .send({
+          data: {
+            title: result.title,
+            version: result.version,
+            links,
+          },
+        });
+    },
+  );
+
+  app.post(
+    "/api/v1/knowledge-bases/:knowledgeKey/sources/:sourceKey/revisions",
+    { bodyLimit: KNOWLEDGE_SOURCE_REQUEST_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = knowledgeSourceParamsSchema.safeParse(request.params);
+      const command = KnowledgeSourcePublishCommandSchema.safeParse(
+        request.body,
+      );
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "业务资料需要调整",
+          validationDetails(params.error),
+        );
+      }
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "业务资料需要调整",
+          validationDetails(command.error),
+        );
+      }
+      const result = await knowledgeBases.publishSource(
+        principal,
+        params.data.knowledgeKey,
+        params.data.sourceKey,
+        command.data,
+      );
+      return reply.send({
+        data: {
+          title: result.title,
+          version: result.version,
+          links: knowledgeSourceLinks(
+            params.data.knowledgeKey,
+            result.sourceKey,
+          ),
+        },
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/knowledge-bases/:knowledgeKey/sources/:sourceKey/archive",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = knowledgeSourceParamsSchema.safeParse(request.params);
+      const command = knowledgeArchiveCommandSchema.safeParse(request.body);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "归档请求需要调整",
+          validationDetails(params.error),
+        );
+      }
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "归档请求需要调整",
+          validationDetails(command.error),
+        );
+      }
+      await knowledgeBases.archiveSource(
+        principal,
+        params.data.knowledgeKey,
+        params.data.sourceKey,
+        command.data.requestKey,
+      );
+      return reply.send({ data: { status: "已归档" } });
+    },
+  );
+
+  app.post(
+    "/api/v1/knowledge-bases/:knowledgeKey/search",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = knowledgeParamsSchema.safeParse(request.params);
+      const command = KnowledgeSearchCommandSchema.safeParse(request.body);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "检索内容需要调整",
+          validationDetails(params.error),
+        );
+      }
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "检索内容需要调整",
+          validationDetails(command.error),
+        );
+      }
+      return reply.send({
+        data: await knowledgeBases.search(
+          principal,
+          params.data.knowledgeKey,
+          command.data,
+        ),
+      });
+    },
+  );
 
   app.get("/api/v1/mcp-invocations", async (request, reply) => {
     const principal = principalFrom(request);

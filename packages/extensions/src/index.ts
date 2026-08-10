@@ -61,3 +61,15 @@ export type {
   ExtensionPeopleView,
   ExtensionStatus,
 } from "./extension-catalog.js";
+export {
+  KnowledgeActorSchema,
+  KnowledgeBase,
+  KnowledgeBaseSnapshotSchema,
+  KnowledgeSourceRevisionSchema,
+  type KnowledgeActor,
+  type KnowledgeBaseItemForPeople,
+  type KnowledgeBaseOptions,
+  type KnowledgeBasePeopleView,
+  type KnowledgeBaseSnapshot,
+  type KnowledgeSourceRevision,
+} from "./knowledge-base.js";

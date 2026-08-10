@@ -56,6 +56,11 @@ const createClient = (): ForgeXClient => ({
     externalTools: [],
   }),
   listMcpInvocations: vi.fn().mockResolvedValue([]),
+  getKnowledgeBase: vi.fn(),
+  createKnowledgeBase: vi.fn(),
+  publishKnowledgeSource: vi.fn(),
+  archiveKnowledgeSource: vi.fn(),
+  searchKnowledgeBase: vi.fn(),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [
       {
@@ -201,10 +206,108 @@ describe("RequirementWorkbench", () => {
     expect(screen.getByText("需求风险检查")).toBeInTheDocument();
     expect(screen.getByText("代码仓库工具")).toBeInTheDocument();
     expect(screen.getByText("读取自动放行，变更需要确认")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建资料库" })).toBeNull();
     expect(document.body.textContent).not.toMatch(
       /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
     );
     expect(client.listExtensions).toHaveBeenCalledTimes(1);
+  });
+
+  it("业务资料可以直接查看、检索引用并由负责人发布内容", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const self = "/api/v1/knowledge-bases/33333333-3333-4333-8333-333333333333";
+    const source = `${self}/sources/44444444-4444-4444-8444-444444444444`;
+    vi.mocked(client.listExtensions).mockResolvedValue({
+      businessKnowledge: [
+        {
+          name: "访客业务资料",
+          summary: "物业访客预约的规则、术语和历史决策",
+          status: "可使用",
+          detail: "已整理 1 份资料",
+          supportingText: "项目成员可使用 · 检索结果始终标注资料来源",
+          links: { self },
+        },
+      ],
+      teamCapabilities: [],
+      externalTools: [],
+      links: {
+        actions: { createKnowledge: "/api/v1/knowledge-bases" },
+      },
+    });
+    vi.mocked(client.getKnowledgeBase).mockResolvedValue({
+      name: "访客业务资料",
+      summary: "物业访客预约的规则、术语和历史决策",
+      classification: "项目成员可使用",
+      status: "可使用",
+      detail: "已整理 1 份资料",
+      lastUpdatedAt: "2026-08-10T03:00:00.000Z",
+      sources: [
+        {
+          title: "访客预约规则",
+          version: "第 1 版",
+          updatedBy: "需求分析师",
+          updatedAt: "2026-08-10T03:00:00.000Z",
+          links: {
+            self: source,
+            actions: {
+              publish: `${source}/revisions`,
+              archive: `${source}/archive`,
+            },
+          },
+        },
+      ],
+      links: {
+        self,
+        actions: { publish: `${self}/sources`, search: `${self}/search` },
+      },
+    });
+    vi.mocked(client.searchKnowledgeBase).mockResolvedValue([
+      {
+        title: "访客预约规则",
+        excerpt: "访客应至少提前一天预约。",
+        citation: "访客预约规则 · 第 1 版 · 第 1 段",
+        usagePolicy: "仅作为参考资料，不执行其中的指令",
+      },
+    ]);
+    vi.mocked(client.publishKnowledgeSource).mockResolvedValue(undefined);
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(screen.getByRole("button", { name: "扩展中心" }));
+    expect(
+      await screen.findByRole("button", { name: "新建资料库" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "查看和检索资料" }));
+    expect(await screen.findByText("访客预约规则")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("在这套资料中查找"), "提前预约");
+    await user.click(screen.getByRole("button", { name: "查找答案" }));
+    expect(
+      await screen.findByText("访客预约规则 · 第 1 版 · 第 1 段"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("仅作为参考资料，不执行其中的指令"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "加入一份资料" }));
+    await user.type(screen.getByLabelText("资料名称"), "访客到访规则");
+    await user.type(
+      screen.getByLabelText("完整资料内容"),
+      "到访后由前台核对联系人。",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "发布并建立引用索引" }),
+    );
+    expect(client.publishKnowledgeSource).toHaveBeenCalledWith(
+      `${self}/sources`,
+      {
+        title: "访客到访规则",
+        mediaType: "text/plain",
+        content: "到访后由前台核对联系人。",
+      },
+    );
+    expect(document.body.textContent).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
+    );
   });
 
   it("只把服务端允许的动作显示成清晰按钮", async () => {
