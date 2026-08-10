@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   FixedSuiteVerificationEngine,
+  verificationSuitePlanHash,
   type VerificationRunnerTarget,
+  type VerificationSuitePlan,
 } from "../src/index.js";
 
 const target: VerificationRunnerTarget = {
@@ -32,8 +34,41 @@ const target: VerificationRunnerTarget = {
   previewArtifact: null,
 };
 
+const plan = (
+  suites: VerificationSuitePlan["suites"],
+): VerificationSuitePlan => ({
+  schemaVersion: 1,
+  planKey: "project-node-v1",
+  planVersion: 1,
+  repositoryKey: target.repositoryKey,
+  requirementKey: target.requirementKey,
+  requirementRevision: target.requirementRevision,
+  gitHashAlgorithm: target.gitHashAlgorithm,
+  commitSha: target.commitSha,
+  suites,
+});
+
+const anchorFor = (trustedPlan: VerificationSuitePlan) => ({
+  repositoryKey: trustedPlan.repositoryKey,
+  planKey: trustedPlan.planKey,
+  planVersion: trustedPlan.planVersion,
+  planHash: verificationSuitePlanHash(trustedPlan),
+});
+
 describe("FixedSuiteVerificationEngine", () => {
   it("只验证权威提交，以固定套件结果覆盖全部验收条件并生成确定性 Preview", async () => {
+    const trustedPlan = plan([
+      {
+        suiteKey: "unit",
+        name: "单元测试",
+        criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
+      },
+      {
+        suiteKey: "build",
+        name: "生产构建",
+        criterionKeys: [target.acceptanceCriteria[1]!.criterionKey],
+      },
+    ]);
     const workspace = {
       prepare: vi.fn(async () => ({
         path: path.resolve("verification-workspaces", "run-a"),
@@ -49,31 +84,13 @@ describe("FixedSuiteVerificationEngine", () => {
       })),
     };
     const planProvider = {
-      planFor: vi.fn(async () => ({
-        schemaVersion: 1 as const,
-        planKey: "project-node-v1",
-        requirementKey: target.requirementKey,
-        requirementRevision: target.requirementRevision,
-        gitHashAlgorithm: target.gitHashAlgorithm,
-        commitSha: target.commitSha,
-        suites: [
-          {
-            suiteKey: "unit",
-            name: "单元测试",
-            criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
-          },
-          {
-            suiteKey: "build",
-            name: "生产构建",
-            criterionKeys: [target.acceptanceCriteria[1]!.criterionKey],
-          },
-        ],
-      })),
+      planFor: vi.fn(async () => trustedPlan),
     };
     const engine = new FixedSuiteVerificationEngine({
       workspace,
       sandbox,
       planProvider,
+      trustedPlanAnchors: [anchorFor(trustedPlan)],
     });
 
     const first = await engine.verify(target);
@@ -113,6 +130,18 @@ describe("FixedSuiteVerificationEngine", () => {
 
   it("固定套件失败时逐项给出失败结果，且始终清理隔离工作区", async () => {
     const dispose = vi.fn(async () => Promise.resolve());
+    const trustedPlan = plan([
+      {
+        suiteKey: "unit",
+        name: "单元测试",
+        criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
+      },
+      {
+        suiteKey: "build",
+        name: "生产构建",
+        criterionKeys: [target.acceptanceCriteria[1]!.criterionKey],
+      },
+    ]);
     const engine = new FixedSuiteVerificationEngine({
       workspace: {
         prepare: vi.fn(async () => ({
@@ -129,27 +158,9 @@ describe("FixedSuiteVerificationEngine", () => {
         })),
       },
       planProvider: {
-        planFor: vi.fn(async () => ({
-          schemaVersion: 1 as const,
-          planKey: "project-node-v1",
-          requirementKey: target.requirementKey,
-          requirementRevision: target.requirementRevision,
-          gitHashAlgorithm: target.gitHashAlgorithm,
-          commitSha: target.commitSha,
-          suites: [
-            {
-              suiteKey: "unit",
-              name: "单元测试",
-              criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
-            },
-            {
-              suiteKey: "build",
-              name: "生产构建",
-              criterionKeys: [target.acceptanceCriteria[1]!.criterionKey],
-            },
-          ],
-        })),
+        planFor: vi.fn(async () => trustedPlan),
       },
+      trustedPlanAnchors: [anchorFor(trustedPlan)],
     });
 
     await expect(engine.verify(target)).resolves.toMatchObject({
@@ -159,6 +170,13 @@ describe("FixedSuiteVerificationEngine", () => {
   });
 
   it("拒绝缺少验收条件绑定或返回未知套件的验证计划", async () => {
+    const incompletePlan = plan([
+      {
+        suiteKey: "unit",
+        name: "单元测试",
+        criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
+      },
+    ]);
     const engine = new FixedSuiteVerificationEngine({
       workspace: {
         prepare: vi.fn(async () => ({
@@ -172,22 +190,9 @@ describe("FixedSuiteVerificationEngine", () => {
         })),
       },
       planProvider: {
-        planFor: vi.fn(async () => ({
-          schemaVersion: 1 as const,
-          planKey: "project-node-v1",
-          requirementKey: target.requirementKey,
-          requirementRevision: target.requirementRevision,
-          gitHashAlgorithm: target.gitHashAlgorithm,
-          commitSha: target.commitSha,
-          suites: [
-            {
-              suiteKey: "unit",
-              name: "单元测试",
-              criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
-            },
-          ],
-        })),
+        planFor: vi.fn(async () => incompletePlan),
       },
+      trustedPlanAnchors: [anchorFor(incompletePlan)],
     });
 
     await expect(engine.verify(target)).rejects.toThrow();
@@ -195,6 +200,24 @@ describe("FixedSuiteVerificationEngine", () => {
 
   it("拒绝同一计划身份在后续调用中改变套件与验收条件映射", async () => {
     let invocation = 0;
+    const originalPlan = plan([
+      {
+        suiteKey: "unit",
+        name: "单元测试",
+        criterionKeys: target.acceptanceCriteria.map(
+          (criterion) => criterion.criterionKey,
+        ),
+      },
+    ]);
+    const smuggledPlan = plan([
+      {
+        suiteKey: "trivial",
+        name: "空壳检查",
+        criterionKeys: target.acceptanceCriteria.map(
+          (criterion) => criterion.criterionKey,
+        ),
+      },
+    ]);
     const engine = new FixedSuiteVerificationEngine({
       workspace: {
         prepare: vi.fn(async () => ({
@@ -204,49 +227,58 @@ describe("FixedSuiteVerificationEngine", () => {
       },
       sandbox: {
         run: vi.fn(async ({ plan }) => ({
-          suites: plan.suites.map((suite) => ({
-            suiteKey: suite.suiteKey,
-            status: "passed" as const,
-          })),
+          suites: plan.suites.map(
+            (suite: VerificationSuitePlan["suites"][number]) => ({
+              suiteKey: suite.suiteKey,
+              status: "passed" as const,
+            }),
+          ),
         })),
       },
       planProvider: {
         planFor: vi.fn(async () => {
           invocation += 1;
-          return {
-            schemaVersion: 1 as const,
-            planKey: "project-node-v1",
-            requirementKey: target.requirementKey,
-            requirementRevision: target.requirementRevision,
-            gitHashAlgorithm: target.gitHashAlgorithm,
-            commitSha: target.commitSha,
-            suites:
-              invocation === 1
-                ? [
-                    {
-                      suiteKey: "unit",
-                      name: "单元测试",
-                      criterionKeys: [
-                        target.acceptanceCriteria[0]!.criterionKey,
-                        target.acceptanceCriteria[1]!.criterionKey,
-                      ],
-                    },
-                  ]
-                : [
-                    {
-                      suiteKey: "trivial",
-                      name: "空壳检查",
-                      criterionKeys: target.acceptanceCriteria.map(
-                        (criterion) => criterion.criterionKey,
-                      ),
-                    },
-                  ],
-          };
+          return invocation === 1 ? originalPlan : smuggledPlan;
         }),
       },
+      trustedPlanAnchors: [anchorFor(originalPlan)],
     });
 
     await expect(engine.verify(target)).resolves.toBeDefined();
     await expect(engine.verify(target)).rejects.toThrow("计划");
+  });
+
+  it("拒绝把一个仓库的可信计划用于另一个仓库", async () => {
+    const trustedPlan = plan([
+      {
+        suiteKey: "unit",
+        name: "单元测试",
+        criterionKeys: target.acceptanceCriteria.map(
+          (criterion) => criterion.criterionKey,
+        ),
+      },
+    ]);
+    const engine = new FixedSuiteVerificationEngine({
+      workspace: {
+        prepare: vi.fn(async () => ({
+          path: path.resolve("verification-workspaces", "run-e"),
+          dispose: vi.fn(async () => Promise.resolve()),
+        })),
+      },
+      sandbox: {
+        run: vi.fn(async () => ({
+          suites: [{ suiteKey: "unit", status: "passed" as const }],
+        })),
+      },
+      planProvider: { planFor: vi.fn(async () => trustedPlan) },
+      trustedPlanAnchors: [anchorFor(trustedPlan)],
+    });
+
+    await expect(
+      engine.verify({
+        ...target,
+        repositoryKey: "31000000-0000-4000-8000-000000000003",
+      }),
+    ).rejects.toThrow("权威提交");
   });
 });

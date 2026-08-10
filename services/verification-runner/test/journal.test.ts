@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -65,6 +66,8 @@ const runnerScope = {
 const testJournalOptions = {
   assertWindowsPrivatePath: async () => Promise.resolve(),
 };
+const lockDatabasePath = (root: string): string =>
+  path.join(root, ".forgex-verification-runner-locks.sqlite");
 const artifactEntry = verificationArtifactEntry({
   scope: runnerScope,
   target,
@@ -177,15 +180,26 @@ describe("FileVerificationJournal", () => {
         (name) => name.endsWith(".sock") || name.endsWith(".lock"),
       ),
     ).toEqual([]);
-    const lockDescriptorName = lockArtifacts.find((name) =>
-      name.endsWith(".lck"),
-    );
-    expect(lockDescriptorName).toBeDefined();
-    await expect(
-      readFile(path.join(root, lockDescriptorName!), "utf8").then(
-        (value) => JSON.parse(value) as unknown,
-      ),
-    ).resolves.toMatchObject({
+    expect(lockArtifacts).toContain(path.basename(lockDatabasePath(root)));
+    const lockDatabase = new DatabaseSync(lockDatabasePath(root), {
+      readOnly: true,
+    });
+    const lockDescriptor = lockDatabase
+      .prepare(
+        `
+          SELECT
+            schema_version AS schemaVersion,
+            state,
+            identity_hash AS identityHash,
+            owner_token AS ownerToken,
+            process_id AS processId,
+            process_start_key AS processStartKey
+          FROM runner_instance_locks
+        `,
+      )
+      .get();
+    lockDatabase.close();
+    expect(lockDescriptor).toMatchObject({
       schemaVersion: 1,
       state: "active",
       identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
@@ -242,38 +256,47 @@ describe("FileVerificationJournal", () => {
     const identityHash = createHash("sha256")
       .update(identity, "utf8")
       .digest("hex");
-    const lockPath = path.join(
-      root,
-      `.forgex-verification-runner-${identityHash.slice(0, 24)}.lck`,
+    const initialized = await FileVerificationJournal.open(
+      filePath,
+      testJournalOptions,
     );
-    await writeFile(
-      lockPath,
-      JSON.stringify({
-        schemaVersion: 1,
-        state: "active",
-        identityHash,
-        ownerToken: randomUUID(),
-        processId: 2_147_483_647,
-        processStartKey: "dead-process-start",
-      }),
-      { encoding: "utf8", mode: 0o600 },
-    );
+    await initialized.close();
+    const lockDatabase = new DatabaseSync(lockDatabasePath(root));
+    lockDatabase
+      .prepare(
+        `
+          INSERT INTO runner_instance_locks (
+            schema_version,
+            state,
+            identity_hash,
+            owner_token,
+            process_id,
+            process_start_key
+          ) VALUES (1, 'active', ?, ?, ?, ?)
+        `,
+      )
+      .run(identityHash, randomUUID(), 2_147_483_647, "dead-process-start");
+    lockDatabase.close();
 
     const recovered = await FileVerificationJournal.open(
       filePath,
       testJournalOptions,
     );
-    const descriptor = JSON.parse(await readFile(lockPath, "utf8")) as {
-      processId: number;
-    };
-    expect(descriptor.processId).toBe(process.pid);
-    expect((await readdir(root)).some((name) => name.includes(".stale-"))).toBe(
-      false,
-    );
+    const recoveredDatabase = new DatabaseSync(lockDatabasePath(root), {
+      readOnly: true,
+    });
+    expect(
+      recoveredDatabase
+        .prepare(
+          "SELECT process_id AS processId FROM runner_instance_locks WHERE identity_hash = ?",
+        )
+        .get(identityHash),
+    ).toMatchObject({ processId: process.pid });
+    recoveredDatabase.close();
     await recovered.close();
   });
 
-  it("旧锁回收在落盘后中断时仍能由下一实例安全完成", async () => {
+  it("升级后不会被旧版中断回收留下的锁文件阻塞", async () => {
     const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
     temporaryRoots.push(root);
     await mkdir(root, { recursive: true, mode: 0o700 });

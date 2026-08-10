@@ -22,6 +22,8 @@ ForgeX 是一个开源的 AI 软件交付控制面。它把需求澄清、方案
 
 ## 本地验证
 
+需要 Node.js 22.13 或更高版本，推荐使用当前 Node.js 24 LTS。
+
 ```bash
 npm install
 npm test
