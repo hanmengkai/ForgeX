@@ -37,7 +37,7 @@ import {
   SkillEvaluationAuthority,
   SkillPackageCodec,
 } from "@forgex/extensions";
-import { EvidenceAuthority } from "@forgex/domain";
+import { EvidenceAuthority, RequirementWorkflow } from "@forgex/domain";
 
 import { buildControlPlaneApi } from "../src/index.js";
 
@@ -992,6 +992,150 @@ describe("需求 API", () => {
     await app.close();
   });
 
+  it("通过 HATEOAS 修订完整需求并读取不含内部键的版本差异", async () => {
+    const { app } = createTestApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/requirements",
+      headers: { authorization: "Bearer product-session" },
+      payload: validRequirement,
+    });
+    const self = created.headers.location!;
+    const detail = await app.inject({
+      method: "GET",
+      url: self,
+      headers: { authorization: "Bearer analyst-session" },
+    });
+    expect(detail.json().data.links.history).toBe(`${self}/revisions`);
+    expect(detail.json().data.links.actions.revise).toBe(`${self}/revisions`);
+
+    const revised = await app.inject({
+      method: "POST",
+      url: detail.json().data.links.actions.revise,
+      headers: { authorization: "Bearer analyst-session" },
+      payload: {
+        schemaVersion: 1,
+        expectedRevision: 1,
+        spec: {
+          ...validRequirement,
+          goal: "让访客预约后由业主确认到访时间",
+          openQuestions: ["访客改期是否需要重新确认"],
+        },
+      },
+    });
+    expect(revised.statusCode).toBe(200);
+    expect(revised.json().data).toMatchObject({
+      version: "第 2 版",
+      status: "内容已更新，等待重新确认",
+    });
+
+    const history = await app.inject({
+      method: "GET",
+      url: `${self}/revisions`,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json()).toEqual({
+      data: [
+        expect.objectContaining({
+          version: "第 1 版",
+          changedBy: "创建者",
+          current: false,
+          revision: 1,
+          contentState: "完整规格",
+          changes: ["创建需求"],
+        }),
+        expect.objectContaining({
+          version: "第 2 版",
+          changedBy: "需求分析师",
+          current: true,
+          revision: 2,
+          contentState: "完整规格",
+          changes: ["业务目标", "待澄清问题"],
+          spec: expect.objectContaining({
+            goal: "让访客预约后由业主确认到访时间",
+          }),
+        }),
+      ],
+      links: { self: `${self}/revisions` },
+    });
+    expect(JSON.stringify(history.json())).not.toMatch(
+      /criterionKey|specHash|actorKey/u,
+    );
+
+    const denied = await app.inject({
+      method: "POST",
+      url: `${self}/revisions`,
+      headers: { authorization: "Bearer developer-session" },
+      payload: {
+        schemaVersion: 1,
+        expectedRevision: 2,
+        spec: validRequirement,
+      },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const stale = await app.inject({
+      method: "POST",
+      url: `${self}/revisions`,
+      headers: { authorization: "Bearer analyst-session" },
+      payload: {
+        schemaVersion: 1,
+        expectedRevision: 1,
+        spec: validRequirement,
+      },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error.code).toBe("requirement_revision_conflict");
+    await app.close();
+  });
+
+  it("第 100 版在列表和详情中都不再宣告不可执行的修订动作", async () => {
+    const { app, repository } = createTestApp();
+    const workflow = RequirementWorkflow.createFromSpec(
+      { ...validRequirement, schemaVersion: 1 as const },
+      { tenantKey, projectKey },
+    );
+    for (let revision = 2; revision <= 100; revision += 1) {
+      workflow.revise({
+        changedBy: "需求分析师",
+        spec: {
+          ...validRequirement,
+          schemaVersion: 1 as const,
+          goal: `访客预约规则第 ${revision} 版`,
+        },
+      });
+    }
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      transaction.save({
+        tenantKey,
+        projectKey,
+        requirementKey: workflow.internalKey,
+        createdAt: "2026-08-10T03:00:00.000Z",
+        spec: workflow.listRevisionsForPeople().at(-1)!.spec,
+        workflow,
+      });
+    });
+    const self = `/api/v1/requirements/${workflow.internalKey}`;
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/v1/requirements",
+      headers: { authorization: "Bearer analyst-session" },
+    });
+    const detail = await app.inject({
+      method: "GET",
+      url: self,
+      headers: { authorization: "Bearer analyst-session" },
+    });
+
+    expect(list.statusCode).toBe(200);
+    expect(list.json().data[0].links.actions).not.toHaveProperty("revise");
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().data.links.actions).not.toHaveProperty("revise");
+    await app.close();
+  });
+
   it("只通过同源 Preview 网关返回摘要匹配的不可变字节", async () => {
     const { app, previewArtifactStore } = createTestApp();
     const html = new TextEncoder().encode(
@@ -1139,6 +1283,18 @@ describe("需求 API", () => {
           verifiedAt: "2026-08-10T01:30:00.000Z",
           checks: [{ title: "访客可以提交预约", status: "已通过" }],
         },
+        revisions: [
+          {
+            revision: 1,
+            version: "第 1 版",
+            changedBy: "创建者",
+            current: true,
+            confirmed: true,
+            changes: ["创建需求"],
+            contentState: "完整规格",
+            spec: { ...validRequirement, schemaVersion: 1 as const },
+          },
+        ],
       });
 
     const response = await app.inject({
@@ -1150,6 +1306,7 @@ describe("需求 API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().data.links).toEqual({
       self,
+      history: `${self}/revisions`,
       preview: `${self}/preview`,
       actions: { accept: `${self}/accept` },
     });
@@ -1625,7 +1782,9 @@ describe("需求 API", () => {
     ).toHaveProperty("submitConfirmation");
     expect(
       analystItems.find((item: any) => item.title === "等待确认").links.actions,
-    ).toEqual({});
+    ).toEqual({
+      revise: expect.stringMatching(/\/revisions$/u),
+    });
 
     const ownerItems = (
       await app.inject({

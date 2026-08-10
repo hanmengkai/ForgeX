@@ -78,6 +78,7 @@ const createClient = (): ForgeXClient => ({
   searchKnowledgeBase: vi.fn(),
   getRequirement: vi.fn(),
   createRequirement: vi.fn(),
+  reviseRequirement: vi.fn(),
   runRequirementAction: vi.fn(),
   approveMcpInvocation: vi.fn().mockResolvedValue(undefined),
   cancelMcpInvocation: vi.fn().mockResolvedValue(undefined),

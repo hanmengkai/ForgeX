@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 
 import type {
   ForgeXClient,
   RequirementActionLinks,
   RequirementDetail,
   RequirementListItem,
+  RequirementSpecInput,
 } from "./api.js";
 import { CreateRequirementDialog } from "./create-requirement-dialog.js";
 import { ExtensionCenter } from "./extension-center.js";
@@ -71,9 +79,419 @@ const formatVerifiedAt = (value: string) =>
 const statusTone = (status: RequirementListItem["status"]) => {
   if (status === "已完成") return "success";
   if (status === "AI 正在实现") return "running";
+  if (status === "验证失败，版本已封存") return "attention";
   if (status.includes("等待") || status.includes("确认")) return "attention";
   return "neutral";
 };
+
+const nonEmptyLines = (value: string) =>
+  value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const priorityLabel = {
+  must: "必须完成",
+  should: "应该完成",
+  could: "可以完成",
+} as const;
+
+function RequirementRevisionEditor({
+  detail,
+  actionUrl,
+  busy,
+  onSave,
+}: {
+  detail: RequirementDetail;
+  actionUrl: string;
+  busy: boolean;
+  onSave(
+    actionUrl: string,
+    spec: RequirementSpecInput,
+    expectedRevision: number,
+    selfUrl: string,
+  ): Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(detail.spec.title);
+  const [goal, setGoal] = useState(detail.spec.goal);
+  const [stories, setStories] = useState(() =>
+    structuredClone(detail.spec.userStories),
+  );
+  const [acceptance, setAcceptance] = useState(() =>
+    structuredClone(detail.spec.acceptanceCriteria),
+  );
+  const [questions, setQuestions] = useState(() =>
+    structuredClone(detail.spec.openQuestions),
+  );
+  const [error, setError] = useState<string | null>(null);
+  const openerRef = useRef<HTMLButtonElement>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const wasEditingRef = useRef(false);
+
+  useEffect(() => {
+    if (editing) {
+      wasEditingRef.current = true;
+      titleRef.current?.focus();
+    } else if (wasEditingRef.current) {
+      wasEditingRef.current = false;
+      openerRef.current?.focus();
+    }
+  }, [editing]);
+
+  useEffect(() => {
+    if (editing) return;
+    setTitle(detail.spec.title);
+    setGoal(detail.spec.goal);
+    setStories(structuredClone(detail.spec.userStories));
+    setAcceptance(structuredClone(detail.spec.acceptanceCriteria));
+    setQuestions(structuredClone(detail.spec.openQuestions));
+  }, [detail.version, detail.spec, editing]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const userStories = stories.map((story) => ({
+      role: story.role.trim(),
+      need: story.need.trim(),
+      value: story.value.trim(),
+    }));
+    const criteria = acceptance.map((criterion) => ({
+      title: criterion.title.trim(),
+      description: criterion.description.trim(),
+      priority: criterion.priority,
+    }));
+    if (
+      title.trim().length < 2 ||
+      goal.trim().length < 4 ||
+      criteria.length === 0 ||
+      criteria.some(
+        (criterion) =>
+          criterion.title.length < 2 || criterion.description.length < 4,
+      ) ||
+      questions.some((question) => question.trim().length < 2) ||
+      userStories.some(
+        (story) =>
+          story.role.length < 2 ||
+          story.need.length < 2 ||
+          story.value.length < 2,
+      )
+    ) {
+      setError("请完整填写业务目标、用户故事和至少一条完成标准");
+      return;
+    }
+    setError(null);
+    const currentRevision = detail.revisions.find(
+      (revision) => revision.current,
+    );
+    if (!currentRevision) {
+      setError("当前版本信息不完整，请刷新后重试");
+      return;
+    }
+    const saved = await onSave(
+      actionUrl,
+      {
+        schemaVersion: 1,
+        title: title.trim(),
+        goal: goal.trim(),
+        userStories,
+        acceptanceCriteria: criteria,
+        openQuestions: questions.map((question) => question.trim()),
+      },
+      currentRevision.revision,
+      detail.links.self,
+    );
+    if (saved) setEditing(false);
+  };
+
+  if (!editing) {
+    return (
+      <button
+        ref={openerRef}
+        className="text-action revision-edit-action"
+        type="button"
+        disabled={busy}
+        onClick={() => setEditing(true)}
+      >
+        修订需求
+      </button>
+    );
+  }
+
+  return (
+    <form className="revision-editor" onSubmit={submit}>
+      <div className="field">
+        <label htmlFor="revision-title">需求名称</label>
+        <input
+          ref={titleRef}
+          id="revision-title"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          disabled={busy}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="revision-goal">希望解决什么问题？</label>
+        <textarea
+          id="revision-goal"
+          value={goal}
+          onChange={(event) => setGoal(event.target.value)}
+          rows={3}
+          disabled={busy}
+        />
+      </div>
+      <fieldset className="structured-editor-list">
+        <legend>谁会使用？</legend>
+        {stories.map((story, index) => (
+          <div className="structured-editor-item" key={index}>
+            <div className="field">
+              <label htmlFor={`revision-story-role-${index}`}>
+                用户故事 {index + 1}：角色
+              </label>
+              <input
+                id={`revision-story-role-${index}`}
+                value={story.role}
+                onChange={(event) =>
+                  setStories((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? { ...item, role: event.target.value }
+                        : item,
+                    ),
+                  )
+                }
+                disabled={busy}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={`revision-story-need-${index}`}>
+                用户故事 {index + 1}：需要
+              </label>
+              <input
+                id={`revision-story-need-${index}`}
+                value={story.need}
+                onChange={(event) =>
+                  setStories((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? { ...item, need: event.target.value }
+                        : item,
+                    ),
+                  )
+                }
+                disabled={busy}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={`revision-story-value-${index}`}>
+                用户故事 {index + 1}：价值
+              </label>
+              <input
+                id={`revision-story-value-${index}`}
+                value={story.value}
+                onChange={(event) =>
+                  setStories((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? { ...item, value: event.target.value }
+                        : item,
+                    ),
+                  )
+                }
+                disabled={busy}
+              />
+            </div>
+            <button
+              className="text-action"
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setStories((current) =>
+                  current.filter((_, itemIndex) => itemIndex !== index),
+                )
+              }
+            >
+              删除这条用户故事
+            </button>
+          </div>
+        ))}
+        <button
+          className="text-action"
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            setStories((current) => [
+              ...current,
+              { role: "", need: "", value: "" },
+            ])
+          }
+        >
+          添加用户故事
+        </button>
+      </fieldset>
+      <fieldset className="structured-editor-list">
+        <legend>怎么才算完成？</legend>
+        {acceptance.map((criterion, index) => (
+          <div className="structured-editor-item" key={index}>
+            <div className="field">
+              <label htmlFor={`revision-criterion-title-${index}`}>
+                完成标准 {index + 1}：名称
+              </label>
+              <input
+                id={`revision-criterion-title-${index}`}
+                value={criterion.title}
+                onChange={(event) =>
+                  setAcceptance((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? { ...item, title: event.target.value }
+                        : item,
+                    ),
+                  )
+                }
+                disabled={busy}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={`revision-criterion-description-${index}`}>
+                完成标准 {index + 1}：验收说明
+              </label>
+              <textarea
+                id={`revision-criterion-description-${index}`}
+                value={criterion.description}
+                onChange={(event) =>
+                  setAcceptance((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? { ...item, description: event.target.value }
+                        : item,
+                    ),
+                  )
+                }
+                rows={2}
+                disabled={busy}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={`revision-criterion-priority-${index}`}>
+                完成标准 {index + 1}：优先级
+              </label>
+              <select
+                id={`revision-criterion-priority-${index}`}
+                value={criterion.priority}
+                onChange={(event) =>
+                  setAcceptance((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? {
+                            ...item,
+                            priority: event.target.value as
+                              "must" | "should" | "could",
+                          }
+                        : item,
+                    ),
+                  )
+                }
+                disabled={busy}
+              >
+                <option value="must">必须完成</option>
+                <option value="should">应该完成</option>
+                <option value="could">可以完成</option>
+              </select>
+            </div>
+            <button
+              className="text-action"
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setAcceptance((current) =>
+                  current.filter((_, itemIndex) => itemIndex !== index),
+                )
+              }
+            >
+              删除这条完成标准
+            </button>
+          </div>
+        ))}
+        <button
+          className="text-action"
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            setAcceptance((current) => [
+              ...current,
+              { title: "", description: "", priority: "must" },
+            ])
+          }
+        >
+          添加完成标准
+        </button>
+      </fieldset>
+      <fieldset className="structured-editor-list">
+        <legend>还有哪些问题需要澄清？</legend>
+        {questions.map((question, index) => (
+          <div className="structured-editor-item" key={index}>
+            <div className="field">
+              <label htmlFor={`revision-question-${index}`}>
+                待澄清问题 {index + 1}
+              </label>
+              <textarea
+                id={`revision-question-${index}`}
+                value={question}
+                onChange={(event) =>
+                  setQuestions((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index ? event.target.value : item,
+                    ),
+                  )
+                }
+                rows={2}
+                disabled={busy}
+              />
+            </div>
+            <button
+              className="text-action"
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setQuestions((current) =>
+                  current.filter((_, itemIndex) => itemIndex !== index),
+                )
+              }
+            >
+              删除这个问题
+            </button>
+          </div>
+        ))}
+        <button
+          className="text-action"
+          type="button"
+          disabled={busy}
+          onClick={() => setQuestions((current) => [...current, ""])}
+        >
+          添加待澄清问题
+        </button>
+      </fieldset>
+      {error ? (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <div className="inline-form-actions">
+        <button
+          className="button secondary"
+          type="button"
+          disabled={busy}
+          onClick={() => setEditing(false)}
+        >
+          取消修订
+        </button>
+        <button className="button primary" type="submit" disabled={busy}>
+          {busy ? "正在保存…" : "保存新版本"}
+        </button>
+      </div>
+    </form>
+  );
+}
 
 function RequirementCard({
   item,
@@ -84,6 +502,7 @@ function RequirementCard({
   detailLoading,
   expanded,
   onAction,
+  onRevise,
   onToggleDetail,
 }: {
   item: RequirementListItem;
@@ -94,6 +513,12 @@ function RequirementCard({
   detailLoading: boolean;
   expanded: boolean;
   onAction(actionUrl: string, body: Record<string, unknown>): Promise<void>;
+  onRevise(
+    actionUrl: string,
+    spec: RequirementSpecInput,
+    expectedRevision: number,
+    selfUrl: string,
+  ): Promise<boolean>;
   onToggleDetail(selfUrl: string): Promise<void>;
 }) {
   const actions = actionEntries(item.links.actions);
@@ -143,6 +568,95 @@ function RequirementCard({
                   ))}
                 </ul>
               </div>
+              {detail.spec.userStories.length > 0 ? (
+                <div>
+                  <span className="detail-label">用户故事</span>
+                  <ul>
+                    {detail.spec.userStories.map((story) => (
+                      <li key={`${story.role}:${story.need}:${story.value}`}>
+                        <strong>{story.role}</strong>
+                        <span>
+                          希望 {story.need}，从而 {story.value}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {detail.spec.openQuestions.length > 0 ? (
+                <div>
+                  <span className="detail-label">待澄清问题</span>
+                  <ul>
+                    {detail.spec.openQuestions.map((question) => (
+                      <li key={question}>{question}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <div className="revision-history">
+                <span className="detail-label">版本记录</span>
+                <ol>
+                  {detail.revisions.map((revision) => (
+                    <li key={revision.version}>
+                      <strong>{revision.version}</strong>
+                      <span>{revision.changedBy}</span>
+                      <small>{revision.changes.join("、")}</small>
+                      {revision.contentState === "仅保留摘要" ? (
+                        <small>旧版仅保留摘要</small>
+                      ) : (
+                        <details className="revision-spec-detail">
+                          <summary>查看该版完整规格</summary>
+                          <p>
+                            <strong>需求名称：</strong>
+                            {revision.spec.title}
+                          </p>
+                          <p>
+                            <strong>业务目标：</strong>
+                            {revision.spec.goal}
+                          </p>
+                          {revision.spec.userStories.length > 0 ? (
+                            <ul>
+                              {revision.spec.userStories.map((story) => (
+                                <li
+                                  key={`${story.role}:${story.need}:${story.value}`}
+                                >
+                                  {story.role}：{story.need}，从而 {story.value}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          <ul>
+                            {revision.spec.acceptanceCriteria.map(
+                              (criterion) => (
+                                <li
+                                  key={`${criterion.title}:${criterion.description}`}
+                                >
+                                  {criterion.title}：{criterion.description}（
+                                  {priorityLabel[criterion.priority]}）
+                                </li>
+                              ),
+                            )}
+                          </ul>
+                          {revision.spec.openQuestions.length > 0 ? (
+                            <p>
+                              <strong>待澄清：</strong>
+                              {revision.spec.openQuestions.join("；")}
+                            </p>
+                          ) : null}
+                        </details>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+              {detail.links.actions.revise ? (
+                <RequirementRevisionEditor
+                  detail={detail}
+                  actionUrl={detail.links.actions.revise}
+                  busy={actionsBusy}
+                  onSave={onRevise}
+                />
+              ) : null}
               {detail.acceptance ? (
                 <div className="acceptance-evidence">
                   <div className="acceptance-heading">
@@ -232,6 +746,7 @@ export function RequirementWorkbench({
   const [detailLoading, setDetailLoading] = useState(false);
   const loadGenerationRef = useRef(0);
   const detailGenerationRef = useRef(0);
+  const expandedDetailRef = useRef<string | null>(null);
   const actionActiveRef = useRef(false);
   const mountedRef = useRef(true);
 
@@ -265,13 +780,16 @@ export function RequirementWorkbench({
       mountedRef.current = false;
       loadGenerationRef.current += 1;
       detailGenerationRef.current += 1;
+      expandedDetailRef.current = null;
     };
   }, [load]);
 
   const summary = useMemo(
     () => ({
       needsAction: items.filter(
-        (item) => Object.keys(item.links.actions).length > 0,
+        (item) =>
+          Object.keys(item.links.actions).length > 0 ||
+          item.status === "验证失败，版本已封存",
       ).length,
       running: items.filter((item) => item.status === "AI 正在实现").length,
       accepting: items.filter((item) => item.status === "等待产品验收").length,
@@ -301,9 +819,60 @@ export function RequirementWorkbench({
     }
   };
 
+  const reviseRequirement = async (
+    actionUrl: string,
+    spec: RequirementSpecInput,
+    expectedRevision: number,
+    selfUrl: string,
+  ) => {
+    if (actionActiveRef.current || expandedDetailRef.current !== selfUrl) {
+      return false;
+    }
+    const detailGeneration = detailGenerationRef.current;
+    actionActiveRef.current = true;
+    setBusyAction(actionUrl);
+    setError(null);
+    try {
+      try {
+        await client.reviseRequirement(actionUrl, spec, expectedRevision);
+      } catch (caught) {
+        setError(
+          caught instanceof Error ? caught.message : "需求修订没有完成，请重试",
+        );
+        return false;
+      }
+
+      await load();
+      if (
+        mountedRef.current &&
+        expandedDetailRef.current === selfUrl &&
+        detailGenerationRef.current === detailGeneration
+      ) {
+        try {
+          const refreshed = await client.getRequirement(selfUrl);
+          if (
+            mountedRef.current &&
+            expandedDetailRef.current === selfUrl &&
+            detailGenerationRef.current === detailGeneration &&
+            refreshed.links.self === selfUrl
+          ) {
+            setDetail(refreshed);
+          }
+        } catch {
+          setError("新版本已保存，但详情刷新失败，请刷新页面查看最新内容");
+        }
+      }
+      return true;
+    } finally {
+      actionActiveRef.current = false;
+      if (mountedRef.current) setBusyAction(null);
+    }
+  };
+
   const toggleDetail = async (selfUrl: string) => {
     if (expandedDetail === selfUrl) {
       detailGenerationRef.current += 1;
+      expandedDetailRef.current = null;
       setExpandedDetail(null);
       setDetail(null);
       setDetailError(null);
@@ -311,6 +880,7 @@ export function RequirementWorkbench({
       return;
     }
     const generation = ++detailGenerationRef.current;
+    expandedDetailRef.current = selfUrl;
     setExpandedDetail(selfUrl);
     setDetail(null);
     setDetailError(null);
@@ -522,6 +1092,7 @@ export function RequirementWorkbench({
                         expandedDetail === item.links.self && detailLoading
                       }
                       onAction={runAction}
+                      onRevise={reviseRequirement}
                       onToggleDetail={toggleDetail}
                     />
                   ))}

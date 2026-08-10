@@ -34,6 +34,7 @@ const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const auditActions = new Set<RequirementAuditAction>([
   "requirement.created",
+  "requirement.revised",
   "requirement.confirmation_submitted",
   "requirement.confirmed",
   "requirement.accepted",
@@ -726,6 +727,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       projectKey,
       requirementKey,
     });
+    workflow.restoreCurrentSpec(spec);
     workflow.assertSpecIntegrity(spec);
     return {
       tenantKey,
@@ -783,6 +785,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       requirementKey: record.requirementKey,
     });
     RequirementSpecSchema.parse(record.spec);
+    record.workflow.restoreCurrentSpec(record.spec);
     record.workflow.assertSpecIntegrity(record.spec);
     parseIsoDate(record.createdAt, "需求创建时间");
   }

@@ -34,6 +34,135 @@ const spec = RequirementSpecSchema.parse({
 });
 
 describe("RequirementApplicationService", () => {
+  it("需求分析师可修订完整规格并留下版本审计，研发不能修改", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      clock: () => new Date("2026-08-11T07:00:00.000Z"),
+    });
+    const created = await service.create(principal, spec);
+    const analyst: AuthenticatedPrincipal = {
+      ...principal,
+      actorName: "需求分析师",
+      roles: ["requirement_analyst"],
+    };
+    const revisedSpec = RequirementSpecSchema.parse({
+      ...spec,
+      goal: "让访客预约后由业主确认到访时间",
+      openQuestions: ["访客改期是否需要重新确认"],
+    });
+
+    await expect(
+      service.revise(
+        { ...principal, roles: ["developer"] },
+        created.requirementKey,
+        1,
+        revisedSpec,
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "permission_denied" });
+    await expect(
+      service.revise(analyst, created.requirementKey, 1, revisedSpec),
+    ).resolves.toMatchObject({
+      view: {
+        version: "第 2 版",
+        status: "内容已更新，等待重新确认",
+      },
+    });
+
+    const detail = await service.get(principal, created.requirementKey);
+    expect(detail.spec).toEqual(revisedSpec);
+    expect(detail.revisions).toEqual([
+      expect.objectContaining({ version: "第 1 版", current: false }),
+      expect.objectContaining({
+        version: "第 2 版",
+        current: true,
+        changedBy: "需求分析师",
+        changes: ["业务目标", "待澄清问题"],
+      }),
+    ]);
+    expect(await repository.listAuditEvents(tenantKey, projectKey)).toEqual([
+      expect.objectContaining({ action: "requirement.created" }),
+      expect.objectContaining({
+        action: "requirement.revised",
+        actorName: "需求分析师",
+      }),
+    ]);
+  });
+
+  it("用预期版本阻止两个分析师互相覆盖完整规格", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+    });
+    const created = await service.create(principal, spec);
+    const analyst: AuthenticatedPrincipal = {
+      ...principal,
+      roles: ["requirement_analyst"],
+    };
+
+    await service.revise(analyst, created.requirementKey, 1, {
+      ...spec,
+      goal: "分析师 A 已补充业主确认流程",
+    });
+    await expect(
+      service.revise(analyst, created.requirementKey, 1, {
+        ...spec,
+        goal: "分析师 B 仍基于第一版编辑",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "requirement_revision_conflict",
+    });
+    await expect(
+      service.get(principal, created.requirementKey),
+    ).resolves.toMatchObject({
+      spec: { goal: "分析师 A 已补充业主确认流程" },
+      view: { version: "第 2 版" },
+    });
+  });
+
+  it("读取旧工作流快照时仍返回数据库行中的完整当前规格", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const complete = RequirementWorkflow.createFromSpec(spec, {
+      tenantKey,
+      projectKey,
+    });
+    const snapshot = complete.toSnapshot();
+    const legacy = RequirementWorkflow.fromSnapshot({
+      ...snapshot,
+      schemaVersion: 1,
+      revisions: snapshot.revisions.map(
+        ({ spec: _spec, contentState: _contentState, ...revision }) => ({
+          ...revision,
+          specHash: null,
+        }),
+      ),
+    });
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      transaction.save({
+        tenantKey,
+        projectKey,
+        requirementKey: legacy.internalKey,
+        createdAt: "2026-08-11T07:00:00.000Z",
+        spec,
+        workflow: legacy,
+      });
+    });
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+    });
+
+    await expect(
+      service.get(principal, legacy.internalKey),
+    ).resolves.toMatchObject({
+      spec,
+      revisions: [expect.objectContaining({ contentState: "完整规格", spec })],
+    });
+  });
+
   it("只从已验证的工作流读取 Preview 制品引用，并允许项目成员查看", async () => {
     const repository = new InMemoryRequirementRepository();
     const service = new RequirementApplicationService({

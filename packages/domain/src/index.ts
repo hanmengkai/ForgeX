@@ -13,6 +13,7 @@ export type {
   RequirementEvidenceSnapshot,
   RequirementRevisionSnapshot,
   RequirementRevisionInput,
+  RequirementRevisionPeopleView,
   RequirementStatus,
   RequirementWorkflowSnapshot,
   RequirementWorkflowOptions,

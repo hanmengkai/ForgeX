@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +29,8 @@ const items: RequirementListItem[] = [
     acceptanceProgress: "尚未开始验证",
     links: {
       self: "/api/v1/requirements/33333333-3333-4333-8333-333333333333",
+      history:
+        "/api/v1/requirements/33333333-3333-4333-8333-333333333333/revisions",
       actions: {
         submitConfirmation:
           "/api/v1/requirements/33333333-3333-4333-8333-333333333333/submit-confirmation",
@@ -43,6 +46,8 @@ const items: RequirementListItem[] = [
     acceptanceProgress: "尚未开始验证",
     links: {
       self: "/api/v1/requirements/44444444-4444-4444-8444-444444444444",
+      history:
+        "/api/v1/requirements/44444444-4444-4444-8444-444444444444/revisions",
       actions: {},
     },
   },
@@ -103,8 +108,34 @@ const createClient = (): ForgeXClient => ({
       openQuestions: [],
     },
     acceptance: null,
+    revisions: [
+      {
+        revision: 1,
+        version: "第 1 版",
+        changedBy: "创建者",
+        current: true,
+        confirmed: false,
+        changes: ["创建需求"],
+        contentState: "完整规格",
+        spec: {
+          schemaVersion: 1,
+          title: "访客预约",
+          goal: "让访客到访过程更顺畅",
+          userStories: [],
+          acceptanceCriteria: [
+            {
+              title: "访客可以提交预约",
+              description: "填写后能够提交",
+              priority: "must",
+            },
+          ],
+          openQuestions: [],
+        },
+      },
+    ],
   }),
   createRequirement: vi.fn().mockResolvedValue(undefined),
+  reviseRequirement: vi.fn().mockResolvedValue(undefined),
   runRequirementAction: vi.fn().mockResolvedValue(undefined),
   approveMcpInvocation: vi.fn().mockResolvedValue(undefined),
   cancelMcpInvocation: vi.fn().mockResolvedValue(undefined),
@@ -131,6 +162,30 @@ describe("RequirementWorkbench", () => {
     expect(document.body.textContent).not.toMatch(
       /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
     );
+  });
+
+  it("把无后续动作的验证失败封存需求计入待处理并突出显示", async () => {
+    const client = createClient();
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [
+        {
+          ...items[0]!,
+          status: "验证失败，版本已封存",
+          nextStep: "请创建新的变更需求",
+          acceptanceProgress: "独立验证未通过，当前版本已封存",
+          links: { ...items[0]!.links, actions: {} },
+        },
+      ],
+      nextCursor: null,
+    });
+
+    render(<RequirementWorkbench client={client} />);
+
+    const summary = (await screen.findByText("需要我处理")).closest(
+      ".summary-card",
+    );
+    expect(summary).toHaveTextContent("1");
+    expect(screen.getByText("验证失败，版本已封存")).toHaveClass("attention");
   });
 
   it("列表读取失败时只显示错误，不把故障误报成空项目", async () => {
@@ -432,6 +487,31 @@ describe("RequirementWorkbench", () => {
         verifiedAt: "2026-08-10T01:30:00.000Z",
         checks: [{ title: "访客可以提交预约", status: "已通过" }],
       },
+      revisions: [
+        {
+          revision: 1,
+          version: "第 1 版",
+          changedBy: "创建者",
+          current: true,
+          confirmed: true,
+          changes: ["创建需求"],
+          contentState: "完整规格",
+          spec: {
+            schemaVersion: 1,
+            title: "访客预约",
+            goal: "让访客到访过程更顺畅",
+            userStories: [],
+            acceptanceCriteria: [
+              {
+                title: "访客可以提交预约",
+                description: "填写后能够提交",
+                priority: "must",
+              },
+            ],
+            openQuestions: [],
+          },
+        },
+      ],
     });
     render(<RequirementWorkbench client={client} />);
 
@@ -532,13 +612,27 @@ describe("RequirementWorkbench", () => {
       screen.getByLabelText("怎么才算完成？"),
       "可以按日期查询到访记录\n可以导出查询结果",
     );
+    await user.type(
+      screen.getByLabelText("谁会使用？"),
+      "物业人员｜按日期查询到访记录｜快速完成访客追溯",
+    );
+    await user.type(
+      screen.getByLabelText("还有哪些问题需要澄清？"),
+      "导出文件需要保留多久",
+    );
     await user.click(screen.getByRole("button", { name: "保存并开始整理" }));
 
     expect(client.createRequirement).toHaveBeenCalledWith({
       schemaVersion: 1,
       title: "访客通行记录",
       goal: "让物业人员能够快速查询访客的到访记录",
-      userStories: [],
+      userStories: [
+        {
+          role: "物业人员",
+          need: "按日期查询到访记录",
+          value: "快速完成访客追溯",
+        },
+      ],
       acceptanceCriteria: [
         {
           title: "可以按日期查询到访记录",
@@ -551,13 +645,378 @@ describe("RequirementWorkbench", () => {
           priority: "must",
         },
       ],
-      openQuestions: [],
+      openQuestions: ["导出文件需要保留多久"],
     });
     expect(
       await screen.findByRole("alert", {
         name: "暂时无法保存，请稍后再试",
       }),
     ).toBeInTheDocument();
+  });
+
+  it("在需求详情中修订澄清内容并展示版本差异", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const editable = {
+      ...items[0]!,
+      links: {
+        ...items[0]!.links,
+        actions: {
+          ...items[0]!.links.actions,
+          revise:
+            "/api/v1/requirements/33333333-3333-4333-8333-333333333333/revisions",
+        },
+      },
+    };
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [editable],
+      nextCursor: null,
+    });
+    const initialDetail = {
+      ...(await client.getRequirement(editable.links.self)),
+      links: editable.links,
+    };
+    const refreshedSpec = {
+      ...initialDetail.spec,
+      goal: "让访客预约后由业主确认到访时间",
+      openQuestions: ["访客改期是否需要重新确认"],
+    };
+    vi.mocked(client.getRequirement)
+      .mockResolvedValueOnce(initialDetail)
+      .mockResolvedValue({
+        ...initialDetail,
+        version: "第 2 版",
+        spec: refreshedSpec,
+        revisions: [
+          { ...initialDetail.revisions[0]!, current: false },
+          {
+            revision: 2,
+            version: "第 2 版",
+            changedBy: "需求分析师",
+            current: true,
+            confirmed: false,
+            changes: ["业务目标", "待澄清问题"],
+            contentState: "完整规格",
+            spec: refreshedSpec,
+          },
+        ],
+      });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "查看访客预约详情" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "修订需求" }));
+    const goal = screen.getByLabelText("希望解决什么问题？");
+    expect(screen.getByLabelText("需求名称")).toHaveFocus();
+    await user.clear(goal);
+    await user.type(goal, "让访客预约后由业主确认到访时间");
+    await user.click(screen.getByRole("button", { name: "添加待澄清问题" }));
+    await user.type(
+      screen.getByLabelText("待澄清问题 1"),
+      "访客改期是否需要重新确认",
+    );
+    await user.click(screen.getByRole("button", { name: "保存新版本" }));
+
+    expect(client.reviseRequirement).toHaveBeenCalledWith(
+      editable.links.actions.revise,
+      expect.objectContaining({
+        goal: "让访客预约后由业主确认到访时间",
+        openQuestions: ["访客改期是否需要重新确认"],
+      }),
+      1,
+    );
+    expect((await screen.findAllByText("第 1 版")).length).toBeGreaterThan(1);
+    expect(screen.getByText("创建需求")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "修订需求" })).toHaveFocus(),
+    );
+    await user.click(screen.getByRole("button", { name: "修订需求" }));
+    await user.click(screen.getByRole("button", { name: "取消修订" }));
+    expect(screen.getByRole("button", { name: "修订需求" })).toHaveFocus();
+  });
+
+  it("用结构化字段无损修订用户故事和验收说明", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const self = items[0]!.links.self;
+    const actionUrl = `${self}/revisions`;
+    const initial = await client.getRequirement(self);
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [
+        {
+          ...items[0]!,
+          links: { ...items[0]!.links, actions: { revise: actionUrl } },
+        },
+      ],
+      nextCursor: null,
+    });
+    vi.mocked(client.getRequirement).mockResolvedValue({
+      ...initial,
+      links: { ...initial.links, actions: { revise: actionUrl } },
+      spec: {
+        ...initial.spec,
+        userStories: [
+          {
+            role: "运营｜管理员",
+            need: "查看 A|B 两类预约",
+            value: "不丢失分隔符内容",
+          },
+        ],
+        acceptanceCriteria: [
+          {
+            title: "访客可以提交预约",
+            description: "必须保留原始验收说明",
+            priority: "should",
+          },
+        ],
+        openQuestions: ["是否支持\n海外地区？"],
+      },
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "查看访客预约详情" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "修订需求" }));
+    expect(screen.getByLabelText("用户故事 1：角色")).toHaveValue(
+      "运营｜管理员",
+    );
+    expect(screen.getByLabelText("用户故事 1：需要")).toHaveValue(
+      "查看 A|B 两类预约",
+    );
+    expect(screen.getByLabelText("待澄清问题 1")).toHaveValue(
+      "是否支持\n海外地区？",
+    );
+    const criterionTitle = screen.getByLabelText("完成标准 1：名称");
+    await user.clear(criterionTitle);
+    await user.type(criterionTitle, "访客能够提交预约");
+    await user.click(screen.getByRole("button", { name: "保存新版本" }));
+
+    expect(client.reviseRequirement).toHaveBeenCalledWith(
+      actionUrl,
+      expect.objectContaining({
+        userStories: [
+          {
+            role: "运营｜管理员",
+            need: "查看 A|B 两类预约",
+            value: "不丢失分隔符内容",
+          },
+        ],
+        acceptanceCriteria: [
+          {
+            title: "访客能够提交预约",
+            description: "必须保留原始验收说明",
+            priority: "should",
+          },
+        ],
+        openQuestions: ["是否支持\n海外地区？"],
+      }),
+      1,
+    );
+  });
+
+  it("修订保存期间切换需求时不把旧详情写进新卡片", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const first = items[0]!;
+    const second = items[1]!;
+    const firstAction = `${first.links.self}/revisions`;
+    const base = await client.getRequirement(first.links.self);
+    const firstDetail = {
+      ...base,
+      links: { ...base.links, actions: { revise: firstAction } },
+    };
+    const secondDetail = {
+      ...base,
+      ...second,
+      spec: {
+        ...base.spec,
+        title: second.title,
+        goal: "工单审批只属于第二个需求",
+      },
+      revisions: [
+        {
+          ...base.revisions[0]!,
+          revision: 2,
+          version: "第 2 版",
+          spec: {
+            ...base.spec,
+            title: second.title,
+            goal: "工单审批只属于第二个需求",
+          },
+        },
+      ],
+    };
+    const lateFirst = deferred<typeof firstDetail>();
+    let firstReads = 0;
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items,
+      nextCursor: null,
+    });
+    vi.mocked(client.getRequirement).mockImplementation((selfUrl) => {
+      if (selfUrl === second.links.self) return Promise.resolve(secondDetail);
+      firstReads += 1;
+      return firstReads === 1
+        ? Promise.resolve(firstDetail)
+        : lateFirst.promise;
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "查看访客预约详情" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "修订需求" }));
+    await user.click(screen.getByRole("button", { name: "保存新版本" }));
+    await waitFor(() => expect(firstReads).toBe(2));
+    await user.click(screen.getByRole("button", { name: "查看工单审批详情" }));
+    const secondCard = screen.getByRole("button", {
+      name: "收起工单审批详情",
+    }).parentElement!;
+    expect(
+      (await within(secondCard).findAllByText("工单审批只属于第二个需求"))
+        .length,
+    ).toBeGreaterThan(0);
+
+    lateFirst.resolve(firstDetail);
+    await waitFor(() =>
+      expect(
+        within(
+          screen.getByRole("button", { name: "收起工单审批详情" })
+            .parentElement!,
+        ).getAllByText("工单审批只属于第二个需求").length,
+      ).toBeGreaterThan(0),
+    );
+    expect(
+      within(
+        screen.getByRole("button", { name: "收起工单审批详情" }).parentElement!,
+      ).queryByText("让访客到访过程更顺畅"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("修订已提交但详情刷新失败时不诱导重复提交", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const self = items[0]!.links.self;
+    const actionUrl = `${self}/revisions`;
+    const initial = await client.getRequirement(self);
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [
+        {
+          ...items[0]!,
+          links: { ...items[0]!.links, actions: { revise: actionUrl } },
+        },
+      ],
+      nextCursor: null,
+    });
+    vi.mocked(client.getRequirement)
+      .mockResolvedValueOnce({
+        ...initial,
+        links: { ...initial.links, actions: { revise: actionUrl } },
+      })
+      .mockRejectedValueOnce(new Error("暂时无法读取详情"));
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "查看访客预约详情" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "修订需求" }));
+    await user.click(screen.getByRole("button", { name: "保存新版本" }));
+
+    expect(
+      await screen.findByText(
+        "新版本已保存，但详情刷新失败，请刷新页面查看最新内容",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "修订需求" }),
+    ).toBeInTheDocument();
+    expect(client.reviseRequirement).toHaveBeenCalledTimes(1);
+  });
+
+  it("可展开逐版完整规格比较名称、目标和验收优先级", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const self = items[0]!.links.self;
+    const initial = await client.getRequirement(self);
+    const oldSpec = {
+      ...initial.spec,
+      title: "访客预约旧版",
+      goal: "只记录访客姓名",
+      acceptanceCriteria: [
+        {
+          title: "记录访客姓名",
+          description: "保存姓名即可",
+          priority: "should" as const,
+        },
+      ],
+    };
+    const currentSpec = {
+      ...initial.spec,
+      title: "访客预约新版",
+      goal: "记录姓名并确认到访时间",
+      acceptanceCriteria: [
+        {
+          title: "确认到访时间",
+          description: "业主确认后才生效",
+          priority: "must" as const,
+        },
+      ],
+    };
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [{ ...items[0]!, title: currentSpec.title, version: "第 2 版" }],
+      nextCursor: null,
+    });
+    vi.mocked(client.getRequirement).mockResolvedValue({
+      ...initial,
+      title: currentSpec.title,
+      version: "第 2 版",
+      spec: currentSpec,
+      revisions: [
+        {
+          revision: 1,
+          version: "第 1 版",
+          changedBy: "创建者",
+          current: false,
+          confirmed: false,
+          changes: ["创建需求"],
+          contentState: "完整规格",
+          spec: oldSpec,
+        },
+        {
+          revision: 2,
+          version: "第 2 版",
+          changedBy: "需求分析师",
+          current: true,
+          confirmed: false,
+          changes: ["需求名称", "业务目标", "验收标准"],
+          contentState: "完整规格",
+          spec: currentSpec,
+        },
+      ],
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "查看访客预约新版详情" }),
+    );
+    const summaries = screen.getAllByText("查看该版完整规格");
+    for (const summary of summaries) {
+      await user.click(summary);
+    }
+
+    expect(summaries[0]!.closest("details")).toHaveTextContent(
+      "需求名称：访客预约旧版",
+    );
+    expect(summaries[0]!.closest("details")).toHaveTextContent(
+      "保存姓名即可（应该完成）",
+    );
+    expect(summaries[1]!.closest("details")).toHaveTextContent(
+      "需求名称：访客预约新版",
+    );
+    expect(summaries[1]!.closest("details")).toHaveTextContent(
+      "业主确认后才生效（必须完成）",
+    );
   });
 
   it("新建弹窗支持键盘关闭并把焦点还给原按钮", async () => {

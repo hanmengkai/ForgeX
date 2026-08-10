@@ -12,11 +12,22 @@ const toRequirementSpec = (
   title: string,
   goal: string,
   acceptanceText: string,
+  userStoryText: string,
+  openQuestionText: string,
 ): RequirementSpecInput => ({
   schemaVersion: 1,
   title: title.trim(),
   goal: goal.trim(),
-  userStories: [],
+  userStories: userStoryText
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((story) => {
+      const parts = story.split(/[|｜]/u).map((item) => item.trim());
+      const [role = "", need = "", value = ""] =
+        parts.length === 3 ? parts : [];
+      return { role, need, value };
+    }),
   acceptanceCriteria: acceptanceText
     .split("\n")
     .map((item) => item.trim())
@@ -26,7 +37,10 @@ const toRequirementSpec = (
       description: `验收时确认：${criterion}`,
       priority: "must" as const,
     })),
-  openQuestions: [],
+  openQuestions: openQuestionText
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean),
 });
 
 export function CreateRequirementDialog({
@@ -44,6 +58,8 @@ export function CreateRequirementDialog({
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
   const [acceptance, setAcceptance] = useState("");
+  const [userStories, setUserStories] = useState("");
+  const [openQuestions, setOpenQuestions] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -119,11 +135,23 @@ export function CreateRequirementDialog({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (savingRef.current) return;
-    const spec = toRequirementSpec(title, goal, acceptance);
+    const spec = toRequirementSpec(
+      title,
+      goal,
+      acceptance,
+      userStories,
+      openQuestions,
+    );
     if (
       spec.title.length < 2 ||
       spec.goal.length < 4 ||
-      spec.acceptanceCriteria.length === 0
+      spec.acceptanceCriteria.length === 0 ||
+      spec.userStories.some(
+        (story) =>
+          story.role.length < 2 ||
+          story.need.length < 2 ||
+          story.value.length < 2,
+      )
     ) {
       setError("请填写需求名称、要解决的问题和至少一条完成标准");
       return;
@@ -204,6 +232,23 @@ export function CreateRequirementDialog({
             />
           </div>
           <div className="field">
+            <label htmlFor="requirement-user-stories">谁会使用？</label>
+            <textarea
+              id="requirement-user-stories"
+              value={userStories}
+              onChange={(event) => setUserStories(event.target.value)}
+              placeholder={
+                "每行填写：角色｜想做什么｜带来什么价值\n例如：物业前台｜查看今日访客｜提前做好接待准备"
+              }
+              rows={3}
+              aria-describedby="requirement-user-stories-help"
+              disabled={saving}
+            />
+            <small id="requirement-user-stories-help">
+              用户故事可以暂时留空；填写时请用“｜”分隔三部分。
+            </small>
+          </div>
+          <div className="field">
             <label htmlFor="requirement-acceptance">怎么才算完成？</label>
             <textarea
               id="requirement-acceptance"
@@ -217,6 +262,19 @@ export function CreateRequirementDialog({
             <small id="requirement-acceptance-help">
               一行一条，后续会与真实测试证据逐项对应。
             </small>
+          </div>
+          <div className="field">
+            <label htmlFor="requirement-open-questions">
+              还有哪些问题需要澄清？
+            </label>
+            <textarea
+              id="requirement-open-questions"
+              value={openQuestions}
+              onChange={(event) => setOpenQuestions(event.target.value)}
+              placeholder={"每行写一个尚未确定的问题"}
+              rows={3}
+              disabled={saving}
+            />
           </div>
 
           {error ? (

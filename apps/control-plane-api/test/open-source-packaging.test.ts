@@ -66,6 +66,7 @@ describe("开源交付包装", () => {
     expect(readme).toContain("npm run db:migrate");
     expect(readme).toContain("0014_browser_sessions.sql");
     expect(readme).toContain("0015_worker_enrollments.sql");
+    expect(readme).toContain("0016_requirement_revisions.sql");
   });
 
   it("CI 对格式、类型、测试和生产构建执行统一门禁", async () => {

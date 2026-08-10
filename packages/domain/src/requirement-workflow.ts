@@ -14,6 +14,7 @@ import { EvidenceAuthority, VerifiedEvidenceReceipt } from "./evidence.js";
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sha256Pattern = /^[a-f0-9]{64}$/;
+const MAX_REQUIREMENT_REVISIONS = 100;
 
 export class RequirementStateConflictError extends Error {
   constructor(message: string) {
@@ -29,7 +30,8 @@ export type RequirementStatus =
   | "needsReconfirmation"
   | "inDelivery"
   | "awaitingAcceptance"
-  | "completed";
+  | "completed"
+  | "verificationFailedAtLimit";
 
 interface RequirementRevision {
   version: number;
@@ -41,6 +43,7 @@ interface RequirementRevision {
   }>;
   changedBy: string;
   specHash: string | null;
+  spec?: RequirementSpec;
 }
 
 export interface RequirementRevisionSnapshot {
@@ -53,13 +56,25 @@ export interface RequirementRevisionSnapshot {
   }>;
   changedBy: string;
   specHash: string | null;
+  /** v1 旧快照可能没有完整规格；v2 用 contentState 显式标出迁移状态。 */
+  spec?: RequirementSpec;
+  contentState?: "complete" | "legacy_summary";
 }
 
 export interface RequirementRevisionInput {
-  title?: string;
-  summary?: string;
-  acceptanceCriteria?: string[];
+  spec: RequirementSpec;
   changedBy: string;
+}
+
+export interface RequirementRevisionPeopleView {
+  revision: number;
+  version: string;
+  changedBy: string;
+  current: boolean;
+  confirmed: boolean;
+  changes: string[];
+  contentState: "完整规格" | "仅保留摘要";
+  spec: RequirementSpec;
 }
 
 export interface ApprovalActor {
@@ -102,7 +117,7 @@ export interface RequirementEvidenceSnapshot {
 }
 
 export interface RequirementWorkflowSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   requirementKey: string;
   tenantKey: string;
   projectKey: string;
@@ -146,7 +161,8 @@ export interface RequirementPeopleView {
     | "内容已更新，等待重新确认"
     | "AI 正在实现"
     | "等待产品验收"
-    | "已完成";
+    | "已完成"
+    | "验证失败，版本已封存";
   nextStep: string;
   acceptanceProgress: string;
 }
@@ -167,7 +183,7 @@ export interface RequirementPreviewArtifactReference {
 }
 
 export type RequirementAllowedAction =
-  "submitForConfirmation" | "confirm" | "startDelivery" | "accept";
+  "revise" | "submitForConfirmation" | "confirm" | "startDelivery" | "accept";
 
 export class RequirementWorkflow {
   readonly #key: string;
@@ -210,16 +226,18 @@ export class RequirementWorkflow {
     options: RequirementWorkflowOptions,
   ): RequirementWorkflow {
     RequirementWorkflow.#validateContent(input);
-    return new RequirementWorkflow(
+    return RequirementWorkflow.createFromSpec(
       {
-        version: 1,
+        schemaVersion: 1,
         title: input.title.trim(),
-        summary: input.summary.trim(),
-        acceptanceCriteria: RequirementWorkflow.#createCriteria(
-          input.acceptanceCriteria,
-        ),
-        changedBy: "创建者",
-        specHash: null,
+        goal: input.summary.trim(),
+        userStories: [],
+        acceptanceCriteria: input.acceptanceCriteria.map((title) => ({
+          title: title.trim(),
+          description: `验收时确认：${title.trim()}`,
+          priority: "must",
+        })),
+        openQuestions: [],
       },
       options,
     );
@@ -230,18 +248,20 @@ export class RequirementWorkflow {
     options: RequirementWorkflowOptions,
   ): RequirementWorkflow {
     const parsed = RequirementSpecSchema.parse(spec);
-    const workflow = RequirementWorkflow.create(
+    return new RequirementWorkflow(
       {
+        version: 1,
         title: parsed.title,
         summary: parsed.goal,
-        acceptanceCriteria: parsed.acceptanceCriteria.map(
-          (criterion) => criterion.title,
+        acceptanceCriteria: RequirementWorkflow.#createCriteria(
+          parsed.acceptanceCriteria.map((criterion) => criterion.title),
         ),
+        changedBy: "创建者",
+        specHash: RequirementWorkflow.#hashSpec(parsed),
+        spec: RequirementWorkflow.#copySpec(parsed),
       },
       options,
     );
-    workflow.#current.specHash = RequirementWorkflow.#hashSpec(parsed);
-    return workflow;
   }
 
   submitForConfirmation(): void {
@@ -280,13 +300,15 @@ export class RequirementWorkflow {
     if (!input.changedBy.trim()) {
       throw new Error("请记录修改人");
     }
+    this.#assertCanAppendRevision();
 
+    const parsedSpec = RequirementSpecSchema.parse(input.spec);
     const next = {
-      title: input.title ?? this.#current.title,
-      summary: input.summary ?? this.#current.summary,
-      acceptanceCriteria:
-        input.acceptanceCriteria ??
-        this.#current.acceptanceCriteria.map((item) => item.title),
+      title: parsedSpec.title,
+      summary: parsedSpec.goal,
+      acceptanceCriteria: parsedSpec.acceptanceCriteria.map(
+        (criterion) => criterion.title,
+      ),
     };
     RequirementWorkflow.#validateContent(next);
 
@@ -298,7 +320,8 @@ export class RequirementWorkflow {
         next.acceptanceCriteria,
       ),
       changedBy: input.changedBy.trim(),
-      specHash: null,
+      specHash: RequirementWorkflow.#hashSpec(parsedSpec),
+      spec: RequirementWorkflow.#copySpec(parsedSpec),
     });
     this.#confirmedVersion = null;
     this.#status = "needsReconfirmation";
@@ -437,24 +460,33 @@ export class RequirementWorkflow {
       );
     }
     const failedRevision = this.#current;
-    this.#revisions.push({
-      version: failedRevision.version + 1,
-      title: failedRevision.title,
-      summary: failedRevision.summary,
-      acceptanceCriteria: failedRevision.acceptanceCriteria.map(
-        (criterion) => ({
-          ...criterion,
-        }),
-      ),
-      changedBy: "独立验证失败",
-      specHash: failedRevision.specHash,
-    });
-    this.#confirmedVersion = null;
+    const reachedRevisionLimit =
+      this.#revisions.length >= MAX_REQUIREMENT_REVISIONS;
+    if (!reachedRevisionLimit) {
+      this.#revisions.push({
+        version: failedRevision.version + 1,
+        title: failedRevision.title,
+        summary: failedRevision.summary,
+        acceptanceCriteria: failedRevision.acceptanceCriteria.map(
+          (criterion) => ({
+            ...criterion,
+          }),
+        ),
+        changedBy: "独立验证失败",
+        specHash: failedRevision.specHash,
+        ...(failedRevision.spec
+          ? { spec: RequirementWorkflow.#copySpec(failedRevision.spec) }
+          : {}),
+      });
+      this.#confirmedVersion = null;
+    }
     this.#deliveryCandidate = null;
     this.#deliveryCandidateRecordedAtMs = null;
     this.#evidence = null;
     this.#verifiedEvidenceReceipt = null;
-    this.#status = "needsReconfirmation";
+    this.#status = reachedRevisionLimit
+      ? "verificationFailedAtLimit"
+      : "needsReconfirmation";
   }
 
   accept(input: { actor: ApprovalActor }): void {
@@ -496,9 +528,12 @@ export class RequirementWorkflow {
       version: `第 ${this.#current.version} 版`,
       status: status.label,
       nextStep: status.nextStep,
-      acceptanceProgress: this.#evidence
-        ? `${this.#evidence.checks.length} / ${this.#current.acceptanceCriteria.length} 项已通过`
-        : "尚未开始验证",
+      acceptanceProgress:
+        this.#status === "verificationFailedAtLimit"
+          ? "独立验证未通过，当前版本已封存"
+          : this.#evidence
+            ? `${this.#evidence.checks.length} / ${this.#current.acceptanceCriteria.length} 项已通过`
+            : "尚未开始验证",
     };
   }
 
@@ -530,14 +565,18 @@ export class RequirementWorkflow {
   }
 
   listAllowedActions(): RequirementAllowedAction[] {
+    const canRevise = this.#revisions.length < MAX_REQUIREMENT_REVISIONS;
     switch (this.#status) {
       case "draft":
       case "needsReconfirmation":
-        return ["submitForConfirmation"];
+        return [
+          ...(canRevise ? (["revise"] as const) : []),
+          "submitForConfirmation",
+        ];
       case "awaitingConfirmation":
-        return ["confirm"];
+        return [...(canRevise ? (["revise"] as const) : []), "confirm"];
       case "confirmed":
-        return ["startDelivery"];
+        return [...(canRevise ? (["revise"] as const) : []), "startDelivery"];
       case "awaitingAcceptance":
         return ["accept"];
       default:
@@ -580,12 +619,60 @@ export class RequirementWorkflow {
     }
   }
 
+  /** 仅供持久化适配器把 v1 行中的权威当前规格迁移进聚合快照。 */
+  restoreCurrentSpec(spec: RequirementSpec): void {
+    const parsed = RequirementSpecSchema.parse(spec);
+    const currentCriteria = this.#current.acceptanceCriteria.map(
+      (criterion) => criterion.title,
+    );
+    const specHash = RequirementWorkflow.#hashSpec(parsed);
+    if (
+      this.#current.title !== parsed.title ||
+      this.#current.summary !== parsed.goal ||
+      currentCriteria.length !== parsed.acceptanceCriteria.length ||
+      currentCriteria.some(
+        (title, index) => title !== parsed.acceptanceCriteria[index]?.title,
+      ) ||
+      (this.#current.specHash !== null && this.#current.specHash !== specHash)
+    ) {
+      throw new Error("需求规格与工作流业务内容不一致");
+    }
+    this.#current.specHash = specHash;
+    this.#current.spec = RequirementWorkflow.#copySpec(parsed);
+  }
+
   get internalKey(): string {
     return this.#key;
   }
 
   get currentRevision(): number {
     return this.#current.version;
+  }
+
+  listRevisionsForPeople(): RequirementRevisionPeopleView[] {
+    return this.#revisions.map((revision, index) => {
+      const previous = this.#revisions[index - 1];
+      const spec = RequirementWorkflow.#specForRevision(revision);
+      return {
+        revision: revision.version,
+        version: `第 ${revision.version} 版`,
+        changedBy: revision.changedBy,
+        current: revision.version === this.#current.version,
+        confirmed: this.#approvalRecords.some(
+          (record) =>
+            record.action === "确认需求" &&
+            record.revision === revision.version,
+        ),
+        changes: previous
+          ? RequirementWorkflow.#describeChanges(
+              RequirementWorkflow.#specForRevision(previous),
+              spec,
+            )
+          : ["创建需求"],
+        contentState: revision.spec ? "完整规格" : "仅保留摘要",
+        spec,
+      };
+    });
   }
 
   listApprovalRecords(): ApprovalRecord[] {
@@ -597,14 +684,21 @@ export class RequirementWorkflow {
   }
 
   toSnapshot(): RequirementWorkflowSnapshot {
+    if (!this.#current.spec) {
+      throw new Error("当前需求版本缺少完整规格，必须先完成旧数据迁移");
+    }
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requirementKey: this.#key,
       tenantKey: this.#tenantKey,
       projectKey: this.#projectKey,
       status: this.#status,
       confirmedVersion: this.#confirmedVersion,
-      revisions: this.#revisions.map(RequirementWorkflow.#copyRevision),
+      revisions: this.#revisions.map((revision) => ({
+        ...RequirementWorkflow.#copyRevision(revision),
+        specHash: revision.spec ? revision.specHash : null,
+        contentState: revision.spec ? "complete" : "legacy_summary",
+      })),
       approvalRecords: this.listApprovalRecords(),
       deliveryCandidate: this.#deliveryCandidate
         ? { ...this.#deliveryCandidate }
@@ -707,6 +801,14 @@ export class RequirementWorkflow {
     return current;
   }
 
+  #assertCanAppendRevision(): void {
+    if (this.#revisions.length >= MAX_REQUIREMENT_REVISIONS) {
+      throw new RequirementStateConflictError(
+        "需求版本已达到上限，请创建新的变更需求",
+      );
+    }
+  }
+
   #statusContent(): {
     label: RequirementPeopleView["status"];
     nextStep: string;
@@ -738,6 +840,11 @@ export class RequirementWorkflow {
         };
       case "completed":
         return { label: "已完成", nextStep: "无需处理" };
+      case "verificationFailedAtLimit":
+        return {
+          label: "验证失败，版本已封存",
+          nextStep: "请创建新的变更需求",
+        };
     }
   }
 
@@ -795,7 +902,58 @@ export class RequirementWorkflow {
       acceptanceCriteria: revision.acceptanceCriteria.map((criterion) => ({
         ...criterion,
       })),
+      ...(revision.spec
+        ? { spec: RequirementWorkflow.#copySpec(revision.spec) }
+        : {}),
     };
+  }
+
+  static #copySpec(spec: RequirementSpec): RequirementSpec {
+    return structuredClone(spec);
+  }
+
+  static #specForRevision(revision: RequirementRevision): RequirementSpec {
+    if (revision.spec) return RequirementWorkflow.#copySpec(revision.spec);
+    return {
+      schemaVersion: 1,
+      title: revision.title,
+      goal: revision.summary,
+      userStories: [],
+      acceptanceCriteria: revision.acceptanceCriteria.map((criterion) => ({
+        title: criterion.title,
+        description: `验收时确认：${criterion.title}`,
+        priority: "must",
+      })),
+      openQuestions: [],
+    };
+  }
+
+  static #describeChanges(
+    previous: RequirementSpec,
+    current: RequirementSpec,
+  ): string[] {
+    const changes: string[] = [];
+    if (previous.title !== current.title) changes.push("需求名称");
+    if (previous.goal !== current.goal) changes.push("业务目标");
+    if (
+      JSON.stringify(previous.userStories) !==
+      JSON.stringify(current.userStories)
+    ) {
+      changes.push("用户故事");
+    }
+    if (
+      JSON.stringify(previous.acceptanceCriteria) !==
+      JSON.stringify(current.acceptanceCriteria)
+    ) {
+      changes.push("验收标准");
+    }
+    if (
+      JSON.stringify(previous.openQuestions) !==
+      JSON.stringify(current.openQuestions)
+    ) {
+      changes.push("待澄清问题");
+    }
+    return changes.length > 0 ? changes : ["重新发起确认"];
   }
 
   static #copyApprovalRecord(record: ApprovalRecord): ApprovalRecord {
@@ -903,27 +1061,43 @@ export class RequirementWorkflow {
       "inDelivery",
       "awaitingAcceptance",
       "completed",
+      "verificationFailedAtLimit",
     ]);
     if (
       typeof snapshot !== "object" ||
       snapshot === null ||
-      snapshot.schemaVersion !== 1 ||
+      (snapshot.schemaVersion !== 1 && snapshot.schemaVersion !== 2) ||
       !internalKeyPattern.test(snapshot.requirementKey) ||
       !internalKeyPattern.test(snapshot.tenantKey) ||
       !internalKeyPattern.test(snapshot.projectKey) ||
       !statuses.has(snapshot.status) ||
       !Array.isArray(snapshot.revisions) ||
       snapshot.revisions.length === 0 ||
+      snapshot.revisions.length > MAX_REQUIREMENT_REVISIONS ||
       !Array.isArray(snapshot.approvalRecords)
     ) {
       throw new Error("需求工作流快照格式无效");
     }
     const revisions = snapshot.revisions.map((revision, index) => {
+      const isV2 = snapshot.schemaVersion === 2;
       if (
         revision.version !== index + 1 ||
         !revision.changedBy?.trim() ||
         !Array.isArray(revision.acceptanceCriteria) ||
-        (revision.specHash !== null && !sha256Pattern.test(revision.specHash))
+        (revision.specHash !== null &&
+          !sha256Pattern.test(revision.specHash)) ||
+        (isV2 &&
+          revision.contentState !== "complete" &&
+          revision.contentState !== "legacy_summary") ||
+        (isV2 &&
+          revision.contentState === "complete" &&
+          revision.spec === undefined) ||
+        (isV2 &&
+          revision.contentState === "legacy_summary" &&
+          (revision.spec !== undefined || revision.specHash !== null)) ||
+        (isV2 &&
+          index === snapshot.revisions.length - 1 &&
+          revision.contentState !== "complete")
       ) {
         throw new Error("需求工作流快照包含无效版本");
       }
@@ -934,6 +1108,26 @@ export class RequirementWorkflow {
           (criterion) => criterion.title,
         ),
       });
+      if (revision.spec !== undefined) {
+        const parsedSpec = RequirementSpecSchema.safeParse(revision.spec);
+        if (
+          !parsedSpec.success ||
+          revision.specHash === null ||
+          revision.specHash !==
+            RequirementWorkflow.#hashSpec(parsedSpec.data) ||
+          revision.title !== parsedSpec.data.title ||
+          revision.summary !== parsedSpec.data.goal ||
+          revision.acceptanceCriteria.length !==
+            parsedSpec.data.acceptanceCriteria.length ||
+          revision.acceptanceCriteria.some(
+            (criterion, criterionIndex) =>
+              criterion.title !==
+              parsedSpec.data.acceptanceCriteria[criterionIndex]?.title,
+          )
+        ) {
+          throw new Error("需求工作流快照的完整规格与版本不一致");
+        }
+      }
       const criterionKeys = new Set<string>();
       for (const criterion of revision.acceptanceCriteria) {
         if (
@@ -952,6 +1146,7 @@ export class RequirementWorkflow {
       "inDelivery",
       "awaitingAcceptance",
       "completed",
+      "verificationFailedAtLimit",
     ]);
     if (
       (mustBeConfirmed.has(snapshot.status) &&
@@ -1127,18 +1322,20 @@ export class RequirementWorkflow {
       ((snapshot.status === "draft" ||
         snapshot.status === "awaitingConfirmation" ||
         snapshot.status === "confirmed" ||
-        snapshot.status === "needsReconfirmation") &&
+        snapshot.status === "needsReconfirmation" ||
+        snapshot.status === "verificationFailedAtLimit") &&
         deliveryCandidate !== null) ||
       (snapshot.status === "completed" &&
         (currentAcceptanceApprovals.length !== 1 ||
           !acceptanceMatchesEvidence)) ||
       (snapshot.status !== "completed" &&
+        snapshot.status !== "verificationFailedAtLimit" &&
         currentAcceptanceApprovals.length !== 0)
     ) {
       throw new Error("需求工作流快照的状态与交付资料不一致");
     }
     return {
-      schemaVersion: 1,
+      schemaVersion: snapshot.schemaVersion,
       requirementKey: snapshot.requirementKey.toLowerCase(),
       tenantKey: snapshot.tenantKey.toLowerCase(),
       projectKey: snapshot.projectKey.toLowerCase(),

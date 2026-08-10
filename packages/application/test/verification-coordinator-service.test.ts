@@ -338,6 +338,107 @@ describe("VerificationCoordinatorService", () => {
     ).not.toThrow();
   });
 
+  it("第 100 版验证失败仍原子落终态并退出待验证队列", async () => {
+    const clock = () => new Date("2026-08-11T03:00:00.000Z");
+    const repository = new InMemoryRequirementRepository();
+    const workflow = RequirementWorkflow.createFromSpec(spec, {
+      tenantKey,
+      projectKey,
+      clock,
+    });
+    for (let revision = 2; revision <= 100; revision += 1) {
+      workflow.revise({
+        changedBy: "需求分析师",
+        spec: { ...spec, goal: `访客预约规则第 ${revision} 版` },
+      });
+    }
+    workflow.submitForConfirmation();
+    workflow.confirm({ actor });
+    workflow.startDelivery();
+    const run: DeliveryRunResult = {
+      tenantKey,
+      projectKey,
+      repositoryKey,
+      requirementKey: workflow.internalKey,
+      requirementRevision: 100,
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      fencingToken: 3,
+      gitHashAlgorithm: "sha1",
+      baseCommit: "a".repeat(40),
+      commitSha: "b".repeat(40),
+      branchName: `forgex/${projectKey.slice(0, 8)}/77777777-7777-4777-8777-777777777777`,
+      summary: "已生成本地提交，等待独立验证",
+      status: "completed",
+      submittedAt: "2026-08-11T02:50:00.000Z",
+      completedAt: "2026-08-11T02:55:00.000Z",
+    };
+    await repository.transaction(tenantKey, projectKey, (transaction) => {
+      transaction.save({
+        tenantKey,
+        projectKey,
+        requirementKey: workflow.internalKey,
+        createdAt: "2026-08-11T02:00:00.000Z",
+        spec: workflow.listRevisionsForPeople().at(-1)!.spec,
+        workflow,
+      });
+      transaction.saveDeliveryRunResult(run);
+    });
+    const service = new VerificationCoordinatorService({
+      requirementRepository: repository,
+      previewArtifactStore: new InMemoryPreviewArtifactStore(),
+      evidenceAuthority: evidenceAuthority(clock),
+      projectKey,
+      repositoryKey,
+      clock,
+    });
+    const criterionKey = workflow.toSnapshot().revisions.at(-1)!
+      .acceptanceCriteria[0]!.criterionKey;
+    const command = {
+      schemaVersion: 1 as const,
+      requirementKey: workflow.internalKey,
+      requirementRevision: 100,
+      verificationCompletedAt: clock().toISOString(),
+      checks: [
+        {
+          criterionKey,
+          status: "failed" as const,
+          testRunKey: "trusted-plan-v1-suite-fail",
+        },
+      ],
+    };
+
+    await expect(service.reportFailure(runner, command)).resolves.toEqual({
+      status: "verification_failed_recorded",
+      requirementRevision: 100,
+    });
+    await expect(service.reportFailure(runner, command)).resolves.toEqual({
+      status: "verification_failed_recorded",
+      requirementRevision: 100,
+    });
+    const stored = await repository.transaction(
+      tenantKey,
+      projectKey,
+      async (transaction) => ({
+        record: await transaction.find(workflow.internalKey),
+        failure: await transaction.findVerificationFailure(
+          workflow.internalKey,
+          100,
+        ),
+      }),
+    );
+    expect(stored.record?.workflow.toPeopleView()).toMatchObject({
+      version: "第 100 版",
+      status: "验证失败，版本已封存",
+    });
+    expect(stored.failure).toMatchObject({ requirementRevision: 100 });
+    expect(
+      (await repository.listAuditEvents(tenantKey, projectKey)).filter(
+        (event) => event.action === "verification.failed",
+      ),
+    ).toHaveLength(1);
+    await expect(service.listPending(runner)).resolves.toEqual({ items: [] });
+  });
+
   it("持久记录失败结果并从待验证队列移除该提交，重复上报保持幂等", async () => {
     let now = new Date("2026-08-11T03:00:00.000Z");
     const clock = () => new Date(now.getTime());

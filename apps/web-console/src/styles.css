@@ -695,6 +695,107 @@ h1 {
   color: var(--danger);
 }
 
+.revision-history ol {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 8px 0 0;
+  list-style: none;
+}
+
+.revision-history li {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.revision-history li span,
+.revision-history li small {
+  color: var(--ink-soft);
+}
+
+.revision-history li small {
+  text-align: right;
+}
+
+.revision-spec-detail {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.revision-spec-detail summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.revision-spec-detail p,
+.revision-spec-detail ul {
+  margin: 9px 0 0;
+}
+
+.revision-edit-action {
+  width: fit-content;
+}
+
+.revision-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.revision-editor .field,
+.revision-editor .form-error,
+.revision-editor .inline-form-actions {
+  margin: 0;
+}
+
+.revision-editor .field:nth-of-type(n + 2),
+.revision-editor .structured-editor-list,
+.revision-editor .form-error,
+.revision-editor .inline-form-actions {
+  grid-column: 1 / -1;
+}
+
+.revision-editor input,
+.revision-editor textarea,
+.revision-editor select {
+  background: var(--surface);
+}
+
+.structured-editor-list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.structured-editor-list legend {
+  padding-inline: 6px;
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.structured-editor-item {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding-block-end: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.structured-editor-item > .text-action {
+  grid-column: 1 / -1;
+  width: fit-content;
+}
+
 .acceptance-evidence {
   padding: 14px;
   background: var(--success-soft);
@@ -1562,6 +1663,22 @@ h1 {
 
   .card-detail {
     padding-inline: 24px;
+  }
+
+  .revision-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .structured-editor-item {
+    grid-template-columns: 1fr;
+  }
+
+  .revision-history li {
+    grid-template-columns: 1fr;
+  }
+
+  .revision-history li small {
+    text-align: left;
   }
 
   .card-summary {

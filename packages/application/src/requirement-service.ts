@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  RequirementSpecSchema,
   StartDeliveryCommandSchema,
   type RequirementSpec,
   type StartDeliveryCommandPayload,
@@ -11,6 +12,7 @@ import {
   RequirementStateConflictError,
   RequirementWorkflow,
   type RequirementPeopleView,
+  type RequirementRevisionPeopleView,
 } from "@forgex/domain";
 
 import type { AuthenticatedPrincipal } from "./auth.js";
@@ -44,6 +46,7 @@ export interface RequirementCommandResult {
 export interface RequirementDetailResult extends RequirementCommandResult {
   spec: RequirementSpec;
   acceptance: RequirementAcceptanceView | null;
+  revisions: RequirementRevisionPeopleView[];
 }
 
 export interface RequirementListQuery {
@@ -160,6 +163,90 @@ export class RequirementApplicationService {
       requirementKey,
       "requirement.confirmation_submitted",
       (workflow) => workflow.submitForConfirmation(),
+    );
+  }
+
+  async revise(
+    principal: AuthenticatedPrincipal,
+    requirementKey: string,
+    expectedRevision: number,
+    spec: RequirementSpec,
+  ): Promise<RequirementCommandResult> {
+    this.#requireAction(principal, "revise");
+    if (
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 1 ||
+      expectedRevision > 100
+    ) {
+      throw new ApplicationError(
+        422,
+        "invalid_requirement_revision",
+        "预期需求版本无效",
+      );
+    }
+    const parsed = RequirementSpecSchema.safeParse(spec);
+    if (!parsed.success) {
+      throw new ApplicationError(
+        422,
+        "invalid_requirement_revision",
+        "需求修订内容需要调整",
+      );
+    }
+    return this.#repository.transaction(
+      principal.tenantKey,
+      this.#projectKey,
+      async (transaction) => {
+        const record = await transaction.find(requirementKey);
+        if (!record || record.projectKey !== this.#projectKey) {
+          throw new ApplicationError(
+            404,
+            "requirement_not_found",
+            "没有找到这个需求",
+          );
+        }
+        if (record.workflow.currentRevision !== expectedRevision) {
+          throw new ApplicationError(
+            409,
+            "requirement_revision_conflict",
+            "需求已被其他人更新，请刷新后合并改动",
+          );
+        }
+        try {
+          record.workflow.revise({
+            changedBy: principal.actorName,
+            spec: parsed.data,
+          });
+        } catch (error) {
+          if (error instanceof RequirementStateConflictError) {
+            throw new ApplicationError(
+              409,
+              "requirement_state_conflict",
+              error.message,
+            );
+          }
+          if (error instanceof Error) {
+            throw new ApplicationError(
+              409,
+              "requirement_state_conflict",
+              error.message,
+            );
+          }
+          throw error;
+        }
+        record.spec = structuredClone(parsed.data);
+        transaction.save(record);
+        this.#appendAudit(
+          transaction,
+          record,
+          principal,
+          "requirement.revised",
+        );
+        return {
+          requirementKey: record.requirementKey,
+          view: record.workflow.toPeopleView(),
+          allowedActions: record.workflow.listAllowedActions(),
+        };
+      },
     );
   }
 
@@ -310,6 +397,7 @@ export class RequirementApplicationService {
           allowedActions: record.workflow.listAllowedActions(),
           spec: structuredClone(record.spec),
           acceptance: record.workflow.toAcceptanceView(),
+          revisions: record.workflow.listRevisionsForPeople(),
         };
       },
     );

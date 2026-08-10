@@ -114,7 +114,10 @@ describe("审批审计", () => {
     requirement.confirm({ actor });
 
     requirement.revise({
-      summary: "访客提交预约后，由业主确认到访时间和通行范围",
+      spec: {
+        ...requirement.listRevisionsForPeople().at(-1)!.spec,
+        goal: "访客提交预约后，由业主确认到访时间和通行范围",
+      },
       changedBy: "需求分析师",
     });
 

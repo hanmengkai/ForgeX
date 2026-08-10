@@ -3,19 +3,48 @@ import { describe, expect, it, vi } from "vitest";
 import { createHttpForgeXClient } from "../src/index.js";
 
 describe("createHttpForgeXClient", () => {
-  const requirement = (overrides: Record<string, unknown> = {}) => ({
-    title: "访客预约",
-    summary: "让访客到访过程更顺畅",
-    version: "第 1 版",
-    status: "正在整理",
-    nextStep: "完善内容后提交确认",
-    acceptanceProgress: "尚未开始验证",
-    links: {
-      self: "/api/v1/requirements/33333333-3333-4333-8333-333333333333",
+  const requirement = (overrides: Record<string, unknown> = {}) => {
+    const suppliedLinks =
+      typeof overrides.links === "object" && overrides.links !== null
+        ? (overrides.links as Record<string, unknown>)
+        : {};
+    const self =
+      typeof suppliedLinks.self === "string"
+        ? suppliedLinks.self
+        : "/api/v1/requirements/33333333-3333-4333-8333-333333333333";
+    const links = {
+      self,
+      history: `${self}/revisions`,
       actions: {},
-    },
-    ...overrides,
-  });
+      ...suppliedLinks,
+    };
+    return {
+      title: "访客预约",
+      summary: "让访客到访过程更顺畅",
+      version: "第 1 版",
+      status: "正在整理",
+      nextStep: "完善内容后提交确认",
+      acceptanceProgress: "尚未开始验证",
+      ...overrides,
+      links,
+      ...(overrides.spec && !overrides.revisions
+        ? {
+            revisions: [
+              {
+                revision: 1,
+                version: "第 1 版",
+                changedBy: "创建者",
+                current: true,
+                confirmed: false,
+                changes: ["创建需求"],
+                contentState: "完整规格",
+                spec: overrides.spec,
+              },
+            ],
+          }
+        : {}),
+    };
+  };
 
   it("用访问令牌建立 HttpOnly 会话并可读取和注销", async () => {
     const fetcher = vi
@@ -483,6 +512,89 @@ describe("createHttpForgeXClient", () => {
 
     const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
     expect(headers.get("X-ForgeX-CSRF")).toBe("1");
+  });
+
+  it("只把与需求 self 绑定的修订地址用于保存完整新版本", async () => {
+    const self = "/api/v1/requirements/33333333-3333-4333-8333-333333333333";
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    const client = createHttpForgeXClient({ fetcher });
+    const revisedSpec = {
+      schemaVersion: 1 as const,
+      title: "访客预约",
+      goal: "让访客预约后由业主确认到访时间",
+      userStories: [],
+      acceptanceCriteria: [
+        {
+          title: "访客可以提交预约",
+          description: "填写后能够提交",
+          priority: "must" as const,
+        },
+      ],
+      openQuestions: ["访客改期是否需要重新确认"],
+    };
+
+    await client.reviseRequirement(`${self}/revisions`, revisedSpec, 1);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      `${self}/revisions`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision: 1,
+          spec: revisedSpec,
+        }),
+      }),
+    );
+    await expect(
+      client.reviseRequirement("/api/v1/requirements", revisedSpec, 1),
+    ).rejects.toThrow("需求修订链接无效");
+  });
+
+  it("拒绝当前版本或当前规格与详情不一致的版本历史", async () => {
+    const self = "/api/v1/requirements/33333333-3333-4333-8333-333333333333";
+    const currentSpec = {
+      schemaVersion: 1 as const,
+      title: "访客预约",
+      goal: "让访客到访过程更顺畅",
+      userStories: [],
+      acceptanceCriteria: [
+        {
+          title: "访客可以提交预约",
+          description: "填写后能够提交",
+          priority: "must" as const,
+        },
+      ],
+      openQuestions: [],
+    };
+    const mismatched = requirement({
+      spec: currentSpec,
+      revisions: [
+        {
+          revision: 1,
+          version: "第 1 版",
+          changedBy: "创建者",
+          current: true,
+          confirmed: false,
+          changes: ["创建需求"],
+          contentState: "完整规格",
+          spec: { ...currentSpec, goal: "另一需求的规格" },
+        },
+      ],
+      acceptance: null,
+      links: { self, history: `${self}/revisions`, actions: {} },
+    });
+    const client = createHttpForgeXClient({
+      fetcher: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(JSON.stringify({ data: mismatched }))),
+    });
+
+    await expect(client.getRequirement(self)).rejects.toThrow(
+      "需求详情格式不正确",
+    );
   });
 
   it("设备列表损坏时不向页面泄漏未知运行时数据", async () => {

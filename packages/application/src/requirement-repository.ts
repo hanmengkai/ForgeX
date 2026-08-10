@@ -12,6 +12,7 @@ import type {
 
 export type RequirementAuditAction =
   | "requirement.created"
+  | "requirement.revised"
   | "requirement.confirmation_submitted"
   | "requirement.confirmed"
   | "requirement.accepted"

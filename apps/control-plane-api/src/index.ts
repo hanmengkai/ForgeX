@@ -118,6 +118,13 @@ const requirementParamsSchema = z
       .transform((value) => value.toLowerCase()),
   })
   .strict();
+const requirementRevisionCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    expectedRevision: z.number().int().min(1).max(100),
+    spec: RequirementSpecSchema,
+  })
+  .strict();
 const extensionParamsSchema = z
   .object({
     extensionKey: z
@@ -307,11 +314,18 @@ const requirementLinks = (
 ) => {
   const self = `/api/v1/requirements/${requirementKey}`;
   const actions: {
+    revise?: string;
     submitConfirmation?: string;
     confirm?: string;
     startDelivery?: string;
     accept?: string;
   } = {};
+  if (
+    allowedActions.includes("revise") &&
+    canPerformRequirementAction(principal, "revise")
+  ) {
+    actions.revise = `${self}/revisions`;
+  }
   if (
     allowedActions.includes("submitForConfirmation") &&
     canPerformRequirementAction(principal, "submitForConfirmation")
@@ -338,6 +352,7 @@ const requirementLinks = (
   }
   return {
     self,
+    history: `${self}/revisions`,
     ...(previewAvailable ? { preview: `${self}/preview` } : {}),
     actions,
   };
@@ -1460,6 +1475,7 @@ export const buildControlPlaneApi = (
         ...result.view,
         spec: result.spec,
         acceptance: result.acceptance,
+        revisions: result.revisions,
         links: requirementLinks(
           result.requirementKey,
           result.allowedActions,
@@ -1469,6 +1485,64 @@ export const buildControlPlaneApi = (
       },
     });
   });
+
+  app.get(
+    "/api/v1/requirements/:requirementKey/revisions",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "需求版本入口需要调整",
+          validationDetails(params.error),
+        );
+      }
+      const result = await requirements.get(
+        principal,
+        params.data.requirementKey,
+      );
+      return reply.send({
+        data: result.revisions,
+        links: {
+          self: `/api/v1/requirements/${result.requirementKey}/revisions`,
+        },
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/requirements/:requirementKey/revisions",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      const command = requirementRevisionCommandSchema.safeParse(request.body);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "需求修订内容需要调整",
+          validationDetails(params.error),
+        );
+      }
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "需求修订内容需要调整",
+          validationDetails(command.error),
+        );
+      }
+      const result = await requirements.revise(
+        principal,
+        params.data.requirementKey,
+        command.data.expectedRevision,
+        command.data.spec,
+      );
+      return reply.send({ data: result.view });
+    },
+  );
 
   app.get(
     "/api/v1/requirements/:requirementKey/preview",

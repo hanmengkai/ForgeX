@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { RequirementSpecSchema } from "@forgex/contracts";
+
 import {
   RequirementWorkflow,
   type EvidencePayload,
@@ -42,6 +44,14 @@ const confirmRequirement = (requirement: RequirementWorkflow) => {
   requirement.confirm({ actor });
 };
 
+const revisedSpec = (
+  requirement: RequirementWorkflow,
+  changes: Partial<{ title: string; goal: string }> = {},
+) => ({
+  ...requirement.listRevisionsForPeople().at(-1)!.spec,
+  ...changes,
+});
+
 const createVerifiedEvidence = (
   requirement: RequirementWorkflow,
   options: { failedCriterion?: number; onlyFirstCriterion?: boolean } = {},
@@ -79,6 +89,261 @@ const createVerifiedEvidence = (
 };
 
 describe("RequirementWorkflow", () => {
+  it("保存完整需求版本并给产品人员提供可理解的差异", () => {
+    const requirement = RequirementWorkflow.createFromSpec(
+      {
+        schemaVersion: 1,
+        title: "访客预约",
+        goal: "让访客到访过程更顺畅",
+        userStories: [
+          {
+            role: "物业前台",
+            need: "提前查看来访安排",
+            value: "做好接待准备",
+          },
+        ],
+        acceptanceCriteria: [
+          {
+            title: "访客可以提交预约",
+            description: "填写必要信息后能够提交预约",
+            priority: "must",
+          },
+        ],
+        openQuestions: ["是否需要业主二次确认"],
+      },
+      { tenantKey, projectKey },
+    );
+
+    requirement.revise({
+      changedBy: "需求分析师",
+      spec: {
+        schemaVersion: 1,
+        title: "访客预约与确认",
+        goal: "让访客预约后由业主确认到访时间",
+        userStories: [
+          {
+            role: "物业前台",
+            need: "提前查看来访安排",
+            value: "做好接待准备",
+          },
+          {
+            role: "业主",
+            need: "确认访客到访时间",
+            value: "避免未经确认的来访",
+          },
+        ],
+        acceptanceCriteria: [
+          {
+            title: "访客可以提交预约",
+            description: "填写必要信息后能够提交预约",
+            priority: "must",
+          },
+          {
+            title: "业主可以确认预约",
+            description: "业主确认后预约才会生效",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      },
+    });
+
+    expect(requirement.listRevisionsForPeople()).toEqual([
+      expect.objectContaining({
+        version: "第 1 版",
+        changedBy: "创建者",
+        current: false,
+        changes: ["创建需求"],
+        spec: expect.objectContaining({ title: "访客预约" }),
+      }),
+      expect.objectContaining({
+        version: "第 2 版",
+        changedBy: "需求分析师",
+        current: true,
+        changes: ["需求名称", "业务目标", "用户故事", "验收标准", "待澄清问题"],
+        spec: expect.objectContaining({ title: "访客预约与确认" }),
+      }),
+    ]);
+    expect(() =>
+      requirement.assertSpecIntegrity(
+        requirement.listRevisionsForPeople().at(-1)!.spec,
+      ),
+    ).not.toThrow();
+    expect(
+      RequirementWorkflow.fromSnapshot(requirement.toSnapshot())
+        .listRevisionsForPeople()
+        .at(-1),
+    ).toMatchObject({
+      version: "第 2 版",
+      spec: { title: "访客预约与确认" },
+    });
+  });
+
+  it("限制单个需求的版本数量，避免历史规格无限放大", () => {
+    const requirement = createRequirement();
+    for (let version = 2; version <= 100; version += 1) {
+      requirement.revise({
+        spec: revisedSpec(requirement, {
+          goal: `访客预约规则第 ${version} 版`,
+        }),
+        changedBy: "需求分析师",
+      });
+    }
+
+    expect(() =>
+      requirement.revise({
+        spec: revisedSpec(requirement, { goal: "超出安全版本上限" }),
+        changedBy: "需求分析师",
+      }),
+    ).toThrow("需求版本已达到上限");
+    expect(requirement.listAllowedActions()).not.toContain("revise");
+  });
+
+  it("第 100 版验证失败时封存版本而不生成无法恢复的第 101 版", () => {
+    const requirement = createRequirement();
+    for (let version = 2; version <= 100; version += 1) {
+      requirement.revise({
+        spec: revisedSpec(requirement, {
+          goal: `访客预约规则第 ${version} 版`,
+        }),
+        changedBy: "需求分析师",
+      });
+    }
+    requirement.submitForConfirmation();
+    requirement.confirm({
+      actor: {
+        actorKey: "77777777-7777-4777-8777-777777777777",
+        actorName: "产品负责人",
+      },
+    });
+    requirement.startDelivery();
+    requirement.recordVerificationFailure();
+
+    expect(requirement.toPeopleView()).toMatchObject({
+      version: "第 100 版",
+      status: "验证失败，版本已封存",
+      nextStep: "请创建新的变更需求",
+      acceptanceProgress: "独立验证未通过，当前版本已封存",
+    });
+    expect(requirement.listAllowedActions()).toEqual([]);
+    expect(requirement.toSnapshot().revisions).toHaveLength(100);
+    expect(() =>
+      RequirementWorkflow.fromSnapshot(requirement.toSnapshot()),
+    ).not.toThrow();
+  });
+
+  it("显式回填旧快照当前规格，并把不可恢复历史标为仅保留摘要", () => {
+    const fullSpec = RequirementSpecSchema.parse({
+      schemaVersion: 1,
+      title: "访客预约",
+      goal: "让访客到访过程更顺畅",
+      userStories: [
+        { role: "物业前台", need: "查看来访安排", value: "做好接待准备" },
+      ],
+      acceptanceCriteria: [
+        {
+          title: "访客可以提交预约",
+          description: "填写必要信息后能够提交预约",
+          priority: "must",
+        },
+      ],
+      openQuestions: ["是否需要业主确认"],
+    });
+    const original = RequirementWorkflow.createFromSpec(fullSpec, {
+      tenantKey,
+      projectKey,
+    });
+    const current = original.toSnapshot().revisions[0]!;
+    const {
+      spec: _persistedSpec,
+      contentState: _contentState,
+      ...legacyRevision
+    } = current;
+    const legacy = {
+      ...original.toSnapshot(),
+      schemaVersion: 1 as const,
+      revisions: [{ ...legacyRevision, specHash: null }],
+    };
+
+    const restored = RequirementWorkflow.fromSnapshot(legacy);
+    expect(restored.listRevisionsForPeople()[0]).toMatchObject({
+      contentState: "仅保留摘要",
+      spec: { userStories: [], openQuestions: [] },
+    });
+
+    restored.restoreCurrentSpec(fullSpec);
+    expect(restored.listRevisionsForPeople()[0]).toMatchObject({
+      contentState: "完整规格",
+      spec: fullSpec,
+    });
+    expect(restored.toSnapshot()).toMatchObject({ schemaVersion: 2 });
+  });
+
+  it("迁移保留摘要哈希的旧多版本快照后仍可再次恢复", () => {
+    const original = createRequirement();
+    original.revise({
+      changedBy: "需求分析师",
+      spec: revisedSpec(original, { goal: "让访客到访与确认过程更顺畅" }),
+    });
+    const fullCurrentSpec = original.listRevisionsForPeople()[1]!.spec;
+    const snapshot = original.toSnapshot();
+    const legacy = {
+      ...snapshot,
+      schemaVersion: 1 as const,
+      revisions: snapshot.revisions.map(
+        ({ spec: _spec, contentState: _contentState, ...revision }) => revision,
+      ),
+    };
+
+    const restored = RequirementWorkflow.fromSnapshot(legacy);
+    restored.restoreCurrentSpec(fullCurrentSpec);
+    const migrated = restored.toSnapshot();
+
+    expect(migrated.revisions[0]).toMatchObject({
+      contentState: "legacy_summary",
+      specHash: null,
+    });
+    expect(() => RequirementWorkflow.fromSnapshot(migrated)).not.toThrow();
+  });
+
+  it("新版快照拒绝剥离完整历史规格", () => {
+    const requirement = RequirementWorkflow.createFromSpec(
+      RequirementSpecSchema.parse({
+        schemaVersion: 1,
+        title: "访客预约",
+        goal: "让访客到访过程更顺畅",
+        userStories: [],
+        acceptanceCriteria: [
+          {
+            title: "访客可以提交预约",
+            description: "填写必要信息后能够提交预约",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      }),
+      { tenantKey, projectKey },
+    );
+    const snapshot = structuredClone(requirement.toSnapshot());
+    delete snapshot.revisions[0]!.spec;
+
+    expect(() => RequirementWorkflow.fromSnapshot(snapshot)).toThrow(
+      "需求工作流快照包含无效版本",
+    );
+  });
+
+  it("运行时修订不能再制造缺少完整规格的旧式版本", () => {
+    const requirement = createRequirement();
+    const before = requirement.toSnapshot();
+
+    expect(() =>
+      requirement.revise({
+        changedBy: "需求分析师",
+      } as unknown as Parameters<RequirementWorkflow["revise"]>[0]),
+    ).toThrow();
+    expect(requirement.toSnapshot()).toEqual(before);
+  });
+
   it("拒绝无法理解或无法验收的需求内容", () => {
     expect(() =>
       RequirementWorkflow.create(
@@ -169,7 +434,9 @@ describe("RequirementWorkflow", () => {
     confirmRequirement(requirement);
 
     requirement.revise({
-      summary: "访客提交预约后，由业主确认到访时间和通行范围",
+      spec: revisedSpec(requirement, {
+        goal: "访客提交预约后，由业主确认到访时间和通行范围",
+      }),
       changedBy: "需求分析师",
     });
 
@@ -246,7 +513,10 @@ describe("RequirementWorkflow", () => {
     requirement.startDelivery();
 
     expect(() =>
-      requirement.revise({ summary: "临时修改", changedBy: "产品" }),
+      requirement.revise({
+        spec: revisedSpec(requirement, { goal: "临时修改" }),
+        changedBy: "产品",
+      }),
     ).toThrow("需求已经进入交付，请创建新的变更需求");
     expect(() =>
       requirement.submitForAcceptance(
@@ -263,7 +533,10 @@ describe("RequirementWorkflow", () => {
   it("拒绝无效修改人和提前验收", () => {
     const requirement = createRequirement();
     expect(() =>
-      requirement.revise({ summary: "增加通行范围", changedBy: " " }),
+      requirement.revise({
+        spec: revisedSpec(requirement, { goal: "增加通行范围" }),
+        changedBy: " ",
+      }),
     ).toThrow("请记录修改人");
     expect(() =>
       requirement.submitForAcceptance({} as VerifiedEvidenceReceipt),
@@ -403,7 +676,9 @@ describe("RequirementWorkflow", () => {
     const requirement = createRequirement();
     confirmRequirement(requirement);
     requirement.revise({
-      summary: "访客提交预约后，由业主确认到访时间和通行范围",
+      spec: revisedSpec(requirement, {
+        goal: "访客提交预约后，由业主确认到访时间和通行范围",
+      }),
       changedBy: "需求分析师",
     });
     requirement.submitForConfirmation();
@@ -458,7 +733,10 @@ describe("RequirementWorkflow", () => {
         }),
       ]),
     );
-    expect(restored.listAllowedActions()).toEqual(["submitForConfirmation"]);
+    expect(restored.listAllowedActions()).toEqual([
+      "revise",
+      "submitForConfirmation",
+    ]);
     restored.submitForConfirmation();
     restored.confirm({ actor });
     restored.startDelivery();

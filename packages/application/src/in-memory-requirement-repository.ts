@@ -110,6 +110,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           projectKey: record.projectKey,
           requirementKey: record.requirementKey,
         });
+        record.workflow.restoreCurrentSpec(record.spec);
         record.workflow.assertSpecIntegrity(record.spec);
         const key = scopedKey(
           normalizedTenantKey,

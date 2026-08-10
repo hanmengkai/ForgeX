@@ -91,6 +91,47 @@ const fakeDatabase = (options?: {
 };
 
 describe("PostgresRequirementRepository", () => {
+  it("读取旧快照时用同一行的权威规格回填当前完整版本", async () => {
+    const snapshot = workflow().toSnapshot();
+    const legacySnapshot = {
+      ...snapshot,
+      schemaVersion: 1 as const,
+      revisions: snapshot.revisions.map(
+        ({ spec: _spec, contentState: _contentState, ...revision }) => ({
+          ...revision,
+          specHash: null,
+        }),
+      ),
+    };
+    const database = fakeDatabase({
+      respond: (text) =>
+        text.includes("SELECT created_at")
+          ? [{ created_at: now, spec, workflow: legacySnapshot }]
+          : undefined,
+    });
+    const repository = new PostgresRequirementRepository(database.pool);
+
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      const record = await transaction.find(requirementKey);
+      expect(record?.workflow.listRevisionsForPeople()).toEqual([
+        expect.objectContaining({
+          revision: 1,
+          contentState: "完整规格",
+          spec,
+        }),
+      ]);
+      transaction.save(record!);
+    });
+
+    const persisted = database.queries.find((query) =>
+      query.text.startsWith("INSERT INTO forgex_requirements"),
+    );
+    expect(JSON.parse(String(persisted?.values?.[5]))).toMatchObject({
+      schemaVersion: 2,
+      revisions: [expect.objectContaining({ contentState: "complete", spec })],
+    });
+  });
+
   it("向前迁移允许验收审计进入数据库约束", () => {
     const migration = readFileSync(
       new URL(
@@ -503,6 +544,17 @@ describe("PostgresRequirementRepository", () => {
     );
     expect(migration).toContain("REFERENCES forgex_delivery_runs");
     expect(migration).toContain("'verification.failed'");
+  });
+
+  it("需求版本迁移允许追加式修订审计", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0016_requirement_revisions.sql", import.meta.url),
+      "utf8",
+    );
+
+    expect(migration).toContain("DROP CONSTRAINT IF EXISTS");
+    expect(migration).toContain("'requirement.revised'");
+    expect(migration).toContain("ADD CONSTRAINT");
   });
 
   it("在需求事务内持久化证据防重放记录", async () => {

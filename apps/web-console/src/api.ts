@@ -6,6 +6,7 @@ import {
 } from "@forgex/contracts";
 
 export interface RequirementActionLinks {
+  revise?: string | undefined;
   submitConfirmation?: string | undefined;
   confirm?: string | undefined;
   startDelivery?: string | undefined;
@@ -23,11 +24,13 @@ export interface RequirementListItem {
     | "内容已更新，等待重新确认"
     | "AI 正在实现"
     | "等待产品验收"
-    | "已完成";
+    | "已完成"
+    | "验证失败，版本已封存";
   nextStep: string;
   acceptanceProgress: string;
   links: {
     self: string;
+    history: string;
     preview?: string | undefined;
     actions: RequirementActionLinks;
   };
@@ -40,6 +43,18 @@ export interface RequirementDetail extends RequirementListItem {
     verifiedAt: string;
     checks: Array<{ title: string; status: "已通过" }>;
   } | null;
+  revisions: RequirementRevision[];
+}
+
+export interface RequirementRevision {
+  revision: number;
+  version: string;
+  changedBy: string;
+  current: boolean;
+  confirmed: boolean;
+  changes: string[];
+  contentState: "完整规格" | "仅保留摘要";
+  spec: RequirementSpecInput;
 }
 
 export interface RequirementSpecInput {
@@ -206,6 +221,11 @@ export interface ForgeXClient {
   ): Promise<KnowledgeSearchResult[]>;
   getRequirement(selfUrl: string): Promise<RequirementDetail>;
   createRequirement(spec: RequirementSpecInput): Promise<void>;
+  reviseRequirement(
+    actionUrl: string | undefined,
+    spec: RequirementSpecInput,
+    expectedRevision: number,
+  ): Promise<void>;
   runRequirementAction(
     actionUrl: string | undefined,
     body: Record<string, unknown>,
@@ -222,6 +242,7 @@ const requirementStatuses = [
   "AI 正在实现",
   "等待产品验收",
   "已完成",
+  "验证失败，版本已封存",
 ] as const;
 const sessionResponseSchema = z
   .object({
@@ -232,6 +253,7 @@ const accessTokenPattern = /^[A-Za-z0-9._~-]{24,512}$/u;
 const requirementSelfPattern =
   /^\/api\/v1\/requirements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const actionSuffixes = {
+  revise: "/revisions",
   submitConfirmation: "/submit-confirmation",
   confirm: "/confirm",
   startDelivery: "/start-delivery",
@@ -241,9 +263,11 @@ const actionSuffixes = {
 const requirementLinksSchema = z
   .object({
     self: z.string().regex(requirementSelfPattern),
+    history: z.string(),
     preview: z.string().optional(),
     actions: z
       .object({
+        revise: z.string().optional(),
         submitConfirmation: z.string().optional(),
         confirm: z.string().optional(),
         startDelivery: z.string().optional(),
@@ -253,6 +277,13 @@ const requirementLinksSchema = z
   })
   .strict()
   .superRefine((links, context) => {
+    if (links.history !== `${links.self}/revisions`) {
+      context.addIssue({
+        code: "custom",
+        path: ["history"],
+        message: "版本链接与需求不匹配",
+      });
+    }
     if (
       links.preview !== undefined &&
       links.preview !== `${links.self}/preview`
@@ -312,6 +343,19 @@ const requirementSpecSchema = z
   })
   .strict();
 
+const requirementRevisionSchema = z
+  .object({
+    revision: z.number().int().min(1).max(100),
+    version: z.string().regex(/^第 [1-9][0-9]{0,3} 版$/u),
+    changedBy: z.string().trim().min(2).max(100),
+    current: z.boolean(),
+    confirmed: z.boolean(),
+    changes: z.array(z.string().trim().min(2).max(30)).min(1).max(5),
+    contentState: z.enum(["完整规格", "仅保留摘要"]),
+    spec: requirementSpecSchema,
+  })
+  .strict();
+
 const requirementListResponseSchema = z
   .object({
     data: z.array(requirementListItemSchema).max(100),
@@ -325,6 +369,7 @@ const requirementDetailResponseSchema = z
     data: requirementListItemSchema
       .extend({
         spec: requirementSpecSchema,
+        revisions: z.array(requirementRevisionSchema).min(1).max(100),
         acceptance: z
           .object({
             verifiedBy: z.string().trim().min(2).max(100),
@@ -374,6 +419,27 @@ const requirementDetailResponseSchema = z
             code: "custom",
             path: ["acceptance", "checks"],
             message: "验收结果没有覆盖全部完成标准",
+          });
+        }
+        const currentRevisions = detail.revisions.filter(
+          (revision) => revision.current,
+        );
+        const current = currentRevisions[0];
+        const historyIsBound =
+          currentRevisions.length === 1 &&
+          current === detail.revisions.at(-1) &&
+          detail.revisions.every(
+            (revision, index) =>
+              revision.revision === index + 1 &&
+              revision.version === `第 ${index + 1} 版`,
+          ) &&
+          current?.version === detail.version &&
+          JSON.stringify(current?.spec) === JSON.stringify(detail.spec);
+        if (!historyIsBound) {
+          context.addIssue({
+            code: "custom",
+            path: ["revisions"],
+            message: "版本历史与当前需求不一致",
           });
         }
       }),
@@ -736,6 +802,15 @@ const assertRequirementActionUrl = (url: string | undefined): string => {
   return url;
 };
 
+const assertRequirementRevisionUrl = (url: string | undefined): string => {
+  const suffix = "/revisions";
+  const self = url?.endsWith(suffix) ? url.slice(0, -suffix.length) : "";
+  if (!url || !requirementSelfPattern.test(self)) {
+    throw new Error("需求修订链接无效，请刷新页面后重试");
+  }
+  return url;
+};
+
 const assertMcpApprovalUrl = (url: string | undefined): string => {
   const suffix = "/approve";
   const self = url?.endsWith(suffix) ? url.slice(0, -suffix.length) : "";
@@ -994,6 +1069,16 @@ export const createHttpForgeXClient = (
       await request("/api/v1/requirements", {
         method: "POST",
         body: JSON.stringify(spec),
+      });
+    },
+    reviseRequirement: async (actionUrl, spec, expectedRevision) => {
+      await request(assertRequirementRevisionUrl(actionUrl), {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision,
+          spec,
+        }),
       });
     },
     runRequirementAction: async (actionUrl, body) => {
