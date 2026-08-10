@@ -90,6 +90,8 @@ export interface ControlPlaneApiOptions {
   workerFleetRepository: WorkerFleetRepository;
   projectKey: string;
   repositoryKey: string;
+  readiness?: () => Promise<void>;
+  serviceVersion?: string;
   clock?: () => Date;
   logger?: FastifyServerOptions["logger"];
 }
@@ -462,6 +464,19 @@ export const buildControlPlaneApi = (
   app.decorateRequest("principal", null);
   app.decorateRequest("workerConnection", null);
   app.decorateRequest("runnerConnection", null);
+  app.get("/health/live", async () => ({
+    status: "ok",
+    service: "forgex-control-plane",
+    version: options.serviceVersion ?? "development",
+  }));
+  app.get("/health/ready", async (_request, reply) => {
+    try {
+      await options.readiness?.();
+      return { status: "ready" };
+    } catch {
+      return reply.status(503).send({ status: "not_ready" });
+    }
+  });
   const requirements = new RequirementApplicationService({
     repository: options.requirementRepository,
     projectKey: options.projectKey,
