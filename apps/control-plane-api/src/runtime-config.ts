@@ -84,7 +84,7 @@ export const ControlPlaneRuntimeConfigSchema = z
             runnerName: z.string().trim().min(2).max(100),
             publicKeyBase64,
             scopes: z.array(runnerScopeSchema).min(1).max(100),
-            acceptNewEvidence: z.boolean().optional(),
+            acceptNewEvidence: z.boolean().default(true),
           })
           .strict(),
       )
@@ -98,7 +98,7 @@ export const ControlPlaneRuntimeConfigSchema = z
             evaluatorName: z.string().trim().min(2).max(100),
             publicKeyBase64,
             scopes: z.array(evaluatorScopeSchema).min(1).max(100),
-            acceptNewEvaluations: z.boolean().optional(),
+            acceptNewEvaluations: z.boolean().default(true),
           })
           .strict(),
       )
@@ -112,7 +112,7 @@ export const ControlPlaneRuntimeConfigSchema = z
             verifierName: z.string().trim().min(2).max(100),
             publicKeyBase64,
             scopes: z.array(evaluatorScopeSchema).min(1).max(100),
-            acceptNewAttestations: z.boolean().optional(),
+            acceptNewAttestations: z.boolean().default(true),
           })
           .strict(),
       )
