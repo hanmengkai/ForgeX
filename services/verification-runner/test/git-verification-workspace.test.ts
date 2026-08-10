@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -35,15 +42,18 @@ afterEach(async () => {
 });
 
 const git = async (repository: string, args: string[]): Promise<string> => {
-  const result = await execFileAsync(gitCommandPath, ["-C", repository, ...args], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL:
-        process.platform === "win32" ? "NUL" : "/dev/null",
+  const result = await execFileAsync(
+    gitCommandPath,
+    ["-C", repository, ...args],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      },
     },
-  });
+  );
   return result.stdout.trim();
 };
 
@@ -93,17 +103,17 @@ describe("GitVerificationWorkspaceProvider", () => {
       gitHashAlgorithm: "sha1",
       commitSha: fixture.firstCommit,
     });
-    expect(await readFile(path.join(workspace.path, "result.txt"), "utf8")).toBe(
-      "first",
-    );
+    expect(
+      await readFile(path.join(workspace.path, "result.txt"), "utf8"),
+    ).toBe("first");
     await expect(git(workspace.path, ["rev-parse", "HEAD"])).resolves.toBe(
       fixture.firstCommit,
     );
 
     await workspace.dispose();
-    await expect(readFile(path.join(workspace.path, "result.txt"))).rejects.toMatchObject(
-      { code: "ENOENT" },
-    );
+    await expect(
+      readFile(path.join(workspace.path, "result.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("拒绝未知仓库、错误哈希算法和可能执行宿主命令的 Git 配置", async () => {
@@ -127,7 +137,7 @@ describe("GitVerificationWorkspaceProvider", () => {
     const includedConfig = path.join(fixture.root, "unsafe-git-config");
     await writeFile(
       includedConfig,
-      "[filter \"forgex\"]\n\tclean = dangerous-command\n",
+      '[filter "forgex"]\n\tclean = dangerous-command\n',
       "utf8",
     );
     await git(fixture.repositoryRoot, [
@@ -142,5 +152,31 @@ describe("GitVerificationWorkspaceProvider", () => {
         commitSha: fixture.secondCommit,
       }),
     ).rejects.toThrow("Git 配置");
+  });
+
+  it("取件时不会执行权威仓库内的 Git hooks", async () => {
+    const fixture = await repositoryFixture();
+    const markerPath = path.join(fixture.root, "hook-executed");
+    const hookPath = path.join(
+      fixture.repositoryRoot,
+      ".git",
+      "hooks",
+      "post-checkout",
+    );
+    await writeFile(
+      hookPath,
+      `#!/bin/sh\nprintf unsafe > '${markerPath.replaceAll("'", "'\\''")}'\n`,
+      { mode: 0o700 },
+    );
+    if (process.platform !== "win32") await chmod(hookPath, 0o700);
+    const provider = providerFor(fixture);
+
+    const workspace = await provider.prepare({
+      repositoryKey: "30000000-0000-4000-8000-000000000003",
+      gitHashAlgorithm: "sha1",
+      commitSha: fixture.secondCommit,
+    });
+    await expect(access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await workspace.dispose();
   });
 });
