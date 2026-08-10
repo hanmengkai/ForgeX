@@ -32,6 +32,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.arguments?.target === "error") {
+    throw new Error("Authorization: Bearer local-mcp-secret-marker");
+  }
   const valid =
     request.params.name === "notifications.send" &&
     request.params.arguments?.target === "production" &&

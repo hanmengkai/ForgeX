@@ -218,4 +218,101 @@ describe("OfficialMcpExecutionAdapter", () => {
       summary: "本地工具操作未完成",
     });
   });
+
+  it("不会把 MCP 连接与工具清单异常中的敏感信息带出设备边界", async () => {
+    const marker = "Authorization: Bearer local-mcp-secret-marker";
+    const connectionFailure = new OfficialMcpExecutionAdapter({
+      connections: [connection],
+      connect: async () => {
+        throw new Error(marker);
+      },
+      verifyStdioConnection: async () => Promise.resolve(),
+    });
+
+    const connectionError = await connectionFailure
+      .execute({ assignment: assignment() })
+      .catch((error: unknown) => error);
+    expect(connectionError).toMatchObject({
+      message: "本地 MCP 连接失败，服务端详情已隐藏",
+    });
+    expect(String(connectionError)).not.toContain(marker);
+
+    const toolListFailure = new OfficialMcpExecutionAdapter({
+      connections: [connection],
+      connect: async () => ({
+        listTools: async () => {
+          throw new Error(marker);
+        },
+        callTool: async () => ({ content: [], isError: false }),
+        close: async () => Promise.resolve(),
+      }),
+      verifyStdioConnection: async () => Promise.resolve(),
+    });
+
+    const listError = await toolListFailure
+      .execute({ assignment: assignment() })
+      .catch((error: unknown) => error);
+    expect(listError).toMatchObject({
+      message: "本地 MCP 工具清单读取失败，服务端详情已隐藏",
+    });
+    expect(String(listError)).not.toContain(marker);
+  });
+
+  it("真实 MCP 协议错误不得把服务端敏感信息写入 Worker 错误", async () => {
+    const marker = "Authorization: Bearer local-mcp-secret-marker";
+    const commandPath = process.execPath;
+    const commandSha256 = createHash("sha256")
+      .update(await readFile(commandPath))
+      .digest("hex");
+    const sourceFixturePath = fileURLToPath(
+      new URL("./mcp-stdio-fixture.mjs", import.meta.url),
+    );
+    const fixtureContent = await readFile(sourceFixturePath, "utf8");
+    const root = await mkdtemp(
+      path.join(path.dirname(sourceFixturePath), ".tmp-mcp-error-"),
+    );
+    temporaryRoots.push(root);
+    const fixturePath = path.join(root, "mcp-server.mjs");
+    await writeFile(fixturePath, fixtureContent, "utf8");
+    const fixtureSha256 = createHash("sha256")
+      .update(fixtureContent, "utf8")
+      .digest("hex");
+    const adapter = new OfficialMcpExecutionAdapter({
+      connections: [
+        {
+          ...connection,
+          commandPath,
+          commandSha256,
+          args: [
+            {
+              kind: "trusted_file",
+              path: fixturePath,
+              sha256: fixtureSha256,
+            },
+          ],
+          timeoutMs: 10_000,
+        },
+      ],
+      verifyStdioConnection: (stdioConnection) =>
+        assertTrustedStdioMcpConnection(stdioConnection, {
+          platform: "win32",
+          assertWindowsTrustedLauncherPath: async () => Promise.resolve(),
+        }),
+    });
+    const errorArguments = { target: "error" };
+
+    const error = await adapter
+      .execute({
+        assignment: assignment({
+          arguments: errorArguments,
+          argumentsHash: canonicalMcpJsonHash(errorArguments),
+        }),
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: "本地 MCP 工具调用失败，服务端详情已隐藏",
+    });
+    expect(String(error)).not.toContain(marker);
+  });
 });
