@@ -104,6 +104,7 @@ const createTestApp = (
   runtime: {
     readiness?: () => Promise<void>;
     serviceVersion?: string;
+    sessionCookieSecure?: boolean;
   } = {},
 ) => {
   const repository = new InMemoryRequirementRepository();
@@ -170,6 +171,40 @@ const createTestApp = (
 };
 
 describe("需求 API", () => {
+  it("用一次性提交的访问令牌建立、读取并注销 HttpOnly 同源会话", async () => {
+    const { app } = createTestApp(undefined, { sessionCookieSecure: false });
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/v1/session",
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(login.statusCode).toBe(200);
+    expect(login.json()).toEqual({ data: { actorName: "产品负责人" } });
+    const cookie = login.headers["set-cookie"];
+    expect(cookie).toContain("forgex_session=product-session");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Strict");
+    expect(cookie).not.toContain("Secure");
+
+    const current = await app.inject({
+      method: "GET",
+      url: "/api/v1/session",
+      headers: { cookie },
+    });
+    expect(current.statusCode).toBe(200);
+    expect(current.json()).toEqual({ data: { actorName: "产品负责人" } });
+
+    const logout = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/session",
+      headers: { cookie, "x-forgex-csrf": "1" },
+    });
+    expect(logout.statusCode).toBe(204);
+    expect(logout.headers["set-cookie"]).toContain("Max-Age=0");
+    await app.close();
+  });
+
   it("提供无需登录的存活与数据库就绪探针且不泄露失败细节", async () => {
     const readiness = vi
       .fn<() => Promise<void>>()
