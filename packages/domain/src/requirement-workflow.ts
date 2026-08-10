@@ -1,5 +1,15 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  DeliveryReferenceSchema,
+  type DeliveryReference,
+} from "@forgex/contracts";
+
+import { VerifiedEvidenceReceipt } from "./evidence.js";
+
+const internalKeyPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 type RequirementStatus =
   | "draft"
   | "awaitingConfirmation"
@@ -13,7 +23,10 @@ interface RequirementRevision {
   version: number;
   title: string;
   summary: string;
-  acceptanceCriteria: string[];
+  acceptanceCriteria: Array<{
+    criterionKey: string;
+    title: string;
+  }>;
   changedBy: string;
 }
 
@@ -24,11 +37,54 @@ export interface RequirementRevisionInput {
   changedBy: string;
 }
 
-export interface VerificationEvidence {
-  passed: number;
-  total: number;
-  producedBy: string;
-  independentlyVerified: boolean;
+export interface ApprovalActor {
+  actorKey: string;
+  actorName: string;
+}
+
+interface ApprovalRecordBase {
+  actorKey: string;
+  actorName: string;
+  requirementKey: string;
+  revision: number;
+  recordedAt: string;
+}
+
+export type ApprovalRecord =
+  | (ApprovalRecordBase & { action: "确认需求" })
+  | (ApprovalRecordBase & {
+      action: "验收结果";
+      evidence: {
+        evidenceKey: string;
+        repositoryKey: string;
+        gitHashAlgorithm: "sha1" | "sha256";
+        commitSha: string;
+        artifactHashAlgorithm: "sha256";
+        artifactHash: string;
+        runnerKey: string;
+        keyId: string;
+        producedAt: string;
+      };
+    });
+
+export interface RequirementWorkflowOptions {
+  tenantKey: string;
+  projectKey: string;
+  clock?: () => Date;
+}
+
+export type DeliveryCandidate = Omit<
+  DeliveryReference,
+  "tenantKey" | "projectKey"
+>;
+
+export interface VerificationTarget extends DeliveryReference {
+  requirementKey: string;
+  revision: number;
+  acceptanceCriteria: Array<{
+    criterionKey: string;
+    title: string;
+  }>;
 }
 
 export interface RequirementPeopleView {
@@ -49,29 +105,55 @@ export interface RequirementPeopleView {
 
 export class RequirementWorkflow {
   readonly #key: string;
+  readonly #tenantKey: string;
+  readonly #projectKey: string;
+  readonly #clock: () => Date;
   readonly #revisions: RequirementRevision[];
+  readonly #approvalRecords: ApprovalRecord[] = [];
   #status: RequirementStatus = "draft";
   #confirmedVersion: number | null = null;
-  #evidence: VerificationEvidence | null = null;
+  #deliveryCandidate: DeliveryReference | null = null;
+  #deliveryCandidateRecordedAtMs: number | null = null;
+  #evidence: VerifiedEvidenceReceipt | null = null;
 
-  private constructor(initialRevision: RequirementRevision) {
+  private constructor(
+    initialRevision: RequirementRevision,
+    options: RequirementWorkflowOptions,
+  ) {
+    if (
+      !internalKeyPattern.test(options.tenantKey.trim()) ||
+      !internalKeyPattern.test(options.projectKey.trim())
+    ) {
+      throw new Error("需求必须绑定租户和项目范围");
+    }
     this.#key = randomUUID();
+    this.#tenantKey = options.tenantKey.trim().toLowerCase();
+    this.#projectKey = options.projectKey.trim().toLowerCase();
+    this.#clock = options.clock ?? (() => new Date());
     this.#revisions = [initialRevision];
   }
 
-  static create(input: {
-    title: string;
-    summary: string;
-    acceptanceCriteria: string[];
-  }): RequirementWorkflow {
+  static create(
+    input: {
+      title: string;
+      summary: string;
+      acceptanceCriteria: string[];
+    },
+    options: RequirementWorkflowOptions,
+  ): RequirementWorkflow {
     RequirementWorkflow.#validateContent(input);
-    return new RequirementWorkflow({
-      version: 1,
-      title: input.title.trim(),
-      summary: input.summary.trim(),
-      acceptanceCriteria: input.acceptanceCriteria.map((item) => item.trim()),
-      changedBy: "创建者"
-    });
+    return new RequirementWorkflow(
+      {
+        version: 1,
+        title: input.title.trim(),
+        summary: input.summary.trim(),
+        acceptanceCriteria: RequirementWorkflow.#createCriteria(
+          input.acceptanceCriteria,
+        ),
+        changedBy: "创建者",
+      },
+      options,
+    );
   }
 
   submitForConfirmation(): void {
@@ -81,18 +163,21 @@ export class RequirementWorkflow {
     this.#status = "awaitingConfirmation";
   }
 
-  confirm(input: { confirmedBy: string; confirmedAt: Date }): void {
+  confirm(input: { actor: ApprovalActor }): void {
     if (this.#status !== "awaitingConfirmation") {
       throw new Error("请先提交需求确认");
     }
-    if (!input.confirmedBy.trim()) {
-      throw new Error("请记录确认人");
-    }
-    if (Number.isNaN(input.confirmedAt.getTime())) {
-      throw new Error("确认时间无效");
-    }
+    const actor = RequirementWorkflow.#validateActor(input.actor, "确认人");
+    const recordedAt = this.#nowIso("确认时间");
 
     this.#confirmedVersion = this.#current.version;
+    this.#approvalRecords.push({
+      action: "确认需求",
+      ...actor,
+      requirementKey: this.#key,
+      revision: this.#current.version,
+      recordedAt,
+    });
     this.#status = "confirmed";
   }
 
@@ -112,7 +197,8 @@ export class RequirementWorkflow {
       title: input.title ?? this.#current.title,
       summary: input.summary ?? this.#current.summary,
       acceptanceCriteria:
-        input.acceptanceCriteria ?? this.#current.acceptanceCriteria
+        input.acceptanceCriteria ??
+        this.#current.acceptanceCriteria.map((item) => item.title),
     };
     RequirementWorkflow.#validateContent(next);
 
@@ -120,8 +206,10 @@ export class RequirementWorkflow {
       version: this.#current.version + 1,
       title: next.title.trim(),
       summary: next.summary.trim(),
-      acceptanceCriteria: next.acceptanceCriteria.map((item) => item.trim()),
-      changedBy: input.changedBy.trim()
+      acceptanceCriteria: RequirementWorkflow.#createCriteria(
+        next.acceptanceCriteria,
+      ),
+      changedBy: input.changedBy.trim(),
     });
     this.#confirmedVersion = null;
     this.#status = "needsReconfirmation";
@@ -137,34 +225,126 @@ export class RequirementWorkflow {
     this.#status = "inDelivery";
   }
 
-  submitForAcceptance(evidence: VerificationEvidence): void {
+  recordDeliveryCandidate(candidate: DeliveryCandidate): void {
+    if (this.#status !== "inDelivery") {
+      throw new Error("需求进入交付后才能记录交付候选");
+    }
+    const recordedAtMs = this.#clockTimestamp("交付候选记录时间");
+    const parsed = DeliveryReferenceSchema.safeParse({
+      repositoryKey: candidate.repositoryKey,
+      gitHashAlgorithm: candidate.gitHashAlgorithm,
+      commitSha: candidate.commitSha,
+      artifactHashAlgorithm: candidate.artifactHashAlgorithm,
+      artifactHash: candidate.artifactHash,
+      tenantKey: this.#tenantKey,
+      projectKey: this.#projectKey,
+    });
+    if (!parsed.success) {
+      throw new Error("交付候选必须绑定代码仓库、完整提交和产物摘要");
+    }
+    this.#deliveryCandidate = Object.freeze({ ...parsed.data });
+    this.#deliveryCandidateRecordedAtMs = recordedAtMs;
+  }
+
+  getVerificationTarget(): VerificationTarget {
+    if (this.#status !== "inDelivery") {
+      throw new Error("需求进入交付后才能创建验证目标");
+    }
+    if (!this.#deliveryCandidate) {
+      throw new Error("请先记录代码提交和交付产物，再创建验证目标");
+    }
+    return {
+      ...this.#deliveryCandidate,
+      requirementKey: this.#key,
+      revision: this.#current.version,
+      acceptanceCriteria: this.#current.acceptanceCriteria.map((criterion) => ({
+        ...criterion,
+      })),
+    };
+  }
+
+  submitForAcceptance(evidence: VerifiedEvidenceReceipt): void {
     if (this.#status !== "inDelivery") {
       throw new Error("需求尚未进入交付，不能提交验收");
     }
-    if (!evidence.independentlyVerified) {
-      throw new Error("验证证据必须由独立执行者产生");
+    try {
+      VerifiedEvidenceReceipt.assertAuthentic(evidence);
+    } catch {
+      throw new Error("验证证据必须经过受信任的独立 Runner 验签");
     }
-    if (!evidence.producedBy.trim()) {
-      throw new Error("请记录验证证据的执行者");
+    VerifiedEvidenceReceipt.assertUsableAt(evidence, this.#clock());
+    if (
+      evidence.requirementKey !== this.#key ||
+      evidence.requirementRevision !== this.#current.version
+    ) {
+      throw new Error("验证证据与当前需求版本不匹配");
     }
-    if (evidence.total < 1 || evidence.passed !== evidence.total) {
+    if (
+      !this.#deliveryCandidate ||
+      evidence.tenantKey !== this.#deliveryCandidate.tenantKey ||
+      evidence.projectKey !== this.#deliveryCandidate.projectKey ||
+      evidence.repositoryKey !== this.#deliveryCandidate.repositoryKey ||
+      evidence.gitHashAlgorithm !== this.#deliveryCandidate.gitHashAlgorithm ||
+      evidence.commitSha !== this.#deliveryCandidate.commitSha ||
+      evidence.artifactHashAlgorithm !==
+        this.#deliveryCandidate.artifactHashAlgorithm ||
+      evidence.artifactHash !== this.#deliveryCandidate.artifactHash
+    ) {
+      throw new Error("验证证据与当前交付候选不匹配");
+    }
+    if (
+      this.#deliveryCandidateRecordedAtMs === null ||
+      Date.parse(evidence.producedAt) < this.#deliveryCandidateRecordedAtMs
+    ) {
+      throw new Error("验证证据早于当前交付候选，不能用于验收");
+    }
+    if (evidence.checks.some((check) => check.status !== "passed")) {
       throw new Error("所有验收条件通过后才能提交产品验收");
     }
+    const expected = new Set(
+      this.#current.acceptanceCriteria.map((item) => item.criterionKey),
+    );
+    const actual = new Set(evidence.checks.map((item) => item.criterionKey));
+    if (
+      actual.size !== evidence.checks.length ||
+      actual.size !== expected.size ||
+      [...expected].some((criterionKey) => !actual.has(criterionKey))
+    ) {
+      throw new Error("验证证据没有覆盖全部验收条件");
+    }
 
-    this.#evidence = { ...evidence, producedBy: evidence.producedBy.trim() };
+    this.#evidence = evidence;
     this.#status = "awaitingAcceptance";
   }
 
-  accept(input: { acceptedBy: string; acceptedAt: Date }): void {
+  accept(input: { actor: ApprovalActor }): void {
     if (this.#status !== "awaitingAcceptance") {
       throw new Error("请先完成独立验证并提交产品验收");
     }
-    if (!input.acceptedBy.trim()) {
-      throw new Error("请记录验收人");
+    const actor = RequirementWorkflow.#validateActor(input.actor, "验收人");
+    const recordedAt = this.#nowIso("验收时间");
+    const evidence = this.#evidence;
+    if (!evidence) {
+      throw new Error("验收证据缺失，请重新执行独立验证");
     }
-    if (Number.isNaN(input.acceptedAt.getTime())) {
-      throw new Error("验收时间无效");
-    }
+    this.#approvalRecords.push({
+      action: "验收结果",
+      ...actor,
+      requirementKey: this.#key,
+      revision: this.#current.version,
+      recordedAt,
+      evidence: {
+        evidenceKey: evidence.evidenceKey,
+        repositoryKey: evidence.repositoryKey,
+        gitHashAlgorithm: evidence.gitHashAlgorithm,
+        commitSha: evidence.commitSha,
+        artifactHashAlgorithm: evidence.artifactHashAlgorithm,
+        artifactHash: evidence.artifactHash,
+        runnerKey: evidence.runnerKey,
+        keyId: evidence.keyId,
+        producedAt: evidence.producedAt,
+      },
+    });
     this.#status = "completed";
   }
 
@@ -177,13 +357,21 @@ export class RequirementWorkflow {
       status: status.label,
       nextStep: status.nextStep,
       acceptanceProgress: this.#evidence
-        ? `${this.#evidence.passed} / ${this.#evidence.total} 项已通过`
-        : "尚未开始验证"
+        ? `${this.#evidence.checks.length} / ${this.#current.acceptanceCriteria.length} 项已通过`
+        : "尚未开始验证",
     };
   }
 
   get internalKey(): string {
     return this.#key;
+  }
+
+  listApprovalRecords(): ApprovalRecord[] {
+    return this.#approvalRecords.map((record) =>
+      record.action === "验收结果"
+        ? { ...record, evidence: { ...record.evidence } }
+        : { ...record },
+    );
   }
 
   get #current(): RequirementRevision {
@@ -204,24 +392,24 @@ export class RequirementWorkflow {
       case "awaitingConfirmation":
         return {
           label: "等待负责人确认",
-          nextStep: "请负责人确认需求内容"
+          nextStep: "请负责人确认需求内容",
         };
       case "confirmed":
         return {
           label: "已确认，等待交付",
-          nextStep: "可以安排 AI 开始实现"
+          nextStep: "可以安排 AI 开始实现",
         };
       case "needsReconfirmation":
         return {
           label: "内容已更新，等待重新确认",
-          nextStep: "请负责人确认最新版本"
+          nextStep: "请负责人确认最新版本",
         };
       case "inDelivery":
         return { label: "AI 正在实现", nextStep: "等待独立验证完成" };
       case "awaitingAcceptance":
         return {
           label: "等待产品验收",
-          nextStep: "请体验 Preview 并确认结果"
+          nextStep: "请体验 Preview 并确认结果",
         };
       case "completed":
         return { label: "已完成", nextStep: "无需处理" };
@@ -246,5 +434,34 @@ export class RequirementWorkflow {
       throw new Error("至少需要一个可验证的验收条件");
     }
   }
-}
 
+  static #createCriteria(
+    titles: string[],
+  ): RequirementRevision["acceptanceCriteria"] {
+    return titles.map((title) => ({
+      criterionKey: randomUUID(),
+      title: title.trim(),
+    }));
+  }
+
+  static #validateActor(actor: ApprovalActor, roleName: string): ApprovalActor {
+    const actorKey = actor.actorKey.trim();
+    const actorName = actor.actorName.trim();
+    if (!actorKey || !actorName) {
+      throw new Error(`请记录${roleName}`);
+    }
+    return { actorKey, actorName };
+  }
+
+  #nowIso(fieldName: string): string {
+    return new Date(this.#clockTimestamp(fieldName)).toISOString();
+  }
+
+  #clockTimestamp(fieldName: string): number {
+    const value = this.#clock().getTime();
+    if (!Number.isFinite(value)) {
+      throw new Error(`${fieldName}无效`);
+    }
+    return value;
+  }
+}

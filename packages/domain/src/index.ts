@@ -1,9 +1,23 @@
 export { RequirementWorkflow } from "./requirement-workflow.js";
 export type {
+  ApprovalActor,
+  ApprovalRecord,
+  DeliveryCandidate,
   RequirementPeopleView,
   RequirementRevisionInput,
-  VerificationEvidence
+  RequirementWorkflowOptions,
+  VerificationTarget,
 } from "./requirement-workflow.js";
+
+export { EvidenceAuthority, VerifiedEvidenceReceipt } from "./evidence.js";
+export type {
+  EvidenceCheck,
+  EvidenceAuthorityOptions,
+  EvidencePayload,
+  RunnerScope,
+  SignedEvidence,
+  TrustedRunner,
+} from "./evidence.js";
 
 export { DeliveryQueue, WorkerRegistry } from "./worker-scheduler.js";
 export type {
@@ -12,6 +26,5 @@ export type {
   WorkerPeopleView,
   WorkerRegistration,
   WorkerRegistryOptions,
-  WorkerSession
+  WorkerSession,
 } from "./worker-scheduler.js";
-

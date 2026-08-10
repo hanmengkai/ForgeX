@@ -12,7 +12,7 @@
   "scripts": {
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "format:check": "prettier --check ."
   },
   "engines": {
@@ -29,4 +29,3 @@
     "zod": "^4.0.17"
   }
 }
-

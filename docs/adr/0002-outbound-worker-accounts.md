@@ -19,4 +19,3 @@ Control Plane 不接收 Codex 密码、OAuth Token、Cookie 或 API Key。首版
 ## 后果
 
 Worker 必须支持断线重连、租约续期、超时回收和幂等结果上报。设备离线时，平台只能重新排队，不能伪造完成状态。
-

@@ -17,4 +17,3 @@
 ## 后果
 
 当企业客户需要 Java 控制面时，通过稳定的 HTTP/Event/Artifact Contract 增加实现，不改变 Worker 协议和领域契约。
-

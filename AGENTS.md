@@ -20,4 +20,3 @@ npm test
 npm run typecheck
 npm run test:coverage
 ```
-

@@ -79,7 +79,7 @@ export class WorkerRegistry {
     const normalized = this.#normalizeRegistration(registration);
     const timestamp = toTimestamp(now, "设备连接时间");
     const existing = [...this.#workers.values()].find(
-      (item) => item.accountFingerprint === normalized.accountFingerprint
+      (item) => item.accountFingerprint === normalized.accountFingerprint,
     );
 
     if (existing) {
@@ -104,7 +104,7 @@ export class WorkerRegistry {
       sessionKey: randomUUID(),
       generation: 1,
       lastHeartbeatAtMs: timestamp,
-      activeAssignmentKey: null
+      activeAssignmentKey: null,
     };
     this.#workers.set(workerKey, worker);
     return this.#sessionOf(worker);
@@ -120,7 +120,7 @@ export class WorkerRegistry {
     return [...this.#workers.values()].map((worker) => {
       const online = this.#isOnline(worker, timestamp);
       const currentWork = worker.activeAssignmentKey
-        ? this.#workTitles.get(worker.activeAssignmentKey) ?? null
+        ? (this.#workTitles.get(worker.activeAssignmentKey) ?? null)
         : null;
       return {
         deviceName: worker.deviceName,
@@ -130,14 +130,14 @@ export class WorkerRegistry {
             ? "正在工作"
             : "空闲"
           : "离线",
-        currentWork: online ? currentWork : null
+        currentWork: online ? currentWork : null,
       };
     });
   }
 
   findAvailable(
     requiredCapabilities: string[],
-    now: Date
+    now: Date,
   ): WorkerSelection | null {
     const timestamp = toTimestamp(now, "派发时间");
     const worker = [...this.#workers.values()].find(
@@ -145,22 +145,22 @@ export class WorkerRegistry {
         this.#isOnline(candidate, timestamp) &&
         candidate.activeAssignmentKey === null &&
         requiredCapabilities.every((capability) =>
-          candidate.capabilities.includes(capability)
-        )
+          candidate.capabilities.includes(capability),
+        ),
     );
     if (!worker) {
       return null;
     }
     return {
       ...this.#sessionOf(worker),
-      nextFencingToken: this.#nextFencingToken++
+      nextFencingToken: this.#nextFencingToken++,
     };
   }
 
   assign(
     selection: WorkerSelection,
     assignmentKey: string,
-    workTitle: string
+    workTitle: string,
   ): void {
     const worker = this.#assertCurrentSession(selection);
     if (worker.activeAssignmentKey) {
@@ -212,7 +212,7 @@ export class WorkerRegistry {
       tenantKey: worker.tenantKey,
       workerKey: worker.workerKey,
       sessionKey: worker.sessionKey,
-      generation: worker.generation
+      generation: worker.generation,
     };
   }
 
@@ -238,7 +238,7 @@ export class WorkerRegistry {
       deviceName,
       accountName,
       accountFingerprint,
-      capabilities: [...new Set(registration.capabilities)]
+      capabilities: [...new Set(registration.capabilities)],
     };
   }
 }
@@ -286,10 +286,7 @@ export class DeliveryQueue {
   readonly #registry: WorkerRegistry;
   readonly #leaseDurationMs: number;
 
-  constructor(
-    registry: WorkerRegistry,
-    options: { leaseDurationMs: number }
-  ) {
+  constructor(registry: WorkerRegistry, options: { leaseDurationMs: number }) {
     if (options.leaseDurationMs < 1) {
       throw new Error("任务租约时间必须大于零");
     }
@@ -310,21 +307,21 @@ export class DeliveryQueue {
     this.#pending.push({
       ...work,
       title: work.title.trim(),
-      requiredCapabilities: [...new Set(work.requiredCapabilities)]
+      requiredCapabilities: [...new Set(work.requiredCapabilities)],
     });
   }
 
   dispatch(now: Date): DeliveryAssignment[] {
     const nowMs = toTimestamp(now, "派发时间");
     const assignments: DeliveryAssignment[] = [];
-    for (let index = 0; index < this.#pending.length; ) {
+    for (let index = 0; index < this.#pending.length;) {
       const work = this.#pending[index];
       if (!work) {
         break;
       }
       const selection = this.#registry.findAvailable(
         work.requiredCapabilities,
-        now
+        now,
       );
       if (!selection) {
         index += 1;
@@ -339,7 +336,7 @@ export class DeliveryQueue {
         workTitle: work.title,
         fencingToken: selection.nextFencingToken,
         leasedUntilMs: nowMs + this.#leaseDurationMs,
-        requiredCapabilities: [...work.requiredCapabilities]
+        requiredCapabilities: [...work.requiredCapabilities],
       };
       this.#registry.assign(selection, assignmentKey, work.title);
       this.#active.set(assignmentKey, active);
@@ -363,10 +360,9 @@ export class DeliveryQueue {
     return new Date(active.leasedUntilMs).toISOString();
   }
 
-  completeLease(input: {
-    assignment: DeliveryAssignment;
-    completedAt: Date;
-  }): { alreadyCompleted: boolean } {
+  completeLease(input: { assignment: DeliveryAssignment; completedAt: Date }): {
+    alreadyCompleted: boolean;
+  } {
     const completed = this.#completed.get(input.assignment.assignmentKey);
     if (completed) {
       this.#assertSameLease(completed, input.assignment);
@@ -387,7 +383,7 @@ export class DeliveryQueue {
       workerKey: active.workerKey,
       sessionKey: active.sessionKey,
       generation: active.generation,
-      fencingToken: active.fencingToken
+      fencingToken: active.fencingToken,
     });
     return { alreadyCompleted: false };
   }
@@ -404,7 +400,7 @@ export class DeliveryQueue {
       this.#pending.push({
         key: assignment.workKey,
         title: assignment.workTitle,
-        requiredCapabilities: [...assignment.requiredCapabilities]
+        requiredCapabilities: [...assignment.requiredCapabilities],
       });
       reclaimed.push(assignment.workTitle);
     }
@@ -418,12 +414,12 @@ export class DeliveryQueue {
     return [
       ...this.#pending.map((work) => ({
         title: work.title,
-        status: "等待空闲设备" as const
+        status: "等待空闲设备" as const,
       })),
       ...[...this.#active.values()].map((assignment) => ({
         title: assignment.workTitle,
-        status: "正在交付" as const
-      }))
+        status: "正在交付" as const,
+      })),
     ];
   }
 
@@ -438,7 +434,7 @@ export class DeliveryQueue {
 
   #assertSameLease(
     stored: CompletedAssignment | ActiveAssignment,
-    input: DeliveryAssignment
+    input: DeliveryAssignment,
   ): void {
     if (
       stored.tenantKey !== input.tenantKey ||
@@ -461,7 +457,7 @@ export class DeliveryQueue {
       sessionKey: assignment.sessionKey,
       generation: assignment.generation,
       fencingToken: assignment.fencingToken,
-      leasedUntil: new Date(assignment.leasedUntilMs).toISOString()
+      leasedUntil: new Date(assignment.leasedUntilMs).toISOString(),
     };
   }
 }

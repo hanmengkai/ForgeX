@@ -12,17 +12,17 @@ describe("RequirementSpec", () => {
         {
           role: "物业前台",
           need: "查看今天即将到访的访客",
-          value: "提前做好接待准备"
-        }
+          value: "提前做好接待准备",
+        },
       ],
       acceptanceCriteria: [
         {
           title: "访客可以提交预约",
           description: "填写姓名、手机号和到访时间后能够提交",
-          priority: "must"
-        }
+          priority: "must",
+        },
       ],
-      openQuestions: []
+      openQuestions: [],
     });
 
     expect(result.success).toBe(true);
@@ -32,10 +32,16 @@ describe("RequirementSpec", () => {
     const result = RequirementSpecSchema.safeParse({
       schemaVersion: 1,
       title: "REQ-102",
-      goal: "增加功能",
+      goal: "让访客到访过程更顺畅",
       userStories: [],
-      acceptanceCriteria: [],
-      openQuestions: []
+      acceptanceCriteria: [
+        {
+          title: "访客可以提交预约",
+          description: "填写必要信息后能够提交预约",
+          priority: "must",
+        },
+      ],
+      openQuestions: [],
     });
 
     expect(result.success).toBe(false);
@@ -48,10 +54,9 @@ describe("RequirementSpec", () => {
       goal: "让访客到访过程更顺畅",
       userStories: [],
       acceptanceCriteria: [],
-      openQuestions: []
+      openQuestions: [],
     });
 
     expect(result.success).toBe(false);
   });
 });
-

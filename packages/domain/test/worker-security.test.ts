@@ -9,14 +9,14 @@ const registration = (index: number) => ({
   deviceName: `研发电脑 ${index}`,
   accountName: `Codex 账户 ${index}`,
   accountFingerprint: accountFingerprint(index),
-  capabilities: ["typescript"]
+  capabilities: ["typescript"],
 });
 
 const createRegistry = (extra: { offlineAfterMs?: number } = {}) =>
   new WorkerRegistry({
     tenantKey: "tenant-a",
     maxAccounts: 5,
-    ...extra
+    ...extra,
   });
 
 describe("Worker 会话隔离", () => {
@@ -25,14 +25,14 @@ describe("Worker 会话隔离", () => {
 
     const session = registry.register(
       registration(1),
-      new Date("2026-08-10T00:00:00Z")
+      new Date("2026-08-10T00:00:00Z"),
     );
 
     expect(session).toMatchObject({
       tenantKey: "tenant-a",
       generation: 1,
       workerKey: expect.any(String),
-      sessionKey: expect.any(String)
+      sessionKey: expect.any(String),
     });
   });
 
@@ -40,23 +40,23 @@ describe("Worker 会话隔离", () => {
     const registry = createRegistry();
     const first = registry.register(
       registration(1),
-      new Date("2026-08-10T00:00:00Z")
+      new Date("2026-08-10T00:00:00Z"),
     );
     const second = registry.register(
       {
         ...registration(1),
-        accountFingerprint: `  ${accountFingerprint(1).toUpperCase()}  `
+        accountFingerprint: `  ${accountFingerprint(1).toUpperCase()}  `,
       },
-      new Date("2026-08-10T00:00:01Z")
+      new Date("2026-08-10T00:00:01Z"),
     );
 
     expect(second.workerKey).toBe(first.workerKey);
     expect(second.generation).toBe(2);
     expect(() =>
-      registry.heartbeat(first, new Date("2026-08-10T00:00:02Z"))
+      registry.heartbeat(first, new Date("2026-08-10T00:00:02Z")),
     ).toThrow("设备连接已经失效，请重新连接");
     expect(() =>
-      registry.heartbeat(second, new Date("2026-08-10T00:00:02Z"))
+      registry.heartbeat(second, new Date("2026-08-10T00:00:02Z")),
     ).not.toThrow();
   });
 
@@ -67,9 +67,9 @@ describe("Worker 会话隔离", () => {
 
     connectedAt.setUTCFullYear(2099);
 
-    expect(registry.listForPeople(new Date("2026-08-10T00:00:02Z"))[0]?.status).toBe(
-      "离线"
-    );
+    expect(
+      registry.listForPeople(new Date("2026-08-10T00:00:02Z"))[0]?.status,
+    ).toBe("离线");
   });
 });
 
@@ -78,7 +78,11 @@ describe("安全任务租约", () => {
     const registry = createRegistry();
     registry.register(registration(1), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 1_000 });
-    queue.enqueue({ key: "work-a", title: "访客预约", requiredCapabilities: [] });
+    queue.enqueue({
+      key: "work-a",
+      title: "访客预约",
+      requiredCapabilities: [],
+    });
 
     const [assignment] = queue.dispatch(new Date("2026-08-10T00:00:01Z"));
 
@@ -86,7 +90,7 @@ describe("安全任务租约", () => {
       tenantKey: "tenant-a",
       sessionKey: expect.any(String),
       fencingToken: 1,
-      leasedUntil: "2026-08-10T00:00:02.000Z"
+      leasedUntil: "2026-08-10T00:00:02.000Z",
     });
   });
 
@@ -94,20 +98,24 @@ describe("安全任务租约", () => {
     const registry = createRegistry();
     registry.register(registration(1), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 1_000 });
-    queue.enqueue({ key: "work-a", title: "访客预约", requiredCapabilities: [] });
+    queue.enqueue({
+      key: "work-a",
+      title: "访客预约",
+      requiredCapabilities: [],
+    });
     const [assignment] = queue.dispatch(new Date("2026-08-10T00:00:01Z"));
 
     expect(() =>
       queue.renewLease({
         assignment: assignment!,
-        renewedAt: new Date("2026-08-10T00:00:03Z")
-      })
+        renewedAt: new Date("2026-08-10T00:00:03Z"),
+      }),
     ).toThrow("任务租约已经过期，请重新领取");
     expect(() =>
       queue.completeLease({
         assignment: assignment!,
-        completedAt: new Date("2026-08-10T00:00:03Z")
-      })
+        completedAt: new Date("2026-08-10T00:00:03Z"),
+      }),
     ).toThrow("任务租约已经过期，请重新领取");
   });
 
@@ -115,15 +123,23 @@ describe("安全任务租约", () => {
     const registry = createRegistry();
     registry.register(registration(1), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 10_000 });
-    queue.enqueue({ key: "work-a", title: "访客预约", requiredCapabilities: [] });
+    queue.enqueue({
+      key: "work-a",
+      title: "访客预约",
+      requiredCapabilities: [],
+    });
     const [assignment] = queue.dispatch(new Date("2026-08-10T00:00:01Z"));
     const completedAt = new Date("2026-08-10T00:00:02Z");
 
-    expect(queue.completeLease({ assignment: assignment!, completedAt })).toEqual({
-      alreadyCompleted: false
+    expect(
+      queue.completeLease({ assignment: assignment!, completedAt }),
+    ).toEqual({
+      alreadyCompleted: false,
     });
-    expect(queue.completeLease({ assignment: assignment!, completedAt })).toEqual({
-      alreadyCompleted: true
+    expect(
+      queue.completeLease({ assignment: assignment!, completedAt }),
+    ).toEqual({
+      alreadyCompleted: true,
     });
   });
 
@@ -131,14 +147,17 @@ describe("安全任务租约", () => {
     const registry = createRegistry();
     registry.register(registration(1), new Date("2026-08-10T00:00:00Z"));
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 1_000 });
-    queue.enqueue({ key: "work-a", title: "访客预约", requiredCapabilities: [] });
+    queue.enqueue({
+      key: "work-a",
+      title: "访客预约",
+      requiredCapabilities: [],
+    });
     const [assignment] = queue.dispatch(new Date("2026-08-10T00:00:01Z"));
 
     assignment!.leasedUntil = "2099-01-01T00:00:00.000Z";
 
     expect(queue.reclaimExpired(new Date("2026-08-10T00:00:03Z"))).toEqual([
-      "访客预约"
+      "访客预约",
     ]);
   });
 });
-

@@ -29,4 +29,3 @@ npm run typecheck
 ```
 
 详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。
-
