@@ -56,4 +56,25 @@ describe("开源交付包装", () => {
       expect(workflow).toContain(command);
     }
   });
+
+  it("生产 Node 进程解析编译产物，测试环境仍可直接加载源码", async () => {
+    for (const packagePath of [
+      "packages/contracts/package.json",
+      "packages/domain/package.json",
+      "packages/extensions/package.json",
+      "packages/application/package.json",
+      "packages/postgres/package.json",
+    ]) {
+      const manifest = JSON.parse(await read(packagePath)) as {
+        exports?: {
+          "."?: { types?: string; development?: string; default?: string };
+        };
+      };
+      expect(manifest.exports?.["."]).toEqual({
+        types: "./dist/index.d.ts",
+        development: "./src/index.ts",
+        default: "./dist/index.js",
+      });
+    }
+  });
 });
