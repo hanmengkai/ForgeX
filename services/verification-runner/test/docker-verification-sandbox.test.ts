@@ -59,7 +59,10 @@ const fixture = async () => {
   temporaryRoots.push(root);
   await mkdir(root, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") await chmod(root, 0o700);
-  const dockerPath = path.join(root, process.platform === "win32" ? "docker.exe" : "docker");
+  const dockerPath = path.join(
+    root,
+    process.platform === "win32" ? "docker.exe" : "docker",
+  );
   await writeFile(dockerPath, "trusted docker fixture", { mode: 0o700 });
   if (process.platform !== "win32") await chmod(dockerPath, 0o700);
   return {
@@ -83,6 +86,7 @@ describe("DockerVerificationSandbox", () => {
     const sandbox = new DockerVerificationSandbox({
       dockerCommandPath: dockerPath,
       dockerCommandSha256: dockerSha256,
+      containerUser: "12345:23456",
       runProcess,
       assertWindowsTrustedPath: async () => Promise.resolve(),
     });
@@ -111,13 +115,52 @@ describe("DockerVerificationSandbox", () => {
         "--cap-drop",
         "ALL",
         "--user",
-        "65532:65532",
+        "12345:23456",
         plan.suites[0]!.execution.image,
         "npm",
         "test",
       ]),
     );
+    expect(first.args).toContain(
+      `type=bind,source=${workspacePath},target=/workspace,readonly`,
+    );
     expect(first.args.join(" ")).not.toContain("sh -c");
+  });
+
+  it("执行超时后按不可预测容器名强制清理并确认容器已经消失", async () => {
+    const { root, dockerPath, dockerSha256 } = await fixture();
+    const workspacePath = path.join(root, "workspace");
+    await mkdir(workspacePath);
+    const runProcess = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("verification_timeout"))
+      .mockResolvedValueOnce({ exitCode: 0 })
+      .mockResolvedValueOnce({ exitCode: 1 });
+    const sandbox = new DockerVerificationSandbox({
+      dockerCommandPath: dockerPath,
+      dockerCommandSha256: dockerSha256,
+      containerUser: "12345:23456",
+      runProcess,
+      assertWindowsTrustedPath: async () => Promise.resolve(),
+    });
+
+    await expect(sandbox.run({ workspacePath, plan })).rejects.toThrow(
+      "受控容器",
+    );
+    const runArgs = runProcess.mock.calls[0]![0]!.args;
+    const nameIndex = runArgs.indexOf("--name");
+    expect(nameIndex).toBeGreaterThan(0);
+    const containerName = runArgs[nameIndex + 1];
+    expect(containerName).toMatch(/^forgex-verification-[a-f0-9-]+$/u);
+    expect(runProcess.mock.calls[1]![0]!.args).toEqual([
+      "rm",
+      "--force",
+      containerName,
+    ]);
+    expect(runProcess.mock.calls[2]![0]!.args).toEqual([
+      "inspect",
+      containerName,
+    ]);
   });
 
   it("每次执行前重验 Docker 程序摘要，并把基础设施错误转换为固定文案", async () => {
@@ -131,6 +174,7 @@ describe("DockerVerificationSandbox", () => {
     const sandbox = new DockerVerificationSandbox({
       dockerCommandPath: dockerPath,
       dockerCommandSha256: dockerSha256,
+      containerUser: "12345:23456",
       runProcess,
       assertWindowsTrustedPath: async () => Promise.resolve(),
     });
@@ -142,9 +186,7 @@ describe("DockerVerificationSandbox", () => {
     expect((error as Error).message).not.toContain("local-secret-marker");
 
     await writeFile(dockerPath, "replaced docker fixture");
-    await expect(sandbox.run({ workspacePath, plan })).rejects.toThrow(
-      "摘要",
-    );
+    await expect(sandbox.run({ workspacePath, plan })).rejects.toThrow("摘要");
     expect(runProcess).toHaveBeenCalledOnce();
   });
 });
