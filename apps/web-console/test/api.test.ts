@@ -93,6 +93,13 @@ describe("createHttpForgeXClient", () => {
       supportingText: "读取自动放行，变更需要确认",
       links: { self },
     };
+    const trustedSkill = {
+      ...valid,
+      name: "需求风险检查",
+      links: {
+        self: "/api/v1/extensions/skills/44444444-4444-4444-8444-444444444444",
+      },
+    };
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -100,7 +107,7 @@ describe("createHttpForgeXClient", () => {
           JSON.stringify({
             data: {
               businessKnowledge: [],
-              teamCapabilities: [],
+              teamCapabilities: [trustedSkill],
               externalTools: [valid],
             },
           }),
@@ -121,7 +128,7 @@ describe("createHttpForgeXClient", () => {
 
     await expect(client.listExtensions()).resolves.toEqual({
       businessKnowledge: [],
-      teamCapabilities: [],
+      teamCapabilities: [trustedSkill],
       externalTools: [valid],
     });
     await expect(client.listExtensions()).rejects.toThrow("扩展目录格式不正确");

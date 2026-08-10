@@ -213,6 +213,35 @@ export const WorkerLeaseCommandSchema = z
   })
   .strict();
 
+const extensionSelfPath = z
+  .string()
+  .regex(
+    /^\/api\/v1\/extensions\/(?:skills\/)?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
+
+export const ExtensionItemForPeopleSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100),
+    summary: z.string().trim().min(4).max(500),
+    status: z.enum(["可使用", "正在更新", "需要处理", "暂不可用"]),
+    detail: z.string().trim().min(2).max(200),
+    supportingText: z.string().trim().min(2).max(200),
+    links: z.object({ self: extensionSelfPath }).strict(),
+  })
+  .strict();
+
+export const ExtensionCatalogOverviewForPeopleSchema = z
+  .object({
+    businessKnowledge: z.array(ExtensionItemForPeopleSchema).max(100),
+    teamCapabilities: z.array(ExtensionItemForPeopleSchema).max(100),
+    externalTools: z.array(ExtensionItemForPeopleSchema).max(100),
+  })
+  .strict();
+
+export const ExtensionCatalogResponseSchema = z
+  .object({ data: ExtensionCatalogOverviewForPeopleSchema })
+  .strict();
+
 export type RequirementSpec = z.infer<typeof RequirementSpecSchema>;
 export type UserStory = z.infer<typeof UserStorySchema>;
 export type AcceptanceCriterion = z.infer<typeof AcceptanceCriterionSchema>;
@@ -231,4 +260,10 @@ export type StartDeliveryCommandPayload = z.infer<
 >;
 export type WorkerLeaseCommandPayload = z.infer<
   typeof WorkerLeaseCommandSchema
+>;
+export type ExtensionItemForPeople = z.infer<
+  typeof ExtensionItemForPeopleSchema
+>;
+export type ExtensionCatalogOverviewForPeople = z.infer<
+  typeof ExtensionCatalogOverviewForPeopleSchema
 >;

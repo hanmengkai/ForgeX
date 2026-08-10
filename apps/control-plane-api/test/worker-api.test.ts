@@ -4,11 +4,14 @@ import {
   InMemoryRequirementRepository,
   InMemoryExtensionCatalogRepository,
   InMemoryPreviewArtifactStore,
+  InMemorySkillArtifactStore,
+  InMemorySkillRegistryRepository,
   InMemoryWorkerFleetRepository,
   type AuthenticatedPrincipal,
   type RequirementTransaction,
   type SessionAuthenticator,
 } from "@forgex/application";
+import { SkillEvaluationAuthority } from "@forgex/extensions";
 
 import { buildControlPlaneApi } from "../src/index.js";
 
@@ -116,6 +119,9 @@ const createTestApp = (
   const app = buildControlPlaneApi({
     authenticator,
     extensionCatalogRepository: new InMemoryExtensionCatalogRepository(),
+    skillRegistryRepository: new InMemorySkillRegistryRepository(),
+    skillArtifactStore: new InMemorySkillArtifactStore(),
+    skillEvaluationAuthority: new SkillEvaluationAuthority({ evaluators: [] }),
     requirementRepository,
     previewArtifactStore: new InMemoryPreviewArtifactStore(),
     workerFleetRepository,

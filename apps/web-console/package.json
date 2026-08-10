@@ -8,6 +8,7 @@
     "dev": "vite"
   },
   "dependencies": {
+    "@forgex/contracts": "0.1.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "zod": "^4.0.17"

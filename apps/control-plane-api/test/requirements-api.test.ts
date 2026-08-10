@@ -6,11 +6,18 @@ import {
   InMemoryRequirementRepository,
   InMemoryExtensionCatalogRepository,
   InMemoryPreviewArtifactStore,
+  InMemorySkillArtifactStore,
+  InMemorySkillRegistryRepository,
   InMemoryWorkerFleetRepository,
   RequirementApplicationService,
+  SkillRegistryApplicationService,
   type AuthenticatedPrincipal,
   type SessionAuthenticator,
 } from "@forgex/application";
+import {
+  SkillEvaluationAuthority,
+  SkillPackageCodec,
+} from "@forgex/extensions";
 
 import { buildControlPlaneApi } from "../src/index.js";
 
@@ -75,6 +82,11 @@ const validRequirement = {
 const createTestApp = () => {
   const repository = new InMemoryRequirementRepository();
   const extensionCatalogRepository = new InMemoryExtensionCatalogRepository();
+  const skillRegistryRepository = new InMemorySkillRegistryRepository();
+  const skillArtifactStore = new InMemorySkillArtifactStore();
+  const skillEvaluationAuthority = new SkillEvaluationAuthority({
+    evaluators: [],
+  });
   const previewArtifactStore = new InMemoryPreviewArtifactStore();
   const sessions = new Map<string, AuthenticatedPrincipal>([
     ["product-session", productOwner],
@@ -93,6 +105,9 @@ const createTestApp = () => {
   const app = buildControlPlaneApi({
     authenticator,
     extensionCatalogRepository,
+    skillRegistryRepository,
+    skillArtifactStore,
+    skillEvaluationAuthority,
     requirementRepository: repository,
     previewArtifactStore,
     workerFleetRepository: new InMemoryWorkerFleetRepository(),
@@ -104,11 +119,14 @@ const createTestApp = () => {
     repository,
     previewArtifactStore,
     extensionCatalogRepository,
+    skillRegistryRepository,
+    skillArtifactStore,
+    skillEvaluationAuthority,
   };
 };
 
 describe("需求 API", () => {
-  it("扩展目录按业务资料、团队能力和外部工具返回人性化视图", async () => {
+  it("扩展目录返回可寻址的人性化业务资料视图", async () => {
     const { app, extensionCatalogRepository } = createTestApp();
     await extensionCatalogRepository.publish({
       schemaVersion: 1,
@@ -116,15 +134,13 @@ describe("需求 API", () => {
       tenantKey,
       projectKey,
       revision: 1,
-      kind: "skill",
-      name: "需求风险检查",
-      summary: "在进入开发前检查遗漏、歧义和高风险变更",
+      kind: "knowledge",
+      name: "访客业务资料",
+      summary: "物业访客预约的规则、术语和历史决策",
       status: "ready",
-      version: "1.0.0",
-      compatibleBlueprints: ["Web 应用"],
-      successRate: 94,
-      evaluationCount: 126,
-      updatedAt: "2026-08-10T06:00:00.000Z",
+      sourceCount: 12,
+      classification: "team",
+      lastSyncedAt: "2026-08-10T06:00:00.000Z",
     });
 
     const response = await app.inject({
@@ -136,19 +152,19 @@ describe("需求 API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       data: {
-        businessKnowledge: [],
-        teamCapabilities: [
+        businessKnowledge: [
           {
-            name: "需求风险检查",
-            summary: "在进入开发前检查遗漏、歧义和高风险变更",
+            name: "访客业务资料",
+            summary: "物业访客预约的规则、术语和历史决策",
             status: "可使用",
-            detail: "版本 1.0.0 · 已验证 126 次",
-            supportingText: "成功率 94%",
+            detail: "已整理 12 份资料",
+            supportingText: "项目成员可使用",
             links: {
               self: "/api/v1/extensions/99999999-9999-4999-8999-999999999999",
             },
           },
         ],
+        teamCapabilities: [],
         externalTools: [],
       },
     });
@@ -156,17 +172,17 @@ describe("需求 API", () => {
 
     const detail = await app.inject({
       method: "GET",
-      url: response.json().data.teamCapabilities[0].links.self,
+      url: response.json().data.businessKnowledge[0].links.self,
       headers: { authorization: "Bearer developer-session" },
     });
     expect(detail.statusCode).toBe(200);
     expect(detail.json()).toEqual({
-      data: response.json().data.teamCapabilities[0],
+      data: response.json().data.businessKnowledge[0],
     });
 
     const hiddenFromOtherTenant = await app.inject({
       method: "GET",
-      url: response.json().data.teamCapabilities[0].links.self,
+      url: response.json().data.businessKnowledge[0].links.self,
       headers: { authorization: "Bearer other-tenant-session" },
     });
     expect(hiddenFromOtherTenant.statusCode).toBe(404);
@@ -175,6 +191,82 @@ describe("需求 API", () => {
         code: "extension_not_found",
         message: "没有找到这个扩展",
       },
+    });
+    await app.close();
+  });
+
+  it("扩展中心的团队能力来自可信 Skill 注册表而不是人工就绪状态", async () => {
+    const {
+      app,
+      skillRegistryRepository,
+      skillArtifactStore,
+      skillEvaluationAuthority,
+    } = createTestApp();
+    const bytes = SkillPackageCodec.encode({
+      schemaVersion: 1,
+      instructions:
+        "# 需求风险检查\n\n在进入开发前检查需求遗漏、歧义和高风险变更。",
+      resources: [],
+    });
+    const skillKey = "99999999-9999-4999-8999-999999999999";
+    const skills = new SkillRegistryApplicationService({
+      repository: skillRegistryRepository,
+      artifactStore: skillArtifactStore,
+      evaluationAuthority: skillEvaluationAuthority,
+      projectKey,
+      clock: () => new Date("2026-08-10T03:00:00.000Z"),
+    });
+    await skills.publish(
+      administrator,
+      {
+        schemaVersion: 1,
+        skillKey,
+        tenantKey,
+        projectKey,
+        version: "1.0.0",
+        name: "需求风险检查",
+        summary: "在进入开发前检查遗漏、歧义和高风险变更",
+        artifactHashAlgorithm: "sha256",
+        artifactHash: createHash("sha256").update(bytes).digest("hex"),
+        artifactSizeBytes: bytes.byteLength,
+        entrypoint: "SKILL.md",
+        compatibleBlueprints: ["Web 应用"],
+        requiredCapabilities: ["读取项目文件"],
+        permissions: {
+          workspace: "read_only",
+          network: "none",
+          commands: "none",
+        },
+        createdAt: "2026-08-10T02:00:00.000Z",
+      },
+      bytes,
+    );
+
+    const overview = await app.inject({
+      method: "GET",
+      url: "/api/v1/extensions",
+      headers: { authorization: "Bearer developer-session" },
+    });
+
+    expect(overview.statusCode).toBe(200);
+    expect(overview.json().data.teamCapabilities).toEqual([
+      {
+        name: "需求风险检查",
+        summary: "在进入开发前检查遗漏、歧义和高风险变更",
+        status: "需要处理",
+        detail: "等待独立评测",
+        supportingText: "只读项目文件 · 不访问网络 · 不运行命令",
+        links: { self: `/api/v1/extensions/skills/${skillKey}` },
+      },
+    ]);
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/v1/extensions/skills/${skillKey}`,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toEqual({
+      data: overview.json().data.teamCapabilities[0],
     });
     await app.close();
   });

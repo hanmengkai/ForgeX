@@ -12,6 +12,7 @@ import {
   DeliveryCoordinatorService,
   ExtensionCatalogApplicationService,
   RequirementApplicationService,
+  SkillRegistryApplicationService,
   WorkerFleetService,
   canPerformRequirementAction,
   type AuthenticatedPrincipal,
@@ -20,6 +21,8 @@ import {
   type PreviewArtifactStore,
   type RequirementRepository,
   type SessionAuthenticator,
+  type SkillArtifactStore,
+  type SkillRegistryRepository,
   type WorkerFleetRepository,
 } from "@forgex/application";
 import {
@@ -32,6 +35,7 @@ import {
   type WorkerConnectionCredentialPayload,
 } from "@forgex/contracts";
 import type { RequirementAllowedAction } from "@forgex/domain";
+import type { SkillEvaluationAuthority } from "@forgex/extensions";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -43,6 +47,9 @@ declare module "fastify" {
 export interface ControlPlaneApiOptions {
   authenticator: SessionAuthenticator;
   extensionCatalogRepository: ExtensionCatalogRepository;
+  skillArtifactStore: SkillArtifactStore;
+  skillEvaluationAuthority: SkillEvaluationAuthority;
+  skillRegistryRepository: SkillRegistryRepository;
   requirementRepository: RequirementRepository;
   previewArtifactStore: PreviewArtifactStore;
   workerFleetRepository: WorkerFleetRepository;
@@ -62,6 +69,14 @@ const requirementParamsSchema = z
 const extensionParamsSchema = z
   .object({
     extensionKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const skillExtensionParamsSchema = z
+  .object({
+    skillKey: z
       .string()
       .uuid()
       .transform((value) => value.toLowerCase()),
@@ -303,8 +318,16 @@ export const buildControlPlaneApi = (
     projectKey: options.projectKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+  const skills = new SkillRegistryApplicationService({
+    repository: options.skillRegistryRepository,
+    artifactStore: options.skillArtifactStore,
+    evaluationAuthority: options.skillEvaluationAuthority,
+    projectKey: options.projectKey,
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
   const extensions = new ExtensionCatalogApplicationService({
     repository: options.extensionCatalogRepository,
+    skillRegistry: skills,
     projectKey: options.projectKey,
   });
   const workers = new WorkerFleetService({
@@ -553,6 +576,25 @@ export const buildControlPlaneApi = (
       data: await extensions.detailForPeople(
         principal,
         params.data.extensionKey,
+      ),
+    });
+  });
+
+  app.get("/api/v1/extensions/skills/:skillKey", async (request, reply) => {
+    const principal = principalFrom(request);
+    const params = skillExtensionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "请求内容需要调整",
+        validationDetails(params.error),
+      );
+    }
+    return reply.send({
+      data: await extensions.skillDetailForPeople(
+        principal,
+        params.data.skillKey,
       ),
     });
   });

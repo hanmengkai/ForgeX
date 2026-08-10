@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ExtensionCatalogResponseSchema } from "@forgex/contracts";
 
 import {
   ExtensionCatalogApplicationService,
@@ -14,6 +15,7 @@ const principal: AuthenticatedPrincipal = {
   tenantKey,
   roles: ["developer"],
 };
+const emptySkillRegistry = { listItemsForPeople: async () => [] };
 
 describe("ExtensionCatalogApplicationService", () => {
   it("按项目返回三类人性化扩展，并只用链接承载内部标识", async () => {
@@ -35,6 +37,7 @@ describe("ExtensionCatalogApplicationService", () => {
     });
     const service = new ExtensionCatalogApplicationService({
       repository,
+      skillRegistry: emptySkillRegistry,
       projectKey,
     });
 
@@ -85,6 +88,7 @@ describe("ExtensionCatalogApplicationService", () => {
     });
     const service = new ExtensionCatalogApplicationService({
       repository,
+      skillRegistry: emptySkillRegistry,
       projectKey,
     });
 
@@ -154,6 +158,7 @@ describe("ExtensionCatalogApplicationService", () => {
     );
     const service = new ExtensionCatalogApplicationService({
       repository,
+      skillRegistry: emptySkillRegistry,
       projectKey,
     });
     await expect(service.overviewForPeople(principal)).resolves.toMatchObject({
@@ -162,6 +167,75 @@ describe("ExtensionCatalogApplicationService", () => {
         { name: "访客业务资料", detail: "已整理 5 份资料" },
       ],
     });
+  });
+
+  it("团队能力只采用可信 Skill 注册表，不采用目录中人工填写的就绪状态", async () => {
+    const repository = new InMemoryExtensionCatalogRepository();
+    await repository.publish({
+      schemaVersion: 1,
+      extensionKey: "44444444-4444-4444-8444-444444444444",
+      tenantKey,
+      projectKey,
+      revision: 1,
+      kind: "skill",
+      name: "人工标记的能力",
+      summary: "这条旧目录记录没有绑定可信制品和独立评测",
+      status: "ready",
+      version: "9.9.9",
+      compatibleBlueprints: [],
+      successRate: 100,
+      evaluationCount: 999,
+      updatedAt: "2026-08-10T08:00:00.000Z",
+    });
+    const trustedSkillKey = "55555555-5555-4555-8555-555555555555";
+    const service = new ExtensionCatalogApplicationService({
+      repository,
+      projectKey,
+      skillRegistry: {
+        listItemsForPeople: async () => [
+          {
+            skillKey: trustedSkillKey,
+            view: {
+              name: "需求风险检查",
+              summary: "在进入开发前检查遗漏、歧义和高风险变更",
+              status: "可使用",
+              activeVersion: "1.0.0",
+              quality: "通过 8 个场景，评分 96",
+              safety: "只读项目文件 · 不访问网络 · 不运行命令",
+            },
+          },
+        ],
+      },
+    });
+
+    const overview = await service.overviewForPeople(principal);
+    expect(overview).toMatchObject({
+      teamCapabilities: [
+        {
+          name: "需求风险检查",
+          status: "可使用",
+          detail: "版本 1.0.0 · 通过 8 个场景，评分 96",
+          links: {
+            self: `/api/v1/extensions/skills/${trustedSkillKey}`,
+          },
+        },
+      ],
+    });
+    expect(
+      ExtensionCatalogResponseSchema.parse({ data: overview }).data,
+    ).toEqual(overview);
+    await expect(
+      service.skillDetailForPeople(principal, trustedSkillKey),
+    ).resolves.toMatchObject({
+      name: "需求风险检查",
+      links: { self: `/api/v1/extensions/skills/${trustedSkillKey}` },
+    });
+    await expect(
+      service.detailForPeople(
+        principal,
+        "44444444-4444-4444-8444-444444444444",
+      ),
+    ).rejects.toMatchObject({ code: "extension_not_found" });
   });
 
   it("并发发布同一版本保持幂等，冲突内容只有一份能生效", async () => {

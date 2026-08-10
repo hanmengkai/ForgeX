@@ -10,6 +10,7 @@ export {
   type ExtensionCatalogApplicationServiceOptions,
   type ExtensionCatalogOverviewForPeople,
   type ExtensionItemForPeople,
+  type TrustedSkillDirectory,
 } from "./extension-catalog-service.js";
 export {
   InMemoryExtensionCatalogRepository,
@@ -62,3 +63,18 @@ export {
   type WorkerLeaseView,
   type WorkerPollResult,
 } from "./worker-fleet-service.js";
+export {
+  InMemorySkillArtifactStore,
+  type SkillArtifactStore,
+  verifySkillArtifactBytes,
+} from "./skill-artifact-store.js";
+export {
+  InMemorySkillRegistryRepository,
+  type SkillActivationAuditEvent,
+  type SkillRegistryRepository,
+  type SkillRegistryTransaction,
+} from "./skill-registry-repository.js";
+export {
+  SkillRegistryApplicationService,
+  type SkillRegistryApplicationServiceOptions,
+} from "./skill-registry-service.js";

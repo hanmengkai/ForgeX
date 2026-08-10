@@ -173,7 +173,7 @@ describe("RequirementWorkbench", () => {
           detail: "版本 1.3.0 · 已验证 126 次",
           supportingText: "成功率 94%",
           links: {
-            self: "/api/v1/extensions/44444444-4444-4444-8444-444444444444",
+            self: "/api/v1/extensions/skills/44444444-4444-4444-8444-444444444444",
           },
         },
       ],
