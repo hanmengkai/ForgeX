@@ -2,6 +2,8 @@
   "files": [],
   "references": [
     { "path": "./packages/contracts" },
-    { "path": "./packages/domain" }
+    { "path": "./packages/domain" },
+    { "path": "./packages/application" },
+    { "path": "./apps/control-plane-api" }
   ]
 }

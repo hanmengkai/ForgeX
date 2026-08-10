@@ -8,5 +8,10 @@
     "rootDir": ".",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts"]
+  "include": [
+    "apps/*/src/**/*.ts",
+    "apps/*/test/**/*.ts",
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts"
+  ]
 }
