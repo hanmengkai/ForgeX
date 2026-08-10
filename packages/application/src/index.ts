@@ -129,6 +129,20 @@ export type {
 } from "./requirement-repository.js";
 export { DeliveryRunResultSchema } from "./requirement-repository.js";
 export {
+  AuthenticatedRunnerSchema,
+  RunnerPreviewArtifactCommandSchema,
+  VerificationCoordinatorService,
+  type AuthenticatedRunner,
+  type RunnerPreviewArtifactCommand,
+  type RunnerSessionAuthenticator,
+  type VerificationCoordinatorServiceOptions,
+  type VerificationTargetForRunner,
+} from "./verification-coordinator-service.js";
+export {
+  VerificationEvidenceRecordSchema,
+  type VerificationEvidenceRecord,
+} from "./requirement-repository.js";
+export {
   InMemoryWorkerFleetRepository,
   type WorkerCompletionProof,
   type WorkerFleetRepository,

@@ -9,7 +9,9 @@ import type {
 } from "./requirement-repository.js";
 import {
   DeliveryRunResultSchema,
+  VerificationEvidenceRecordSchema,
   type DeliveryRunResult,
+  type VerificationEvidenceRecord,
 } from "./requirement-repository.js";
 
 const scopedKey = (
@@ -32,6 +34,10 @@ export class InMemoryRequirementRepository implements RequirementRepository {
   readonly #auditEvents: RequirementAuditEvent[] = [];
   readonly #deliveryDispatches = new Map<string, DeliveryDispatchRecord>();
   readonly #deliveryRunResults = new Map<string, DeliveryRunResult>();
+  readonly #verificationEvidence = new Map<
+    string,
+    VerificationEvidenceRecord
+  >();
   readonly #scopeTails = new Map<string, Promise<void>>();
   #nextPosition = 0;
 
@@ -42,7 +48,8 @@ export class InMemoryRequirementRepository implements RequirementRepository {
   ): Promise<T> {
     const normalizedTenantKey = tenantKey.toLowerCase();
     const normalizedProjectKey = projectKey.toLowerCase();
-    const transactionScope = `${normalizedTenantKey}:${normalizedProjectKey}`;
+    // evidenceKey 在租户内唯一，内存实现也必须与 PostgreSQL 的唯一约束保持同一原子边界。
+    const transactionScope = normalizedTenantKey;
     const previous =
       this.#scopeTails.get(transactionScope) ?? Promise.resolve();
     let release!: () => void;
@@ -57,6 +64,10 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     const pendingAuditEvents: RequirementAuditEvent[] = [];
     const pendingDeliveryDispatches = new Map<string, DeliveryDispatchRecord>();
     const pendingDeliveryRunResults = new Map<string, DeliveryRunResult>();
+    const pendingVerificationEvidence = new Map<
+      string,
+      VerificationEvidenceRecord
+    >();
     const transaction: RequirementTransaction = {
       find: async (requirementKey) => {
         const key = scopedKey(
@@ -231,6 +242,63 @@ export class InMemoryRequirementRepository implements RequirementRepository {
         );
         return true;
       },
+      appendVerificationEvidence: (record) => {
+        const parsed = VerificationEvidenceRecordSchema.parse(record);
+        if (
+          parsed.tenantKey !== normalizedTenantKey ||
+          parsed.projectKey !== normalizedProjectKey
+        ) {
+          throw new Error("事务不能写入其他范围的验证证据");
+        }
+        const requirement =
+          pendingRecords.get(
+            scopedKey(
+              normalizedTenantKey,
+              normalizedProjectKey,
+              parsed.requirementKey,
+            ),
+          ) ??
+          this.#records.get(
+            scopedKey(
+              normalizedTenantKey,
+              normalizedProjectKey,
+              parsed.requirementKey,
+            ),
+          );
+        const deliveryRun =
+          pendingDeliveryRunResults.get(
+            deliveryRunKey(
+              normalizedTenantKey,
+              normalizedProjectKey,
+              parsed.requirementKey,
+              parsed.requirementRevision,
+            ),
+          ) ??
+          this.#deliveryRunResults.get(
+            deliveryRunKey(
+              normalizedTenantKey,
+              normalizedProjectKey,
+              parsed.requirementKey,
+              parsed.requirementRevision,
+            ),
+          );
+        if (
+          !requirement ||
+          requirement.workflow.currentRevision !== parsed.requirementRevision ||
+          deliveryRun?.status !== "completed"
+        ) {
+          throw new Error("验证证据必须绑定已完成的当前需求交付版本");
+        }
+        const key = `${normalizedTenantKey}:${parsed.evidenceKey}`;
+        const existing =
+          pendingVerificationEvidence.get(key) ??
+          this.#verificationEvidence.get(key);
+        if (existing) {
+          if (JSON.stringify(existing) === JSON.stringify(parsed)) return;
+          throw new Error("同一验证证据标识不能绑定不同的需求或内容");
+        }
+        pendingVerificationEvidence.set(key, structuredClone(parsed));
+      },
     };
 
     try {
@@ -248,6 +316,9 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       }
       for (const [key, run] of pendingDeliveryRunResults) {
         this.#deliveryRunResults.set(key, structuredClone(run));
+      }
+      for (const [key, evidence] of pendingVerificationEvidence) {
+        this.#verificationEvidence.set(key, structuredClone(evidence));
       }
       return result;
     } finally {
@@ -371,6 +442,43 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     return result
       ? structuredClone(DeliveryRunResultSchema.parse(result))
       : null;
+  }
+
+  async listDeliveryRunsAwaitingVerification(
+    tenantKey: string,
+    projectKey: string,
+    repositoryKey: string,
+    limit: number,
+  ): Promise<DeliveryRunResult[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("待验证交付查询上限必须在 1 到 100 之间");
+    }
+    const tenant = tenantKey.toLowerCase();
+    const project = projectKey.toLowerCase();
+    const repository = repositoryKey.toLowerCase();
+    return [...this.#deliveryRunResults.values()]
+      .filter((run) => {
+        if (
+          run.tenantKey !== tenant ||
+          run.projectKey !== project ||
+          run.repositoryKey !== repository ||
+          run.status !== "completed"
+        ) {
+          return false;
+        }
+        const record = this.#records.get(
+          scopedKey(tenant, project, run.requirementKey),
+        );
+        const snapshot = record?.workflow.toSnapshot();
+        return snapshot?.status === "inDelivery" && snapshot.evidence === null;
+      })
+      .sort(
+        (left, right) =>
+          left.completedAt!.localeCompare(right.completedAt!) ||
+          left.requirementKey.localeCompare(right.requirementKey),
+      )
+      .slice(0, limit)
+      .map((run) => structuredClone(DeliveryRunResultSchema.parse(run)));
   }
 
   #copyRecord(record: RequirementRecord): RequirementRecord {

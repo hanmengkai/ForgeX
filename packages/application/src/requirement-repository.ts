@@ -16,7 +16,9 @@ export type RequirementAuditAction =
   | "requirement.accepted"
   | "delivery.requested"
   | "delivery.dispatched"
-  | "delivery.completed";
+  | "delivery.completed"
+  | "verification.preview_recorded"
+  | "verification.completed";
 
 export interface DeliveryDispatchRecord {
   dispatchKey: string;
@@ -102,6 +104,24 @@ export const DeliveryRunResultSchema = z
 
 export type DeliveryRunResult = z.infer<typeof DeliveryRunResultSchema>;
 
+export const VerificationEvidenceRecordSchema = z
+  .object({
+    tenantKey: deliveryInternalKey,
+    projectKey: deliveryInternalKey,
+    requirementKey: deliveryInternalKey,
+    requirementRevision: z.number().int().positive().max(10_000),
+    evidenceKey: deliveryInternalKey,
+    evidenceDigest: z.string().regex(sha256Pattern),
+    runnerKey: deliveryInternalKey,
+    keyId: deliveryInternalKey,
+    recordedAt: z.iso.datetime(),
+  })
+  .strict();
+
+export type VerificationEvidenceRecord = z.infer<
+  typeof VerificationEvidenceRecordSchema
+>;
+
 export interface RequirementAuditEvent {
   eventKey: string;
   tenantKey: string;
@@ -162,6 +182,7 @@ export interface RequirementTransaction {
     proof: { assignmentKey: string; fencingToken: number },
     completedAt: string,
   ): Promise<boolean>;
+  appendVerificationEvidence(record: VerificationEvidenceRecord): void;
 }
 
 export interface RequirementRepository {
@@ -192,4 +213,10 @@ export interface RequirementRepository {
     tenantKey: string,
     proof: { assignmentKey: string; fencingToken: number },
   ): Promise<DeliveryRunResult | null>;
+  listDeliveryRunsAwaitingVerification(
+    tenantKey: string,
+    projectKey: string,
+    repositoryKey: string,
+    limit: number,
+  ): Promise<DeliveryRunResult[]>;
 }

@@ -79,6 +79,8 @@ class FailFirstDispatchMarkRepository implements RequirementRepository {
   findDeliveryRunResultByProof = this.#inner.findDeliveryRunResultByProof.bind(
     this.#inner,
   );
+  listDeliveryRunsAwaitingVerification =
+    this.#inner.listDeliveryRunsAwaitingVerification.bind(this.#inner);
 }
 
 describe("DeliveryCoordinatorService", () => {

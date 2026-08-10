@@ -45,6 +45,12 @@ interface PreparedRunner {
   acceptNewEvidence: boolean;
 }
 
+export interface AuthorizedRunnerIdentity {
+  runnerKey: string;
+  keyId: string;
+  runnerName: string;
+}
+
 const verificationToken = Symbol("forgex-verified-evidence");
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -196,6 +202,36 @@ export class EvidenceAuthority {
 
   verifyPersisted(input: SignedEvidence): VerifiedEvidenceReceipt {
     return this.#verify(input, false);
+  }
+
+  authorizeRunner(
+    identity: { runnerKey: string; keyId: string },
+    scope: RunnerScope,
+  ): AuthorizedRunnerIdentity {
+    const runnerKey = identity.runnerKey.trim().toLowerCase();
+    const keyId = identity.keyId.trim().toLowerCase();
+    const runner = this.#trustedRunners.get(
+      EvidenceAuthority.#runnerLookupKey(runnerKey, keyId),
+    );
+    if (!runner || !runner.acceptNewEvidence) {
+      throw new Error("Runner 身份或签名密钥不受信任");
+    }
+    const normalizedScope = {
+      tenantKey: scope.tenantKey.trim().toLowerCase(),
+      projectKey: scope.projectKey.trim().toLowerCase(),
+      repositoryKey: scope.repositoryKey.trim().toLowerCase(),
+    };
+    if (
+      !runner.scopes.some(
+        (allowed) =>
+          allowed.tenantKey === normalizedScope.tenantKey &&
+          allowed.projectKey === normalizedScope.projectKey &&
+          allowed.repositoryKey === normalizedScope.repositoryKey,
+      )
+    ) {
+      throw new Error("独立 Runner 无权访问这个租户、项目或代码仓库");
+    }
+    return Object.freeze({ runnerKey, keyId, runnerName: runner.runnerName });
   }
 
   #verify(

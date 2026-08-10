@@ -18,11 +18,14 @@ import {
   McpInvocationApplicationService,
   McpRegistryApplicationService,
   RequirementApplicationService,
+  AuthenticatedRunnerSchema,
+  VerificationCoordinatorService,
   SkillRegistryApplicationService,
   WorkerFleetService,
   canPerformRequirementAction,
   requirementCompletionDigest,
   type AuthenticatedPrincipal,
+  type AuthenticatedRunner,
   type ExtensionCatalogRepository,
   type McpRegistryRepository,
   type KnowledgeBaseRepository,
@@ -31,6 +34,7 @@ import {
   type PlatformRole,
   type PreviewArtifactStore,
   type RequirementRepository,
+  type RunnerSessionAuthenticator,
   type SessionAuthenticator,
   type SkillArtifactStore,
   type SkillRegistryRepository,
@@ -46,10 +50,14 @@ import {
   WorkerMcpCompletionSchema,
   WorkerRequirementCompletionSchema,
   WorkerRegistrationSchema,
+  SignedEvidenceSchema,
   type WorkerConnectionCredentialPayload,
   type McpInvocationRequestPayload,
 } from "@forgex/contracts";
-import type { RequirementAllowedAction } from "@forgex/domain";
+import type {
+  EvidenceAuthority,
+  RequirementAllowedAction,
+} from "@forgex/domain";
 import type {
   McpHealthAuthority,
   SkillEvaluationAuthority,
@@ -59,11 +67,14 @@ declare module "fastify" {
   interface FastifyRequest {
     principal: AuthenticatedPrincipal | null;
     workerConnection: WorkerConnectionCredentialPayload | null;
+    runnerConnection: AuthenticatedRunner | null;
   }
 }
 
 export interface ControlPlaneApiOptions {
   authenticator: SessionAuthenticator;
+  runnerAuthenticator: RunnerSessionAuthenticator;
+  evidenceAuthority: EvidenceAuthority;
   extensionCatalogRepository: ExtensionCatalogRepository;
   knowledgeBaseRepository: KnowledgeBaseRepository;
   mcpHealthAuthority: McpHealthAuthority;
@@ -152,6 +163,29 @@ const requirementListQuerySchema = z
   .object({
     cursor: z.string().trim().min(1).max(500).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+const runnerVerificationListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+const PREVIEW_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
+const PREVIEW_ARTIFACT_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
+const MAX_PREVIEW_BASE64_LENGTH = Math.ceil(PREVIEW_MAX_ARTIFACT_BYTES / 3) * 4;
+const canonicalBase64Pattern =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const runnerPreviewArtifactBodySchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    requirementRevision: z.number().int().positive().max(10_000),
+    artifactHashAlgorithm: z.literal("sha256"),
+    artifactHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    contentBase64: z
+      .string()
+      .min(1)
+      .max(MAX_PREVIEW_BASE64_LENGTH)
+      .regex(canonicalBase64Pattern),
   })
   .strict();
 
@@ -356,7 +390,6 @@ const PREVIEW_CONTENT_SECURITY_POLICY = [
   "navigate-to 'none'",
   "sandbox allow-scripts",
 ].join("; ");
-const PREVIEW_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 const KNOWLEDGE_SOURCE_REQUEST_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 
 const previewWrapper = (content: Uint8Array): string => {
@@ -427,6 +460,7 @@ export const buildControlPlaneApi = (
   });
   app.decorateRequest("principal", null);
   app.decorateRequest("workerConnection", null);
+  app.decorateRequest("runnerConnection", null);
   const requirements = new RequirementApplicationService({
     repository: options.requirementRepository,
     projectKey: options.projectKey,
@@ -473,6 +507,14 @@ export const buildControlPlaneApi = (
     requirements,
     requirementRepository: options.requirementRepository,
     workers,
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
+  const verifications = new VerificationCoordinatorService({
+    requirementRepository: options.requirementRepository,
+    previewArtifactStore: options.previewArtifactStore,
+    evidenceAuthority: options.evidenceAuthority,
+    projectKey: options.projectKey,
+    repositoryKey: options.repositoryKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
 
@@ -522,10 +564,35 @@ export const buildControlPlaneApi = (
     return parsed.data;
   };
 
+  const authenticateRunner = async (
+    authorization: string | undefined,
+  ): Promise<AuthenticatedRunner> => {
+    const runner =
+      await options.runnerAuthenticator.authenticate(authorization);
+    const parsed = AuthenticatedRunnerSchema.safeParse(runner);
+    if (!parsed.success) {
+      throw new ApplicationError(
+        401,
+        "invalid_runner_session",
+        "Runner 连接已经失效，请重新连接",
+      );
+    }
+    return parsed.data;
+  };
+
   app.addHook("onRequest", async (request) => {
     const path = request.url.split("?")[0] ?? "";
     if (path.startsWith("/api/v1/worker-connection/")) {
       request.workerConnection = authenticateWorkerHeaders(request);
+      return;
+    }
+    if (
+      path === "/api/v1/runner/evidence" ||
+      path.startsWith("/api/v1/runner/verification-targets")
+    ) {
+      request.runnerConnection = await authenticateRunner(
+        request.headers.authorization,
+      );
       return;
     }
     if (
@@ -578,6 +645,19 @@ export const buildControlPlaneApi = (
       );
     }
     return request.workerConnection;
+  };
+
+  const runnerConnectionFrom = (
+    request: FastifyRequest,
+  ): AuthenticatedRunner => {
+    if (!request.runnerConnection) {
+      throw new ApplicationError(
+        401,
+        "invalid_runner_session",
+        "Runner 连接已经失效，请重新连接",
+      );
+    }
+    return request.runnerConnection;
   };
 
   app.setErrorHandler((error, _request, reply) => {
@@ -646,6 +726,85 @@ export const buildControlPlaneApi = (
       },
     }),
   );
+
+  app.get("/api/v1/runner/verification-targets", async (request, reply) => {
+    const runner = runnerConnectionFrom(request);
+    const query = runnerVerificationListQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "验证任务列表条件需要调整",
+        validationDetails(query.error),
+      );
+    }
+    const result = await verifications.listPending(runner, {
+      limit: query.data.limit,
+    });
+    return reply.send({
+      data: result.items,
+      meta: { count: result.items.length },
+    });
+  });
+
+  app.put(
+    "/api/v1/runner/verification-targets/:requirementKey/preview",
+    { bodyLimit: PREVIEW_ARTIFACT_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const runner = runnerConnectionFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      const body = runnerPreviewArtifactBodySchema.safeParse(request.body);
+      if (!params.success || !body.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "效果制品内容需要调整",
+          validationDetails(params.success ? body.error! : params.error),
+        );
+      }
+      const content = Buffer.from(body.data.contentBase64, "base64");
+      if (
+        content.byteLength < 1 ||
+        content.byteLength > PREVIEW_MAX_ARTIFACT_BYTES ||
+        content.toString("base64") !== body.data.contentBase64
+      ) {
+        throw new ApplicationError(
+          422,
+          "invalid_preview_artifact",
+          "效果制品内容、大小或编码不正确",
+        );
+      }
+      const result = await verifications.publishPreviewArtifact(runner, {
+        schemaVersion: 1,
+        requirementKey: params.data.requirementKey,
+        requirementRevision: body.data.requirementRevision,
+        artifactHashAlgorithm: body.data.artifactHashAlgorithm,
+        artifactHash: body.data.artifactHash,
+        content,
+      });
+      return reply.send({ data: result });
+    },
+  );
+
+  app.post("/api/v1/runner/evidence", async (request, reply) => {
+    const runner = runnerConnectionFrom(request);
+    const signed = SignedEvidenceSchema.safeParse(request.body);
+    if (!signed.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "验证证据内容需要调整",
+        validationDetails(signed.error),
+      );
+    }
+    const result = await verifications.submitEvidence(runner, signed.data);
+    return reply.send({
+      data: {
+        status: result.view.status,
+        acceptanceProgress: result.view.acceptanceProgress,
+      },
+    });
+  });
 
   app.post("/api/v1/requirements", async (request, reply) => {
     const principal = principalFrom(request);

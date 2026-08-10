@@ -467,6 +467,115 @@ describe("PostgresRequirementRepository", () => {
     expect(migration).toContain("WHERE status = 'completion_pending'");
   });
 
+  it("独立验证迁移约束证据唯一性、待验证查询索引和审计动作", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0012_runner_verification.sql", import.meta.url),
+      "utf8",
+    );
+
+    expect(migration).toContain(
+      "CREATE TABLE IF NOT EXISTS forgex_requirement_evidence",
+    );
+    expect(migration).toContain("PRIMARY KEY (tenant_key, evidence_key)");
+    expect(migration).toContain(
+      "UNIQUE (\n    tenant_key,\n    project_key,\n    requirement_key,\n    requirement_revision",
+    );
+    expect(migration).toContain("forgex_delivery_runs_verification_idx");
+    expect(migration).toContain("WHERE status = 'completed'");
+    expect(migration).toContain("'verification.preview_recorded'");
+    expect(migration).toContain("'verification.completed'");
+  });
+
+  it("在需求事务内持久化证据防重放记录", async () => {
+    const evidenceKey = "77777777-7777-4777-8777-777777777777";
+    const database = fakeDatabase({
+      respond: (text) =>
+        text.includes("INSERT INTO forgex_requirement_evidence")
+          ? [{ evidence_key: evidenceKey }]
+          : undefined,
+    });
+    const repository = new PostgresRequirementRepository(database.pool);
+
+    await repository.transaction(tenantKey, projectKey, (transaction) => {
+      transaction.appendVerificationEvidence({
+        tenantKey,
+        projectKey,
+        requirementKey,
+        requirementRevision: 1,
+        evidenceKey,
+        evidenceDigest: "a".repeat(64),
+        runnerKey: "88888888-8888-4888-8888-888888888888",
+        keyId: "99999999-9999-4999-8999-999999999999",
+        recordedAt: now,
+      });
+    });
+
+    expect(
+      database.queries.find((query) =>
+        query.text.includes("INSERT INTO forgex_requirement_evidence"),
+      )?.values,
+    ).toEqual([
+      tenantKey,
+      projectKey,
+      requirementKey,
+      1,
+      evidenceKey,
+      "a".repeat(64),
+      "88888888-8888-4888-8888-888888888888",
+      "99999999-9999-4999-8999-999999999999",
+      now,
+    ]);
+  });
+
+  it("按项目、仓库和已完成状态读取待独立验证交付", async () => {
+    const database = fakeDatabase({
+      respond: (text) =>
+        text.includes("list")
+          ? []
+          : text.includes("INNER JOIN forgex_requirements")
+            ? [
+                {
+                  repository_key: projectKey,
+                  requirement_key: requirementKey,
+                  requirement_revision: 1,
+                  assignment_key: dispatchKey,
+                  fencing_token: 2,
+                  git_hash_algorithm: "sha1",
+                  base_commit: "a".repeat(40),
+                  commit_sha: "b".repeat(40),
+                  branch_name: `forgex/${projectKey.slice(0, 8)}/${dispatchKey}`,
+                  summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+                  status: "completed",
+                  submitted_at: now,
+                  completed_at: now,
+                },
+              ]
+            : undefined,
+    });
+    const repository = new PostgresRequirementRepository(database.pool);
+
+    await expect(
+      repository.listDeliveryRunsAwaitingVerification(
+        tenantKey,
+        projectKey,
+        projectKey,
+        20,
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        requirementKey,
+        status: "completed",
+        commitSha: "b".repeat(40),
+      }),
+    ]);
+    const query = database.queries.find((item) =>
+      item.text.includes("INNER JOIN forgex_requirements"),
+    );
+    expect(query?.text).toContain("run.status = 'completed'");
+    expect(query?.text).toContain("workflow ->> 'status' = 'inDelivery'");
+    expect(query?.values).toEqual([tenantKey, projectKey, projectKey, 20]);
+  });
+
   it("迁移脚本建立需求、审计和可靠 outbox 的数据库约束", () => {
     const migration = readFileSync(
       new URL(

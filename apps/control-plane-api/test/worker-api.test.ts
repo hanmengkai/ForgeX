@@ -26,6 +26,7 @@ import {
   McpHealthAuthority,
   SkillEvaluationAuthority,
 } from "@forgex/extensions";
+import { EvidenceAuthority } from "@forgex/domain";
 
 import { buildControlPlaneApi } from "../src/index.js";
 
@@ -178,6 +179,8 @@ const createTestApp = (
   };
   const app = buildControlPlaneApi({
     authenticator,
+    runnerAuthenticator: { authenticate: async () => null },
+    evidenceAuthority: new EvidenceAuthority({ runners: [] }),
     extensionCatalogRepository: new InMemoryExtensionCatalogRepository(),
     knowledgeBaseRepository: new InMemoryKnowledgeBaseRepository(),
     mcpRegistryRepository: new InMemoryMcpRegistryRepository(),

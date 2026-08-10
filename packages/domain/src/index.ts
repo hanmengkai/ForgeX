@@ -21,6 +21,7 @@ export type {
 
 export { EvidenceAuthority, VerifiedEvidenceReceipt } from "./evidence.js";
 export type {
+  AuthorizedRunnerIdentity,
   EvidenceCheck,
   EvidenceAuthorityOptions,
   EvidencePayload,

@@ -43,7 +43,10 @@ const spec = RequirementSpecSchema.parse({
 });
 
 const keys = generateKeyPairSync("ed25519");
-const evidenceAuthority = (clock: () => Date) =>
+const evidenceAuthority = (
+  clock: () => Date,
+  acceptNewEvidence: boolean = true,
+) =>
   new EvidenceAuthority({
     runners: [
       {
@@ -54,6 +57,7 @@ const evidenceAuthority = (clock: () => Date) =>
           .export({ format: "der", type: "spki" })
           .toString("base64"),
         scopes: [{ tenantKey, projectKey, repositoryKey }],
+        acceptNewEvidence,
       },
     ],
     clock,
@@ -162,8 +166,27 @@ describe("VerificationCoordinatorService", () => {
         content,
       }),
     ).resolves.toMatchObject({ status: "preview_recorded" });
+    const conflictingContent = new TextEncoder().encode(
+      "<!doctype html><html><body>另一份效果</body></html>",
+    );
+    await expect(
+      service.publishPreviewArtifact(runner, {
+        schemaVersion: 1,
+        requirementKey: run.requirementKey,
+        requirementRevision: 1,
+        artifactHashAlgorithm: "sha256",
+        artifactHash: createHash("sha256")
+          .update(conflictingContent)
+          .digest("hex"),
+        content: conflictingContent,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "preview_candidate_conflict",
+    });
 
     now = new Date("2026-08-11T03:01:00.000Z");
+    const verifiedAt = now.toISOString();
     const criterionKey =
       workflow.toSnapshot().revisions[0]!.acceptanceCriteria[0]!.criterionKey;
     const payload: EvidencePayload = {
@@ -178,7 +201,7 @@ describe("VerificationCoordinatorService", () => {
       commitSha: run.commitSha,
       runnerKey,
       keyId,
-      producedAt: now.toISOString(),
+      producedAt: verifiedAt,
       artifactHashAlgorithm: "sha256",
       artifactHash,
       checks: [
@@ -187,14 +210,40 @@ describe("VerificationCoordinatorService", () => {
     };
     const signed = signEvidence(payload);
 
-    await expect(service.submitEvidence(runner, signed)).resolves.toMatchObject({
-      view: {
-        status: "等待产品验收",
-        acceptanceProgress: "1 / 1 项已通过",
+    await expect(service.submitEvidence(runner, signed)).resolves.toMatchObject(
+      {
+        view: {
+          status: "等待产品验收",
+          acceptanceProgress: "1 / 1 项已通过",
+        },
       },
+    );
+    await expect(service.submitEvidence(runner, signed)).resolves.toMatchObject(
+      {
+        view: { status: "等待产品验收" },
+      },
+    );
+
+    now = new Date("2026-08-11T05:30:00.000Z");
+    const historicalService = new VerificationCoordinatorService({
+      requirementRepository: repository,
+      previewArtifactStore,
+      evidenceAuthority: evidenceAuthority(clock, false),
+      projectKey,
+      repositoryKey,
+      clock,
     });
-    await expect(service.submitEvidence(runner, signed)).resolves.toMatchObject({
-      view: { status: "等待产品验收" },
+    await expect(
+      historicalService.submitEvidence(runner, signed),
+    ).resolves.toMatchObject({ view: { status: "等待产品验收" } });
+    await expect(
+      historicalService.submitEvidence(runner, {
+        ...signed,
+        payload: { ...signed.payload, producedAt: now.toISOString() },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      code: "runner_scope_denied",
     });
 
     const stored = await repository.transaction(
@@ -204,7 +253,7 @@ describe("VerificationCoordinatorService", () => {
     );
     expect(stored?.workflow.toAcceptanceView()).toEqual({
       verifiedBy: "独立验证 Runner",
-      verifiedAt: now.toISOString(),
+      verifiedAt,
       checks: [{ title: "访客可以提交预约", status: "已通过" }],
     });
     await expect(
@@ -231,7 +280,7 @@ describe("VerificationCoordinatorService", () => {
     ]);
   });
 
-  it("拒绝尚未完成的交付和与 Runner 会话身份不一致的签名", async () => {
+  it("拒绝尚未完成的交付和不受信任的 Runner 会话", async () => {
     const clock = () => new Date("2026-08-11T03:00:00.000Z");
     const repository = new InMemoryRequirementRepository();
     const { run } = await arrangeCompletedDelivery(repository, clock, false);
@@ -291,5 +340,122 @@ describe("VerificationCoordinatorService", () => {
       statusCode: 403,
       code: "runner_identity_mismatch",
     });
+  });
+
+  it("同一租户跨项目并发复用 evidenceKey 时只提交一项事务", async () => {
+    const otherProjectKey = "99999999-9999-4999-8999-999999999999";
+    const clock = () => new Date("2026-08-11T03:00:00.000Z");
+    const repository = new InMemoryRequirementRepository();
+    const first = await arrangeCompletedDelivery(repository, clock);
+    const otherWorkflow = RequirementWorkflow.createFromSpec(spec, {
+      tenantKey,
+      projectKey: otherProjectKey,
+      clock,
+    });
+    otherWorkflow.submitForConfirmation();
+    otherWorkflow.confirm({ actor });
+    otherWorkflow.startDelivery();
+    const otherRequirementKey = otherWorkflow.internalKey;
+    await repository.transaction(tenantKey, otherProjectKey, (transaction) => {
+      transaction.save({
+        tenantKey,
+        projectKey: otherProjectKey,
+        requirementKey: otherRequirementKey,
+        createdAt: "2026-08-11T02:00:00.000Z",
+        spec,
+        workflow: otherWorkflow,
+      });
+      transaction.saveDeliveryRunResult({
+        ...first.run,
+        projectKey: otherProjectKey,
+        requirementKey: otherRequirementKey,
+        assignmentKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        branchName: `forgex/${otherProjectKey.slice(0, 8)}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+      });
+    });
+    const evidenceKey = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let releaseFirst!: () => void;
+    const holdFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstEntered!: () => void;
+    const firstIsHolding = new Promise<void>((resolve) => {
+      firstEntered = resolve;
+    });
+    let secondEntered = false;
+    const firstTransaction = repository.transaction(
+      tenantKey,
+      projectKey,
+      async (transaction) => {
+        transaction.appendVerificationEvidence({
+          tenantKey,
+          projectKey,
+          requirementKey: first.run.requirementKey,
+          requirementRevision: 1,
+          evidenceKey,
+          evidenceDigest: "c".repeat(64),
+          runnerKey,
+          keyId,
+          recordedAt: clock().toISOString(),
+        });
+        firstEntered();
+        await holdFirst;
+      },
+    );
+    await firstIsHolding;
+    const secondTransaction = repository.transaction(
+      tenantKey,
+      otherProjectKey,
+      async (transaction) => {
+        secondEntered = true;
+        const record = await transaction.find(otherRequirementKey);
+        record!.workflow.recordDeliveryCandidate({
+          repositoryKey,
+          gitHashAlgorithm: "sha1",
+          commitSha: first.run.commitSha,
+          artifactHashAlgorithm: "sha256",
+          artifactHash: "d".repeat(64),
+        });
+        transaction.save(record!);
+        transaction.appendAudit({
+          eventKey: randomUUID(),
+          tenantKey,
+          projectKey: otherProjectKey,
+          requirementKey: otherRequirementKey,
+          action: "verification.preview_recorded",
+          actorKey: runnerKey,
+          actorName: "独立验证 Runner",
+          recordedAt: clock().toISOString(),
+        });
+        transaction.appendVerificationEvidence({
+          tenantKey,
+          projectKey: otherProjectKey,
+          requirementKey: otherRequirementKey,
+          requirementRevision: 1,
+          evidenceKey,
+          evidenceDigest: "e".repeat(64),
+          runnerKey,
+          keyId,
+          recordedAt: clock().toISOString(),
+        });
+      },
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(secondEntered).toBe(false);
+
+    releaseFirst();
+    await firstTransaction;
+    await expect(secondTransaction).rejects.toThrow(
+      "同一验证证据标识不能绑定不同的需求或内容",
+    );
+    const other = await repository.transaction(
+      tenantKey,
+      otherProjectKey,
+      (transaction) => transaction.find(otherRequirementKey),
+    );
+    expect(other?.workflow.toSnapshot().deliveryCandidate).toBeNull();
+    expect(
+      await repository.listAuditEvents(tenantKey, otherProjectKey),
+    ).toEqual([]);
   });
 });

@@ -10,6 +10,7 @@ import {
 } from "@forgex/domain";
 import {
   DeliveryRunResultSchema,
+  VerificationEvidenceRecordSchema,
   type DeliveryDispatchRecord,
   type DeliveryRunResult,
   type RequirementAuditAction,
@@ -19,6 +20,7 @@ import {
   type RequirementRecord,
   type RequirementRepository,
   type RequirementTransaction,
+  type VerificationEvidenceRecord,
 } from "@forgex/application";
 
 import type {
@@ -36,6 +38,8 @@ const auditActions = new Set<RequirementAuditAction>([
   "delivery.requested",
   "delivery.dispatched",
   "delivery.completed",
+  "verification.preview_recorded",
+  "verification.completed",
 ]);
 
 export interface PostgresRequirementRepositoryOptions {
@@ -105,6 +109,10 @@ export class PostgresRequirementRepository implements RequirementRepository {
       const pendingAudit: RequirementAuditEvent[] = [];
       const pendingDispatches = new Map<string, DeliveryDispatchRecord>();
       const pendingDeliveryRuns = new Map<string, DeliveryRunResult>();
+      const pendingVerificationEvidence = new Map<
+        string,
+        VerificationEvidenceRecord
+      >();
       const transaction: RequirementTransaction = {
         find: async (requirementKey) => {
           const key = parseInternalKey(requirementKey, "需求标识");
@@ -267,6 +275,21 @@ export class PostgresRequirementRepository implements RequirementRepository {
           }
           throw new Error("没有找到与完成凭据匹配的交付运行记录");
         },
+        appendVerificationEvidence: (evidence) => {
+          const parsed = VerificationEvidenceRecordSchema.parse(evidence);
+          if (parsed.tenantKey !== tenant || parsed.projectKey !== project) {
+            throw new Error("事务不能写入其他范围的验证证据");
+          }
+          const pending = pendingVerificationEvidence.get(parsed.evidenceKey);
+          if (pending) {
+            if (JSON.stringify(pending) === JSON.stringify(parsed)) return;
+            throw new Error("同一验证证据标识不能绑定不同内容");
+          }
+          pendingVerificationEvidence.set(
+            parsed.evidenceKey,
+            structuredClone(parsed),
+          );
+        },
       };
 
       const result = await operation(transaction);
@@ -336,6 +359,43 @@ export class PostgresRequirementRepository implements RequirementRepository {
             run.completedAt,
           ],
         );
+      }
+      for (const evidence of pendingVerificationEvidence.values()) {
+        const inserted = await client.query(
+          "INSERT INTO forgex_requirement_evidence (tenant_key, project_key, requirement_key, requirement_revision, evidence_key, evidence_digest, runner_key, key_id, recorded_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (tenant_key, evidence_key) DO NOTHING RETURNING evidence_key",
+          [
+            tenant,
+            project,
+            evidence.requirementKey,
+            evidence.requirementRevision,
+            evidence.evidenceKey,
+            evidence.evidenceDigest,
+            evidence.runnerKey,
+            evidence.keyId,
+            evidence.recordedAt,
+          ],
+        );
+        if (inserted.rows.length === 0) {
+          const existing = await client.query(
+            "SELECT project_key, requirement_key, requirement_revision, evidence_digest, runner_key, key_id, recorded_at FROM forgex_requirement_evidence WHERE tenant_key = $1 AND evidence_key = $2",
+            [tenant, evidence.evidenceKey],
+          );
+          const row = existing.rows[0];
+          if (
+            !isRecord(row) ||
+            String(row.project_key).toLowerCase() !== project ||
+            String(row.requirement_key).toLowerCase() !==
+              evidence.requirementKey ||
+            Number(row.requirement_revision) !== evidence.requirementRevision ||
+            row.evidence_digest !== evidence.evidenceDigest ||
+            String(row.runner_key).toLowerCase() !== evidence.runnerKey ||
+            String(row.key_id).toLowerCase() !== evidence.keyId ||
+            parseIsoDate(row.recorded_at, "证据记录时间") !==
+              evidence.recordedAt
+          ) {
+            throw new Error("同一验证证据标识已经绑定其他需求或内容");
+          }
+        }
       }
       await client.query("COMMIT");
       return result;
@@ -519,6 +579,29 @@ export class PostgresRequirementRepository implements RequirementRepository {
         row,
         tenant,
         parseInternalKey(String(row.project_key), "项目标识"),
+      );
+    });
+  }
+
+  async listDeliveryRunsAwaitingVerification(
+    tenantKey: string,
+    projectKey: string,
+    repositoryKey: string,
+    limit: number,
+  ): Promise<DeliveryRunResult[]> {
+    const tenant = parseInternalKey(tenantKey, "租户标识");
+    const project = parseInternalKey(projectKey, "项目标识");
+    const repository = parseInternalKey(repositoryKey, "仓库标识");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("待验证交付查询上限必须在 1 到 100 之间");
+    }
+    return this.#withClient(async (client) => {
+      const result = await client.query(
+        "SELECT run.repository_key, run.requirement_key, run.requirement_revision, run.assignment_key, run.fencing_token, run.git_hash_algorithm, run.base_commit, run.commit_sha, run.branch_name, run.summary, run.status, run.submitted_at, run.completed_at FROM forgex_delivery_runs AS run INNER JOIN forgex_requirements AS requirement ON requirement.tenant_key = run.tenant_key AND requirement.project_key = run.project_key AND requirement.requirement_key = run.requirement_key WHERE run.tenant_key = $1 AND run.project_key = $2 AND run.repository_key = $3 AND run.status = 'completed' AND requirement.workflow ->> 'status' = 'inDelivery' AND requirement.workflow -> 'evidence' = 'null'::jsonb ORDER BY run.completed_at ASC, run.requirement_key ASC LIMIT $4",
+        [tenant, project, repository, limit],
+      );
+      return result.rows.map((row) =>
+        this.#deliveryRunFromRow(row, tenant, project),
       );
     });
   }
