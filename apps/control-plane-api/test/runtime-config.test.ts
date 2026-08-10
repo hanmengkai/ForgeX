@@ -48,12 +48,15 @@ describe("Control Plane 运行配置", () => {
       skillEvaluators: [],
       mcpVerifiers: [],
     };
-    await writeFile(path, JSON.stringify(config), "utf8");
+    const contents = JSON.stringify(config);
+    await writeFile(path, contents, "utf8");
 
-    await expect(loadControlPlaneRuntimeConfig(path)).resolves.toMatchObject({
-      host: "0.0.0.0",
-      projectKey,
-    });
+    await expect(
+      loadControlPlaneRuntimeConfig(path, digest(contents)),
+    ).resolves.toMatchObject({ host: "0.0.0.0", projectKey });
+    await expect(
+      loadControlPlaneRuntimeConfig(path, digest(`${contents}tampered`)),
+    ).rejects.toThrow("完整性");
     expect(() => requireDatabaseUrl({})).toThrow("FORGEX_DATABASE_URL");
     expect(() =>
       requireDatabaseUrl({ FORGEX_DATABASE_URL: "https://example.test/db" }),

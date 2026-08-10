@@ -182,7 +182,8 @@ describe("需求 API", () => {
     expect(login.statusCode).toBe(200);
     expect(login.json()).toEqual({ data: { actorName: "产品负责人" } });
     const cookie = login.headers["set-cookie"];
-    expect(cookie).toContain("forgex_session=product-session");
+    expect(cookie).toMatch(/forgex_session=[A-Za-z0-9_-]{43}/u);
+    expect(cookie).not.toContain("product-session");
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Strict");
     expect(cookie).not.toContain("Secure");
@@ -202,6 +203,12 @@ describe("需求 API", () => {
     });
     expect(logout.statusCode).toBe(204);
     expect(logout.headers["set-cookie"]).toContain("Max-Age=0");
+    const replay = await app.inject({
+      method: "GET",
+      url: "/api/v1/requirements",
+      headers: { cookie },
+    });
+    expect(replay.statusCode).toBe(401);
     await app.close();
   });
 

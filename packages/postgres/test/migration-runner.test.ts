@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertPostgresMigrationsCurrent,
   runPostgresMigrations,
   type PostgresClient,
   type PostgresMigration,
@@ -12,12 +13,16 @@ class FakeClient implements PostgresClient {
   released = false;
 
   constructor(
-    readonly applied: Array<{ version: string; checksum: string }> = [],
+    readonly applied: Array<{
+      version: string;
+      name: string;
+      checksum: string;
+    }> = [],
   ) {}
 
   async query(text: string, values?: unknown[]): Promise<PostgresQueryResult> {
     this.queries.push({ text, ...(values ? { values } : {}) });
-    if (text.includes("SELECT version, checksum")) {
+    if (text.includes("SELECT version") && text.includes("checksum")) {
       return { rows: this.applied.map((row) => ({ ...row })) };
     }
     return { rows: [] };
@@ -73,13 +78,17 @@ describe("PostgreSQL migration runner", () => {
     );
     const checksum = String(insert!.values![2]);
 
-    const exact = new FakeClient([{ version: "0001", checksum }]);
+    const exact = new FakeClient([
+      { version: "0001", name: "worker_fleet", checksum },
+    ]);
     await runPostgresMigrations({ connect: async () => exact }, [original]);
     expect(exact.queries.map((query) => query.text)).not.toContain(
       original.sql,
     );
 
-    const changed = new FakeClient([{ version: "0001", checksum }]);
+    const changed = new FakeClient([
+      { version: "0001", name: "worker_fleet", checksum },
+    ]);
     await expect(
       runPostgresMigrations({ connect: async () => changed }, [
         { ...original, sql: `${original.sql}\n-- changed` },
@@ -87,6 +96,47 @@ describe("PostgreSQL migration runner", () => {
     ).rejects.toThrow("摘要不一致");
     expect(changed.queries.at(-1)?.text).toBe("ROLLBACK");
     expect(changed.released).toBe(true);
+  });
+
+  it("就绪检查要求数据库迁移版本、名称与摘要和当前程序完全一致", async () => {
+    const expected = migration(
+      "0014",
+      "browser_sessions",
+      "CREATE TABLE browser_sessions(id text);",
+    );
+    const migrated = new FakeClient();
+    await runPostgresMigrations({ connect: async () => migrated }, [expected]);
+    const insert = migrated.queries.find((query) =>
+      query.text.includes("INSERT INTO forgex_schema_migrations"),
+    );
+    const checksum = String(insert!.values![2]);
+
+    const exact = new FakeClient([
+      { version: "0014", name: "browser_sessions", checksum },
+    ]);
+    await expect(
+      assertPostgresMigrationsCurrent(
+        { connect: async () => exact },
+        [expected],
+      ),
+    ).resolves.toBeUndefined();
+
+    const missing = new FakeClient();
+    await expect(
+      assertPostgresMigrationsCurrent(
+        { connect: async () => missing },
+        [expected],
+      ),
+    ).rejects.toThrow("迁移状态");
+    const renamed = new FakeClient([
+      { version: "0014", name: "wrong_name", checksum },
+    ]);
+    await expect(
+      assertPostgresMigrationsCurrent(
+        { connect: async () => renamed },
+        [expected],
+      ),
+    ).rejects.toThrow("迁移状态");
   });
 
   it("拒绝乱序、重复或非四位版本的迁移清单", async () => {
