@@ -55,6 +55,9 @@ describe("开源交付包装", () => {
     ]) {
       expect(workflow).toContain(command);
     }
+    expect(workflow).toContain("services:");
+    expect(workflow).toContain("postgres:17-alpine");
+    expect(workflow).toContain("FORGEX_TEST_DATABASE_URL");
   });
 
   it("生产 Node 进程解析编译产物，测试环境仍可直接加载源码", async () => {
