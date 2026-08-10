@@ -52,6 +52,8 @@ describe("开源交付包装", () => {
       "npm run typecheck",
       "npm test",
       "npm run build:all",
+      "npx playwright install --with-deps chromium",
+      "npm run test:e2e",
     ]) {
       expect(workflow).toContain(command);
     }
