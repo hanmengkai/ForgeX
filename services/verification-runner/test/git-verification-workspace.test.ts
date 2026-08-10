@@ -116,6 +116,26 @@ describe("GitVerificationWorkspaceProvider", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("忽略仓库内的 Git replace 引用并读取原始权威提交", async () => {
+    const fixture = await repositoryFixture();
+    await git(fixture.repositoryRoot, [
+      "replace",
+      fixture.firstCommit,
+      fixture.secondCommit,
+    ]);
+    const provider = providerFor(fixture);
+
+    const workspace = await provider.prepare({
+      repositoryKey: "30000000-0000-4000-8000-000000000003",
+      gitHashAlgorithm: "sha1",
+      commitSha: fixture.firstCommit,
+    });
+    expect(
+      await readFile(path.join(workspace.path, "result.txt"), "utf8"),
+    ).toBe("first");
+    await workspace.dispose();
+  });
+
   it("拒绝未知仓库、错误哈希算法和可能执行宿主命令的 Git 配置", async () => {
     const fixture = await repositoryFixture();
     const provider = providerFor(fixture);
@@ -179,4 +199,20 @@ describe("GitVerificationWorkspaceProvider", () => {
     await expect(access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     await workspace.dispose();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "拒绝可被其他本机用户改写的权威仓库元数据",
+    async () => {
+      const fixture = await repositoryFixture();
+      await chmod(path.join(fixture.repositoryRoot, ".git"), 0o777);
+      const provider = providerFor(fixture);
+      await expect(
+        provider.prepare({
+          repositoryKey: "30000000-0000-4000-8000-000000000003",
+          gitHashAlgorithm: "sha1",
+          commitSha: fixture.secondCommit,
+        }),
+      ).rejects.toThrow("其他本机用户");
+    },
+  );
 });
