@@ -23,7 +23,7 @@ const platformRole = z.enum([
   "developer",
   "administrator",
 ]);
-const principalSchema = z
+export const AuthenticatedPrincipalRuntimeSchema = z
   .object({
     actorKey: internalKey,
     actorName: z.string().trim().min(2).max(100),
@@ -67,7 +67,12 @@ export const ControlPlaneRuntimeConfigSchema = z
     repositoryKey: internalKey,
     sessions: z
       .array(
-        z.object({ tokenSha256: sha256, principal: principalSchema }).strict(),
+        z
+          .object({
+            tokenSha256: sha256,
+            principal: AuthenticatedPrincipalRuntimeSchema,
+          })
+          .strict(),
       )
       .min(1)
       .max(500),
@@ -124,7 +129,21 @@ export const ControlPlaneRuntimeConfigSchema = z
       )
       .max(100),
   })
-  .strict();
+  .strict()
+  .superRefine((config, context) => {
+    const peopleDigests = new Set(
+      config.sessions.map((session) => session.tokenSha256),
+    );
+    for (const [index, runnerSession] of config.runnerSessions.entries()) {
+      if (peopleDigests.has(runnerSession.tokenSha256)) {
+        context.addIssue({
+          code: "custom",
+          path: ["runnerSessions", index, "tokenSha256"],
+          message: "人员与 Runner 令牌摘要必须完全隔离",
+        });
+      }
+    }
+  });
 
 export type ControlPlaneRuntimeConfig = z.infer<
   typeof ControlPlaneRuntimeConfigSchema
@@ -132,12 +151,26 @@ export type ControlPlaneRuntimeConfig = z.infer<
 
 export const loadControlPlaneRuntimeConfig = async (
   path: string,
+  expectedSha256: string,
 ): Promise<ControlPlaneRuntimeConfig> => {
+  let contents: string;
+  try {
+    contents = await readFile(path, "utf8");
+  } catch {
+    throw new Error("Control Plane 运行配置无法读取");
+  }
+  if (
+    !sha256.safeParse(expectedSha256).success ||
+    createHash("sha256").update(contents, "utf8").digest("hex") !==
+      expectedSha256
+  ) {
+    throw new Error("Control Plane 运行配置完整性校验失败");
+  }
   let input: unknown;
   try {
-    input = JSON.parse(await readFile(path, "utf8")) as unknown;
+    input = JSON.parse(contents) as unknown;
   } catch {
-    throw new Error("Control Plane 运行配置无法读取或不是有效 JSON");
+    throw new Error("Control Plane 运行配置不是有效 JSON");
   }
   const parsed = ControlPlaneRuntimeConfigSchema.safeParse(input);
   if (!parsed.success) {
@@ -208,7 +241,12 @@ export class HashedSessionAuthenticator implements SessionAuthenticator {
   ) {
     const parsed = z
       .array(
-        z.object({ tokenSha256: sha256, principal: principalSchema }).strict(),
+        z
+          .object({
+            tokenSha256: sha256,
+            principal: AuthenticatedPrincipalRuntimeSchema,
+          })
+          .strict(),
       )
       .min(1)
       .max(500)

@@ -56,6 +56,7 @@ describe("真实 PostgreSQL 迁移", () => {
           "forgex_mcp_invocations",
           "forgex_knowledge_bases",
           "forgex_verification_failures",
+          "forgex_browser_sessions",
         ]) {
           expect(tableNames.has(tableName), tableName).toBe(true);
         }

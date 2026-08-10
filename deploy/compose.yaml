@@ -20,7 +20,7 @@ services:
       dockerfile: Dockerfile
       target: control-plane
     environment:
-      FORGEX_DATABASE_URL: postgresql://${FORGEX_POSTGRES_USER:-forgex}:${FORGEX_POSTGRES_PASSWORD}@postgres:5432/${FORGEX_POSTGRES_DB:-forgex}
+      FORGEX_DATABASE_URL: ${FORGEX_DATABASE_URL:?请设置已完成 URL 编码的 FORGEX_DATABASE_URL}
     command: ["npm", "run", "migrate", "--workspace", "@forgex/postgres"]
     depends_on:
       postgres:
@@ -34,8 +34,9 @@ services:
       target: control-plane
     restart: unless-stopped
     environment:
-      FORGEX_DATABASE_URL: postgresql://${FORGEX_POSTGRES_USER:-forgex}:${FORGEX_POSTGRES_PASSWORD}@postgres:5432/${FORGEX_POSTGRES_DB:-forgex}
+      FORGEX_DATABASE_URL: ${FORGEX_DATABASE_URL:?请设置已完成 URL 编码的 FORGEX_DATABASE_URL}
       FORGEX_CONTROL_PLANE_CONFIG: /run/forgex/control-plane.json
+      FORGEX_CONTROL_PLANE_CONFIG_SHA256: ${FORGEX_CONTROL_PLANE_CONFIG_SHA256:?请设置控制面配置 SHA-256}
     volumes:
       - ./config/control-plane.json:/run/forgex/control-plane.json:ro
     depends_on:

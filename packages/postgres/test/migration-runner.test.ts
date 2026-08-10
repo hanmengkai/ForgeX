@@ -55,7 +55,7 @@ describe("PostgreSQL migration runner", () => {
       expect.stringContaining(
         "CREATE TABLE IF NOT EXISTS forgex_schema_migrations",
       ),
-      expect.stringContaining("SELECT version, checksum"),
+      expect.stringContaining("SELECT version, name, checksum"),
       migrations[0]!.sql,
       expect.stringContaining("INSERT INTO forgex_schema_migrations"),
       migrations[1]!.sql,
@@ -115,27 +115,24 @@ describe("PostgreSQL migration runner", () => {
       { version: "0014", name: "browser_sessions", checksum },
     ]);
     await expect(
-      assertPostgresMigrationsCurrent(
-        { connect: async () => exact },
-        [expected],
-      ),
+      assertPostgresMigrationsCurrent({ connect: async () => exact }, [
+        expected,
+      ]),
     ).resolves.toBeUndefined();
 
     const missing = new FakeClient();
     await expect(
-      assertPostgresMigrationsCurrent(
-        { connect: async () => missing },
-        [expected],
-      ),
+      assertPostgresMigrationsCurrent({ connect: async () => missing }, [
+        expected,
+      ]),
     ).rejects.toThrow("迁移状态");
     const renamed = new FakeClient([
       { version: "0014", name: "wrong_name", checksum },
     ]);
     await expect(
-      assertPostgresMigrationsCurrent(
-        { connect: async () => renamed },
-        [expected],
-      ),
+      assertPostgresMigrationsCurrent({ connect: async () => renamed }, [
+        expected,
+      ]),
     ).rejects.toThrow("迁移状态");
   });
 

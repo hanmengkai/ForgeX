@@ -46,27 +46,30 @@ const validateMigrations = (
 
 const appliedMigrations = (
   result: PostgresQueryResult,
-): Map<string, string> => {
-  const applied = new Map<string, string>();
+): Map<string, { name: string; checksum: string }> => {
+  const applied = new Map<string, { name: string; checksum: string }>();
   for (const row of result.rows) {
     if (
       typeof row !== "object" ||
       row === null ||
       !("version" in row) ||
+      !("name" in row) ||
       !("checksum" in row)
     ) {
       throw new Error("数据库迁移登记表包含无效记录");
     }
     const version = String(row.version);
+    const name = String(row.name);
     const storedChecksum = String(row.checksum);
     if (
       !migrationVersionPattern.test(version) ||
+      !migrationNamePattern.test(name) ||
       !checksumPattern.test(storedChecksum) ||
       applied.has(version)
     ) {
       throw new Error("数据库迁移登记表包含冲突记录");
     }
-    applied.set(version, storedChecksum);
+    applied.set(version, { name, checksum: storedChecksum });
   }
   return applied;
 };
@@ -113,14 +116,17 @@ export const runPostgresMigrations = async (
     );
     const applied = appliedMigrations(
       await client.query(
-        "SELECT version, checksum FROM forgex_schema_migrations ORDER BY version",
+        "SELECT version, name, checksum FROM forgex_schema_migrations ORDER BY version",
       ),
     );
     for (const migration of migrations) {
       const migrationChecksum = checksum(migration.sql);
-      const storedChecksum = applied.get(migration.version);
-      if (storedChecksum) {
-        if (storedChecksum !== migrationChecksum) {
+      const stored = applied.get(migration.version);
+      if (stored) {
+        if (
+          stored.name !== migration.name ||
+          stored.checksum !== migrationChecksum
+        ) {
           throw new Error(
             `PostgreSQL 迁移 ${migration.version} 的摘要不一致，禁止改写已执行迁移`,
           );
@@ -144,6 +150,38 @@ export const runPostgresMigrations = async (
       }
     }
     throw error;
+  } finally {
+    client.release();
+  }
+};
+
+export const assertPostgresMigrationsCurrent = async (
+  pool: PostgresPool,
+  migrationsInput: readonly PostgresMigration[],
+): Promise<void> => {
+  const migrations = validateMigrations(migrationsInput);
+  const client = await pool.connect();
+  try {
+    const applied = appliedMigrations(
+      await client.query(
+        "SELECT version, name, checksum FROM forgex_schema_migrations ORDER BY version",
+      ),
+    );
+    if (applied.size !== migrations.length) {
+      throw new Error("PostgreSQL 迁移状态与当前程序不一致");
+    }
+    for (const migration of migrations) {
+      const stored = applied.get(migration.version);
+      if (
+        !stored ||
+        stored.name !== migration.name ||
+        stored.checksum !== checksum(migration.sql)
+      ) {
+        throw new Error("PostgreSQL 迁移状态与当前程序不一致");
+      }
+    }
+  } catch {
+    throw new Error("PostgreSQL 迁移状态与当前程序不一致");
   } finally {
     client.release();
   }

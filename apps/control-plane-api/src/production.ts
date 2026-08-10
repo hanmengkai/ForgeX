@@ -6,6 +6,7 @@ import {
   SkillEvaluationAuthority,
 } from "@forgex/extensions";
 import {
+  assertPostgresMigrationsCurrent,
   PostgresExtensionCatalogRepository,
   PostgresKnowledgeBaseRepository,
   PostgresMcpInputSchemaStore,
@@ -17,10 +18,12 @@ import {
   PostgresSkillRegistryRepository,
   PostgresWorkerFleetRepository,
   type PostgresPool,
+  type PostgresMigration,
   type PostgresQueryResult,
 } from "@forgex/postgres";
 
 import { buildControlPlaneApi } from "./index.js";
+import { PostgresBrowserSessionManager } from "./postgres-browser-session.js";
 import {
   HashedRunnerSessionAuthenticator,
   HashedSessionAuthenticator,
@@ -33,7 +36,9 @@ export interface ProductionPostgresPool extends PostgresPool {
 
 export interface ProductionControlPlaneOptions {
   config: ControlPlaneRuntimeConfig;
+  authRealmRevision: string;
   pool: ProductionPostgresPool;
+  migrations: readonly PostgresMigration[];
   serviceVersion?: string;
   logger?: FastifyServerOptions["logger"];
 }
@@ -53,6 +58,11 @@ export const createProductionControlPlane = (
 
   return buildControlPlaneApi({
     authenticator: new HashedSessionAuthenticator(options.config.sessions),
+    browserSessionManager: new PostgresBrowserSessionManager(options.pool, {
+      projectKey: options.config.projectKey,
+      repositoryKey: options.config.repositoryKey,
+      authRealmRevision: options.authRealmRevision,
+    }),
     runnerAuthenticator: new HashedRunnerSessionAuthenticator(
       options.config.runnerSessions,
     ),
@@ -78,7 +88,7 @@ export const createProductionControlPlane = (
     skillRegistryRepository: new PostgresSkillRegistryRepository(options.pool),
     workerFleetRepository: new PostgresWorkerFleetRepository(options.pool),
     readiness: async () => {
-      await options.pool.query("SELECT 1 AS ready");
+      await assertPostgresMigrationsCurrent(options.pool, options.migrations);
     },
     ...(options.serviceVersion
       ? { serviceVersion: options.serviceVersion }

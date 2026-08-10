@@ -909,18 +909,26 @@ describe("需求 API", () => {
 
   it("接受同源 HttpOnly Cookie 会话，并保护写操作免受跨站请求", async () => {
     const { app } = createTestApp();
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/v1/session",
+      headers: { authorization: "Bearer product-session" },
+    });
+    const cookie = login.headers["set-cookie"];
+    expect(login.statusCode).toBe(200);
+    expect(cookie).toMatch(/forgex_session=[A-Za-z0-9_-]{43}/u);
 
     const list = await app.inject({
       method: "GET",
       url: "/api/v1/requirements",
-      headers: { cookie: "forgex_session=product-session" },
+      headers: { cookie },
     });
     expect(list.statusCode).toBe(200);
 
     const unprotected = await app.inject({
       method: "POST",
       url: "/api/v1/requirements",
-      headers: { cookie: "forgex_session=product-session" },
+      headers: { cookie },
       payload: validRequirement,
     });
     expect(unprotected.statusCode).toBe(403);
@@ -930,7 +938,7 @@ describe("需求 API", () => {
       method: "POST",
       url: "/api/v1/requirements",
       headers: {
-        cookie: "forgex_session=product-session",
+        cookie,
         "x-forgex-csrf": "1",
       },
       payload: validRequirement,

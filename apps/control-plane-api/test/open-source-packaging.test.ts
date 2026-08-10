@@ -23,25 +23,48 @@ describe("开源交付包装", () => {
   });
 
   it("提供可复现的 Compose 部署与不会携带明文凭据的配置模板", async () => {
-    const [compose, dockerfile, webDockerfile, runtimeConfig, readme] =
-      await Promise.all([
-        read("deploy/compose.yaml"),
-        read("Dockerfile"),
-        read("apps/web-console/Dockerfile"),
-        read("deploy/config/control-plane.example.json"),
-        read("README.md"),
-      ]);
+    const [
+      compose,
+      dockerfile,
+      webDockerfile,
+      dockerignore,
+      nginx,
+      runtimeConfig,
+      readme,
+    ] = await Promise.all([
+      read("deploy/compose.yaml"),
+      read("Dockerfile"),
+      read("apps/web-console/Dockerfile"),
+      read(".dockerignore"),
+      read("deploy/nginx.conf"),
+      read("deploy/config/control-plane.example.json"),
+      read("README.md"),
+    ]);
 
     for (const service of ["postgres:", "migrate:", "control-plane:", "web:"]) {
       expect(compose).toContain(service);
     }
     expect(compose).toContain("healthcheck:");
+    expect(compose).toContain("FORGEX_CONTROL_PLANE_CONFIG_SHA256");
+    expect(compose).toContain("FORGEX_DATABASE_URL:");
+    expect(compose).not.toContain("postgresql://${FORGEX_POSTGRES_USER");
     expect(dockerfile).toContain("USER node");
+    expect(dockerfile).not.toContain("COPY services ./services");
+    expect(dockerfile).not.toContain("/app /app");
     expect(webDockerfile).toContain("nginx-unprivileged");
+    expect(dockerignore).toContain("**/*.config.json");
+    expect(dockerignore).toContain("test-results");
+    expect(nginx.slice(0, nginx.indexOf("location /api/"))).not.toContain(
+      "Content-Security-Policy",
+    );
+    expect(nginx.slice(nginx.indexOf("location /api/"))).toContain(
+      "Content-Security-Policy",
+    );
     expect(runtimeConfig).toContain("tokenSha256");
     expect(runtimeConfig).not.toMatch(/"(?:token|password|sessionKey)"\s*:/u);
     expect(readme).toContain("docker compose");
     expect(readme).toContain("npm run db:migrate");
+    expect(readme).toContain("0014_browser_sessions.sql");
   });
 
   it("CI 对格式、类型、测试和生产构建执行统一门禁", async () => {

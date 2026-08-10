@@ -64,6 +64,11 @@ import type {
   SkillEvaluationAuthority,
 } from "@forgex/extensions";
 
+import {
+  InMemoryBrowserSessionManager,
+  type BrowserSessionManager,
+} from "./browser-session.js";
+
 declare module "fastify" {
   interface FastifyRequest {
     principal: AuthenticatedPrincipal | null;
@@ -94,6 +99,7 @@ export interface ControlPlaneApiOptions {
   serviceVersion?: string;
   sessionCookieSecure?: boolean;
   sessionCookieMaxAgeSeconds?: number;
+  browserSessionManager?: BrowserSessionManager;
   clock?: () => Date;
   logger?: FastifyServerOptions["logger"];
 }
@@ -535,6 +541,11 @@ export const buildControlPlaneApi = (
     repositoryKey: options.repositoryKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+  const browserSessions =
+    options.browserSessionManager ??
+    new InMemoryBrowserSessionManager({
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
 
   const authenticate = async (
     authorization: string | undefined,
@@ -598,6 +609,26 @@ export const buildControlPlaneApi = (
     return parsed.data;
   };
 
+  const authenticateRequest = async (
+    request: FastifyRequest,
+  ): Promise<AuthenticatedPrincipal> => {
+    const credential = requestSessionCredential(request);
+    if (!credential.cookieAuthenticated) {
+      return authenticate(credential.authorization);
+    }
+    const token = credential.authorization?.slice("Bearer ".length) ?? "";
+    const principal = await browserSessions.authenticate(token);
+    const parsed = authenticatedPrincipalSchema.safeParse(principal);
+    if (!parsed.success) {
+      throw new ApplicationError(
+        401,
+        "invalid_session",
+        "登录信息已失效，请重新登录",
+      );
+    }
+    return parsed.data;
+  };
+
   const sessionCookieMaxAgeSeconds =
     options.sessionCookieMaxAgeSeconds ?? 8 * 60 * 60;
   if (
@@ -630,15 +661,21 @@ export const buildControlPlaneApi = (
       );
     }
     const principal = await authenticate(authorization);
+    const sessionToken = await browserSessions.create(
+      principal,
+      sessionCookieMaxAgeSeconds,
+    );
     return reply
       .header("Cache-Control", "no-store")
-      .header("Set-Cookie", sessionCookie(token, sessionCookieMaxAgeSeconds))
+      .header(
+        "Set-Cookie",
+        sessionCookie(sessionToken, sessionCookieMaxAgeSeconds),
+      )
       .send({ data: { actorName: principal.actorName } });
   });
 
   app.get("/api/v1/session", async (request, reply) => {
-    const credential = requestSessionCredential(request);
-    const principal = await authenticate(credential.authorization);
+    const principal = await authenticateRequest(request);
     return reply
       .header("Cache-Control", "no-store")
       .send({ data: { actorName: principal.actorName } });
@@ -652,6 +689,8 @@ export const buildControlPlaneApi = (
         "页面验证已失效，请刷新后重试",
       );
     }
+    const cookieToken = readSessionCookie(request.headers.cookie);
+    if (cookieToken) await browserSessions.revoke(cookieToken);
     return reply
       .header("Cache-Control", "no-store")
       .header("Set-Cookie", sessionCookie("deleted", 0))
@@ -687,7 +726,7 @@ export const buildControlPlaneApi = (
       path.startsWith("/api/v1/workers/")
     ) {
       const credential = requestSessionCredential(request);
-      request.principal = await authenticate(credential.authorization);
+      request.principal = await authenticateRequest(request);
       if (
         credential.cookieAuthenticated &&
         !["GET", "HEAD", "OPTIONS"].includes(request.method) &&

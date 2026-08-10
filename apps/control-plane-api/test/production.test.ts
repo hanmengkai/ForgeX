@@ -33,14 +33,33 @@ describe("Control Plane 生产装配", () => {
       skillEvaluators: [],
       mcpVerifiers: [],
     });
-    const query = vi.fn().mockResolvedValue({ rows: [{ ready: 1 }] });
+    const migration = {
+      version: "0014",
+      name: "browser_sessions",
+      sql: "CREATE TABLE browser_sessions(id text);",
+    };
+    const client = {
+      query: vi.fn().mockResolvedValue({
+        rows: [
+          {
+            version: migration.version,
+            name: migration.name,
+            checksum: digest(migration.sql),
+          },
+        ],
+      }),
+      release: vi.fn(),
+    };
+    const query = vi.fn().mockResolvedValue({ rows: [] });
     const pool = {
-      connect: vi.fn(),
+      connect: vi.fn().mockResolvedValue(client),
       query,
     };
 
     const app = createProductionControlPlane({
       config,
+      authRealmRevision: digest("production-auth-realm"),
+      migrations: [migration],
       pool,
       serviceVersion: "0.1.0-test",
     });
@@ -52,7 +71,9 @@ describe("Control Plane 生产装配", () => {
       version: "0.1.0-test",
     });
     expect(ready.statusCode).toBe(200);
-    expect(query).toHaveBeenCalledWith("SELECT 1 AS ready");
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining("forgex_schema_migrations"),
+    );
     await app.close();
   });
 });

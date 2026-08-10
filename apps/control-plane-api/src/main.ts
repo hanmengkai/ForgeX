@@ -1,6 +1,7 @@
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Pool } from "pg";
+import { loadPostgresMigrations } from "@forgex/postgres";
 
 import { createProductionControlPlane } from "./production.js";
 import {
@@ -17,7 +18,16 @@ export const startControlPlane = async (
   if (!configPath) {
     throw new Error("缺少 FORGEX_CONTROL_PLANE_CONFIG");
   }
-  const config = await loadControlPlaneRuntimeConfig(configPath);
+  const configDigest = environment.FORGEX_CONTROL_PLANE_CONFIG_SHA256;
+  if (!configDigest) {
+    throw new Error("缺少 FORGEX_CONTROL_PLANE_CONFIG_SHA256");
+  }
+  const config = await loadControlPlaneRuntimeConfig(configPath, configDigest);
+  const migrations = await loadPostgresMigrations(
+    fileURLToPath(
+      new URL("../../../packages/postgres/migrations/", import.meta.url),
+    ),
+  );
   const pool = new Pool({
     connectionString: requireDatabaseUrl(environment),
     max: 20,
@@ -26,6 +36,8 @@ export const startControlPlane = async (
   });
   const app = createProductionControlPlane({
     config,
+    authRealmRevision: configDigest,
+    migrations,
     pool,
     serviceVersion: SERVICE_VERSION,
     logger: true,

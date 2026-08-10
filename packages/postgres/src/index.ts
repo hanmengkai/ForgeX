@@ -6,6 +6,7 @@ export {
   type PostgresQueryResult,
 } from "./postgres-worker-fleet-repository.js";
 export {
+  assertPostgresMigrationsCurrent,
   loadPostgresMigrations,
   runPostgresMigrations,
   type PostgresMigration,

@@ -14,6 +14,7 @@
     "build:all": "npm run build && npm run build --workspace @forgex/web-console",
     "db:migrate": "npm run build -w @forgex/postgres && npm run migrate -w @forgex/postgres",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "format:check": "prettier --check ."
@@ -22,6 +23,7 @@
     "node": ">=22.13.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^4.1.10",
     "prettier": "^3.6.2",

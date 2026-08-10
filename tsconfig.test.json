@@ -18,6 +18,9 @@
     "packages/*/src/**/*.ts",
     "packages/*/test/**/*.ts",
     "services/*/src/**/*.ts",
-    "services/*/test/**/*.ts"
+    "services/*/test/**/*.ts",
+    "e2e/**/*.ts",
+    "playwright.config.ts",
+    "vitest.config.ts"
   ]
 }

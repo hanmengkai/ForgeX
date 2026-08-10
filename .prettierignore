@@ -4,3 +4,5 @@ LICENSE
 apps/web-console/Dockerfile
 deploy/.env.example
 deploy/nginx.conf
+test-results/
+playwright-report/

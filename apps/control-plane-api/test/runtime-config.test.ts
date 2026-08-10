@@ -146,4 +146,34 @@ describe("Control Plane 运行配置", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("拒绝人员与 Runner 共用同一令牌摘要", () => {
+    const tokenSha256 = digest("cross-domain-token-with-enough-entropy");
+    const parsed = ControlPlaneRuntimeConfigSchema.safeParse({
+      schemaVersion: 1,
+      host: "0.0.0.0",
+      port: 3000,
+      projectKey,
+      repositoryKey,
+      sessions: [
+        {
+          tokenSha256,
+          principal: {
+            actorKey,
+            actorName: "产品负责人",
+            tenantKey,
+            roles: ["product_owner"],
+          },
+        },
+      ],
+      runnerSessions: [
+        { tokenSha256, runner: { tenantKey, runnerKey, keyId } },
+      ],
+      trustedRunners: [],
+      skillEvaluators: [],
+      mcpVerifiers: [],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
 });

@@ -24,4 +24,13 @@ describe("浏览器服务端会话", () => {
     now = new Date("2026-08-11T00:01:01.000Z");
     await expect(sessions.authenticate(expiring)).resolves.toBeNull();
   });
+
+  it("同一人员重新登录后只保留最新会话", async () => {
+    const sessions = new InMemoryBrowserSessionManager();
+    const first = await sessions.create(principal, 60);
+    const second = await sessions.create(principal, 60);
+
+    await expect(sessions.authenticate(first)).resolves.toBeNull();
+    await expect(sessions.authenticate(second)).resolves.toEqual(principal);
+  });
 });
