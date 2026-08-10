@@ -157,11 +157,10 @@ describe("VerificationRunnerRuntime", () => {
     const controlPlane = {
       listPending: vi.fn(async () => [target]),
       publishPreview: vi.fn(async () => Promise.resolve()),
-      submitEvidence: vi
-        .fn(async (evidence) => {
-          submitted.push(evidence);
-          if (submitted.length === 1) throw new Error("response_lost");
-        }),
+      submitEvidence: vi.fn(async (evidence) => {
+        submitted.push(evidence);
+        if (submitted.length === 1) throw new Error("response_lost");
+      }),
     };
     const verifier = { verify: vi.fn(async () => passedVerification) };
     const options = {
