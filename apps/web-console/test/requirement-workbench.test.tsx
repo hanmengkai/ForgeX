@@ -55,6 +55,7 @@ const createClient = (): ForgeXClient => ({
     teamCapabilities: [],
     externalTools: [],
   }),
+  listMcpInvocations: vi.fn().mockResolvedValue([]),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [
       {
@@ -96,6 +97,8 @@ const createClient = (): ForgeXClient => ({
   }),
   createRequirement: vi.fn().mockResolvedValue(undefined),
   runRequirementAction: vi.fn().mockResolvedValue(undefined),
+  approveMcpInvocation: vi.fn().mockResolvedValue(undefined),
+  cancelMcpInvocation: vi.fn().mockResolvedValue(undefined),
 });
 
 const deferred = <T,>() => {

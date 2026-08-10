@@ -16,6 +16,41 @@ export {
   type McpRegistryApplicationServiceOptions,
 } from "./mcp-registry-service.js";
 export {
+  InMemoryMcpInputSchemaStore,
+  MCP_VALIDATOR_CACHE_LIMIT,
+  canonicalizeMcpArguments,
+  canonicalizeMcpInputSchema,
+  mcpValidatorCacheSizeForDiagnostics,
+  projectMcpArgumentsForPeople,
+  validateMcpToolArguments,
+} from "./mcp-input-schema-store.js";
+export type {
+  CanonicalMcpInputSchema,
+  CanonicalMcpArguments,
+  McpArgumentForPeople,
+  McpInputSchemaReference,
+  McpInputSchemaStore,
+  McpJsonValue,
+} from "./mcp-input-schema-store.js";
+export {
+  InMemoryMcpInvocationRepository,
+  McpInvocationAuditEventSchema,
+  McpInvocationRecordSchema,
+} from "./mcp-invocation-repository.js";
+export type {
+  McpInvocationAuditEvent,
+  McpInvocationRecord,
+  McpInvocationRepository,
+  McpInvocationTransaction,
+} from "./mcp-invocation-repository.js";
+export {
+  McpInvocationApplicationService,
+  type McpInvocationApplicationServiceOptions,
+  type McpInvocationItemForPeople,
+  type McpInvocationPeopleView,
+  type TrustedMcpToolDirectory,
+} from "./mcp-invocation-service.js";
+export {
   ExtensionCatalogApplicationService,
   type ExtensionCatalogApplicationServiceOptions,
   type ExtensionCatalogOverviewForPeople,
@@ -62,12 +97,15 @@ export type {
 } from "./requirement-repository.js";
 export {
   InMemoryWorkerFleetRepository,
+  type WorkerCompletionProof,
   type WorkerFleetRepository,
   type WorkerFleetSnapshot,
   type WorkerFleetTransaction,
 } from "./worker-fleet-repository.js";
 export {
   WorkerFleetService,
+  type McpInvocationDispatch,
+  type McpWorkerCompletionResult,
   type WorkerConnectionResult,
   type WorkerFleetPeopleOverview,
   type WorkerFleetServiceOptions,

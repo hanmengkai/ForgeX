@@ -357,4 +357,83 @@ describe("createHttpForgeXClient", () => {
 
     await expect(client.listWorkers()).rejects.toThrow("设备列表格式不正确");
   });
+
+  it("严格校验操作确认列表并只执行与当前操作精确绑定的确认入口", async () => {
+    const self = "/api/v1/mcp-invocations/33333333-3333-4333-8333-333333333333";
+    const valid = {
+      title: "创建交付分支",
+      serviceName: "代码仓库助手",
+      status: "等待产品确认",
+      requestedBy: "初级研发",
+      requestedAt: "2026-08-10T10:00:00.000Z",
+      detail: "涉及写入或外部动作，需要产品负责人确认",
+      inputs: [
+        {
+          label: "分支名称",
+          display: "single",
+          values: ["feature/payment"],
+          sensitive: false,
+        },
+      ],
+      links: {
+        self,
+        actions: {
+          approve: `${self}/approve`,
+          cancel: `${self}/cancel`,
+        },
+      },
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [valid] })))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [{ ...valid, technicalName: "unsafe.tool" }],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                ...valid,
+                inputs: [
+                  {
+                    label: "访问凭据",
+                    display: "masked",
+                    values: ["real-secret"],
+                    sensitive: true,
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(client.listMcpInvocations()).resolves.toEqual([valid]);
+    await expect(client.listMcpInvocations()).rejects.toThrow(
+      "操作确认列表格式不正确",
+    );
+    await expect(client.listMcpInvocations()).rejects.toThrow(
+      "操作确认列表格式不正确",
+    );
+    await expect(
+      client.approveMcpInvocation("/api/v1/mcp-invocations/../../../workers"),
+    ).rejects.toThrow("这项确认已经失效");
+    await expect(client.cancelMcpInvocation(`${self}/approve`)).rejects.toThrow(
+      "这项取消操作已经失效",
+    );
+    await client.approveMcpInvocation(`${self}/approve`);
+    expect(fetcher.mock.calls[3]?.[0]).toBe(`${self}/approve`);
+    expect(fetcher.mock.calls[3]?.[1]).toMatchObject({ method: "POST" });
+    await client.cancelMcpInvocation(`${self}/cancel`);
+    expect(fetcher.mock.calls[4]?.[0]).toBe(`${self}/cancel`);
+    expect(fetcher.mock.calls[4]?.[1]).toMatchObject({ method: "POST" });
+  });
 });

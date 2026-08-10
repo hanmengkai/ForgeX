@@ -1,5 +1,6 @@
 import type {
   DeliveryQueueSnapshot,
+  DeliveryWorkKind,
   WorkerRegistrySnapshot,
 } from "@forgex/domain";
 
@@ -9,6 +10,11 @@ export interface WorkerFleetSnapshot {
   queue: DeliveryQueueSnapshot;
 }
 
+export interface WorkerCompletionProof {
+  assignmentKey: string;
+  fencingToken: number;
+}
+
 export interface WorkerFleetTransaction {
   load(): WorkerFleetSnapshot | null;
   save(snapshot: WorkerFleetSnapshot): void;
@@ -16,11 +22,15 @@ export interface WorkerFleetTransaction {
     projectKey: string,
     workKey: string,
     requirementRevision: number,
+    workKind?: DeliveryWorkKind,
+    proof?: WorkerCompletionProof,
   ): Promise<boolean>;
   markCompletedWork(
     projectKey: string,
     workKey: string,
     requirementRevision: number,
+    workKind?: DeliveryWorkKind,
+    proof?: WorkerCompletionProof,
   ): Promise<void>;
 }
 
@@ -38,12 +48,16 @@ const completedWorkKey = (
   projectKey: string,
   workKey: string,
   requirementRevision: number,
+  workKind: DeliveryWorkKind = "requirement_delivery",
 ): string =>
-  `${projectKey.toLowerCase()}:${workKey.toLowerCase()}:${requirementRevision}`;
+  `${workKind}:${projectKey.toLowerCase()}:${workKey.toLowerCase()}:${requirementRevision}`;
 
 export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
   readonly #snapshots = new Map<string, WorkerFleetSnapshot>();
-  readonly #completedWorkKeys = new Map<string, Set<string>>();
+  readonly #completedWorkKeys = new Map<
+    string,
+    Map<string, WorkerCompletionProof | null>
+  >();
   readonly #tenantTails = new Map<string, Promise<void>>();
 
   async transaction<T>(
@@ -62,7 +76,7 @@ export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
 
     const stored = this.#snapshots.get(normalizedTenantKey);
     let pending = stored ? copySnapshot(stored) : null;
-    const pendingCompletedWorkKeys = new Set(
+    const pendingCompletedWorkKeys = new Map(
       this.#completedWorkKeys.get(normalizedTenantKey) ?? [],
     );
     let changed = false;
@@ -76,14 +90,37 @@ export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
         pending = copySnapshot(snapshot);
         changed = true;
       },
-      hasCompletedWork: async (projectKey, workKey, requirementRevision) =>
-        pendingCompletedWorkKeys.has(
-          completedWorkKey(projectKey, workKey, requirementRevision),
-        ),
-      markCompletedWork: async (projectKey, workKey, requirementRevision) => {
-        const key = completedWorkKey(projectKey, workKey, requirementRevision);
+      hasCompletedWork: async (
+        projectKey,
+        workKey,
+        requirementRevision,
+        workKind,
+        proof,
+      ) => {
+        const stored = pendingCompletedWorkKeys.get(
+          completedWorkKey(projectKey, workKey, requirementRevision, workKind),
+        );
+        if (stored === undefined) return false;
+        return proof
+          ? stored?.assignmentKey === proof.assignmentKey &&
+              stored.fencingToken === proof.fencingToken
+          : true;
+      },
+      markCompletedWork: async (
+        projectKey,
+        workKey,
+        requirementRevision,
+        workKind,
+        proof,
+      ) => {
+        const key = completedWorkKey(
+          projectKey,
+          workKey,
+          requirementRevision,
+          workKind,
+        );
         if (!pendingCompletedWorkKeys.has(key)) {
-          pendingCompletedWorkKeys.add(key);
+          pendingCompletedWorkKeys.set(key, proof ? { ...proof } : null);
           completedWorkChanged = true;
         }
       },
@@ -97,7 +134,7 @@ export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
       if (completedWorkChanged) {
         this.#completedWorkKeys.set(
           normalizedTenantKey,
-          new Set(pendingCompletedWorkKeys),
+          new Map(pendingCompletedWorkKeys),
         );
       }
       return result;

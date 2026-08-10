@@ -40,6 +40,7 @@ export type {
   DeliveryCompletionSnapshot,
   DeliveryQueueSnapshot,
   DeliveryWork,
+  DeliveryWorkKind,
   WorkerPeopleView,
   WorkerLeaseReference,
   WorkerNodeSnapshot,

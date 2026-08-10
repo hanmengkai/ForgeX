@@ -76,6 +76,35 @@ export interface WorkerFleetOverview {
   };
 }
 
+export interface McpInvocationListItem {
+  title: string;
+  serviceName: string;
+  status:
+    | "等待产品确认"
+    | "等待设备执行"
+    | "正在执行"
+    | "执行完成"
+    | "执行未成功"
+    | "已取消"
+    | "结果待人工核对";
+  requestedBy: string;
+  requestedAt: string;
+  detail: string;
+  inputs: Array<{
+    label: string;
+    display: "single" | "list" | "masked";
+    values: string[];
+    sensitive: boolean;
+  }>;
+  links: {
+    self: string;
+    actions: {
+      approve?: string | undefined;
+      cancel?: string | undefined;
+    };
+  };
+}
+
 export type ExtensionCatalogItem = ExtensionItemForPeople;
 export type ExtensionCatalogOverview = ExtensionCatalogOverviewForPeople;
 
@@ -83,12 +112,15 @@ export interface ForgeXClient {
   listRequirements(): Promise<RequirementListPage>;
   listWorkers(): Promise<WorkerFleetOverview>;
   listExtensions(): Promise<ExtensionCatalogOverview>;
+  listMcpInvocations(): Promise<McpInvocationListItem[]>;
   getRequirement(selfUrl: string): Promise<RequirementDetail>;
   createRequirement(spec: RequirementSpecInput): Promise<void>;
   runRequirementAction(
     actionUrl: string | undefined,
     body: Record<string, unknown>,
   ): Promise<void>;
+  approveMcpInvocation(actionUrl: string | undefined): Promise<void>;
+  cancelMcpInvocation(actionUrl: string | undefined): Promise<void>;
 }
 
 const requirementStatuses = [
@@ -300,6 +332,112 @@ const workerListResponseSchema = z
     }
   });
 
+const mcpInvocationSelfPattern =
+  /^\/api\/v1\/mcp-invocations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const mcpInvocationListResponseSchema = z
+  .object({
+    data: z
+      .array(
+        z
+          .object({
+            title: z.string().trim().min(2).max(100),
+            serviceName: z.string().trim().min(2).max(100),
+            status: z.enum([
+              "等待产品确认",
+              "等待设备执行",
+              "正在执行",
+              "执行完成",
+              "执行未成功",
+              "已取消",
+              "结果待人工核对",
+            ]),
+            requestedBy: z.string().trim().min(2).max(100),
+            requestedAt: z.iso.datetime(),
+            detail: z.string().trim().min(2).max(200),
+            inputs: z
+              .array(
+                z
+                  .object({
+                    label: z.string().trim().min(2).max(100),
+                    display: z.enum(["single", "list", "masked"]),
+                    values: z.array(z.string().max(500)).min(1).max(50),
+                    sensitive: z.boolean(),
+                  })
+                  .strict()
+                  .superRefine((input, context) => {
+                    if (
+                      (input.sensitive && input.display !== "masked") ||
+                      (!input.sensitive && input.display === "masked") ||
+                      (input.display !== "list" && input.values.length !== 1) ||
+                      (input.sensitive && input.values[0] !== "已安全提供")
+                    ) {
+                      context.addIssue({
+                        code: "custom",
+                        message: "业务参数展示方式不一致",
+                      });
+                    }
+                  }),
+              )
+              .max(50),
+            links: z
+              .object({
+                self: z.string().regex(mcpInvocationSelfPattern),
+                actions: z
+                  .object({
+                    approve: z.string().optional(),
+                    cancel: z.string().optional(),
+                  })
+                  .strict(),
+              })
+              .strict(),
+          })
+          .strict()
+          .superRefine((item, context) => {
+            const approve = item.links.actions.approve;
+            const cancel = item.links.actions.cancel;
+            if (
+              approve !== undefined &&
+              approve !== `${item.links.self}/approve`
+            ) {
+              context.addIssue({
+                code: "custom",
+                path: ["links", "actions", "approve"],
+                message: "确认入口与当前操作不匹配",
+              });
+            }
+            if (approve !== undefined && item.status !== "等待产品确认") {
+              context.addIssue({
+                code: "custom",
+                path: ["links", "actions"],
+                message: "确认入口与操作状态不一致",
+              });
+            }
+            if (
+              cancel !== undefined &&
+              cancel !== `${item.links.self}/cancel`
+            ) {
+              context.addIssue({
+                code: "custom",
+                path: ["links", "actions", "cancel"],
+                message: "取消入口与当前操作不匹配",
+              });
+            }
+            if (
+              cancel !== undefined &&
+              !["等待产品确认", "等待设备执行", "已取消"].includes(item.status)
+            ) {
+              context.addIssue({
+                code: "custom",
+                path: ["links", "actions"],
+                message: "取消入口与操作状态不一致",
+              });
+            }
+          }),
+      )
+      .max(100),
+  })
+  .strict();
+
 const assertRequirementSelfUrl = (url: string): void => {
   if (!requirementSelfPattern.test(url)) {
     throw new Error("这个需求入口已经失效，请刷新页面后重试");
@@ -316,6 +454,24 @@ const assertRequirementActionUrl = (url: string | undefined): string => {
   const selfUrl = suffix ? url.slice(0, -suffix.length) : "";
   if (!suffix || !requirementSelfPattern.test(selfUrl)) {
     throw new Error("这个操作已经失效，请刷新页面后重试");
+  }
+  return url;
+};
+
+const assertMcpApprovalUrl = (url: string | undefined): string => {
+  const suffix = "/approve";
+  const self = url?.endsWith(suffix) ? url.slice(0, -suffix.length) : "";
+  if (!url || !mcpInvocationSelfPattern.test(self)) {
+    throw new Error("这项确认已经失效，请刷新页面后重试");
+  }
+  return url;
+};
+
+const assertMcpCancellationUrl = (url: string | undefined): string => {
+  const suffix = "/cancel";
+  const self = url?.endsWith(suffix) ? url.slice(0, -suffix.length) : "";
+  if (!url || !mcpInvocationSelfPattern.test(self)) {
+    throw new Error("这项取消操作已经失效，请刷新页面后重试");
   }
   return url;
 };
@@ -406,6 +562,16 @@ export const createHttpForgeXClient = (
       }
       return parsed.data.data;
     },
+    listMcpInvocations: async () => {
+      const response = await request("/api/v1/mcp-invocations");
+      const parsed = mcpInvocationListResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("操作确认列表格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
+    },
     getRequirement: async (selfUrl) => {
       assertRequirementSelfUrl(selfUrl);
       const response = await request(selfUrl);
@@ -431,6 +597,12 @@ export const createHttpForgeXClient = (
         method: "POST",
         body: JSON.stringify(body),
       });
+    },
+    approveMcpInvocation: async (actionUrl) => {
+      await request(assertMcpApprovalUrl(actionUrl), { method: "POST" });
+    },
+    cancelMcpInvocation: async (actionUrl) => {
+      await request(assertMcpCancellationUrl(actionUrl), { method: "POST" });
     },
   };
 };

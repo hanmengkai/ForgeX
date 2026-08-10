@@ -30,6 +30,7 @@ export interface WorkerFleetServiceOptions {
   offlineAfterMs?: number;
   leaseDurationMs?: number;
   maxPendingWork?: number;
+  maxMcpPendingWork?: number;
   completionRetentionMs?: number;
   maxCompletionTombstones?: number;
 }
@@ -44,13 +45,37 @@ export interface WorkerConnectionResult {
 }
 
 export interface WorkerLeaseView {
+  workKind: "requirement_delivery" | "mcp_invocation";
   assignmentKey: string;
   fencingToken: number;
+  workerKey: string;
+  generation: number;
+  workerFingerprintHash: string;
   projectKey: string;
   requirementRevision: number;
   requirementKey: string;
+  invocationKey?: string;
   title: string;
   leasedUntil: string;
+}
+
+export interface McpInvocationDispatch {
+  tenantKey: string;
+  projectKey: string;
+  invocationKey: string;
+  serverRevision: number;
+  title: string;
+  connectionBindingKey: string;
+}
+
+export interface McpWorkerCompletionResult {
+  alreadyCompleted: boolean;
+  completion: {
+    projectKey: string;
+    invocationKey: string;
+    assignmentKey: string;
+    fencingToken: number;
+  };
 }
 
 export interface WorkerPollResult {
@@ -87,6 +112,7 @@ export class WorkerFleetService {
   readonly #offlineAfterMs: number;
   readonly #leaseDurationMs: number;
   readonly #maxPendingWork: number;
+  readonly #maxMcpPendingWork: number;
   readonly #completionRetentionMs: number;
   readonly #maxCompletionTombstones: number;
 
@@ -97,6 +123,8 @@ export class WorkerFleetService {
     this.#offlineAfterMs = options.offlineAfterMs ?? 30_000;
     this.#leaseDurationMs = options.leaseDurationMs ?? 60_000;
     this.#maxPendingWork = options.maxPendingWork ?? 500;
+    this.#maxMcpPendingWork =
+      options.maxMcpPendingWork ?? Math.min(100, this.#maxPendingWork);
     this.#completionRetentionMs = options.completionRetentionMs ?? 86_400_000;
     this.#maxCompletionTombstones = options.maxCompletionTombstones ?? 1_000;
     if (
@@ -117,6 +145,13 @@ export class WorkerFleetService {
       this.#maxPendingWork < 1
     ) {
       throw new Error("等待队列上限必须是正整数");
+    }
+    if (
+      !Number.isSafeInteger(this.#maxMcpPendingWork) ||
+      this.#maxMcpPendingWork < 1 ||
+      this.#maxMcpPendingWork > this.#maxPendingWork
+    ) {
+      throw new Error("MCP 等待队列上限必须在总队列范围内");
     }
     if (
       !Number.isFinite(this.#completionRetentionMs) ||
@@ -256,6 +291,99 @@ export class WorkerFleetService {
     );
   }
 
+  async enqueueMcpInvocation(
+    dispatch: McpInvocationDispatch,
+  ): Promise<{ title: string; status: "等待空闲设备" | "已经完成" }> {
+    if (
+      !internalKeyPattern.test(dispatch.tenantKey) ||
+      !internalKeyPattern.test(dispatch.projectKey) ||
+      !internalKeyPattern.test(dispatch.invocationKey) ||
+      !internalKeyPattern.test(dispatch.connectionBindingKey) ||
+      !Number.isSafeInteger(dispatch.serverRevision) ||
+      dispatch.serverRevision < 1 ||
+      !dispatch.title.trim()
+    ) {
+      throw new Error("MCP 调用派发记录范围无效");
+    }
+    return this.#repository.transaction(
+      dispatch.tenantKey,
+      async (transaction) => {
+        const fleet = this.#loadFleet(transaction, dispatch.tenantKey);
+        if (
+          await transaction.hasCompletedWork(
+            dispatch.projectKey,
+            dispatch.invocationKey,
+            dispatch.serverRevision,
+            "mcp_invocation",
+          )
+        ) {
+          return { title: dispatch.title, status: "已经完成" as const };
+        }
+        try {
+          this.#runDomain(() =>
+            fleet.queue.enqueue({
+              workKind: "mcp_invocation",
+              projectKey: dispatch.projectKey,
+              requirementRevision: dispatch.serverRevision,
+              key: dispatch.invocationKey,
+              title: dispatch.title,
+              requiredCapabilities: [dispatch.connectionBindingKey],
+            }),
+          );
+        } catch (error) {
+          if (
+            !(error instanceof ApplicationError) ||
+            error.code !== "duplicate_work"
+          ) {
+            throw error;
+          }
+        }
+        this.#saveFleet(transaction, fleet);
+        return { title: dispatch.title, status: "等待空闲设备" as const };
+      },
+    );
+  }
+
+  async cancelPendingMcpInvocation(
+    dispatch: McpInvocationDispatch,
+  ): Promise<void> {
+    await this.#repository.transaction(dispatch.tenantKey, (transaction) => {
+      const fleet = this.#loadFleet(transaction, dispatch.tenantKey);
+      if (
+        fleet.queue.cancelWork({
+          workKind: "mcp_invocation",
+          projectKey: dispatch.projectKey,
+          workKey: dispatch.invocationKey,
+          workRevision: dispatch.serverRevision,
+        })
+      ) {
+        this.#saveFleet(transaction, fleet);
+      }
+    });
+  }
+
+  async isMcpInvocationCompleted(
+    dispatch: McpInvocationDispatch,
+    completion: { assignmentKey: string; fencingToken: number },
+  ): Promise<boolean> {
+    if (
+      !internalKeyPattern.test(completion.assignmentKey) ||
+      !Number.isSafeInteger(completion.fencingToken) ||
+      completion.fencingToken < 1
+    ) {
+      throw new Error("MCP 完成凭据格式无效");
+    }
+    return this.#repository.transaction(dispatch.tenantKey, (transaction) =>
+      transaction.hasCompletedWork(
+        dispatch.projectKey,
+        dispatch.invocationKey,
+        dispatch.serverRevision,
+        "mcp_invocation",
+        completion,
+      ),
+    );
+  }
+
   async heartbeat(
     input: WorkerConnectionCredentialPayload,
   ): Promise<{ status: "在线" }> {
@@ -302,7 +430,9 @@ export class WorkerFleetService {
         this.#runDomain(() => fleet.queue.dispatchForWorker(session, now));
       this.#saveFleet(transaction, fleet);
       return {
-        assignment: assignment ? this.#toLeaseView(assignment) : null,
+        assignment: assignment
+          ? this.#toLeaseView(assignment, fleet.registry)
+          : null,
       };
     });
   }
@@ -345,16 +475,175 @@ export class WorkerFleetService {
           fleet.queue.completeLeaseForWorker(session, command, this.#now()),
         );
         if (!result.alreadyCompleted && current) {
+          if (
+            (current.workKind ?? "requirement_delivery") !==
+            "requirement_delivery"
+          ) {
+            throw new ApplicationError(
+              409,
+              "mcp_completion_required",
+              "MCP 调用必须通过受控结果入口完成",
+            );
+          }
           await transaction.markCompletedWork(
             current.projectKey,
             current.workKey,
             current.requirementRevision,
+            "requirement_delivery",
           );
         }
         this.#saveFleet(transaction, fleet);
         return result;
       },
     );
+  }
+
+  async completeMcp(
+    connection: WorkerConnectionCredentialPayload,
+    input: WorkerLeaseCommandPayload,
+  ): Promise<McpWorkerCompletionResult> {
+    const credential = this.#parseConnection(connection);
+    const command = this.#parseLeaseCommand(input);
+    return this.#repository.transaction(
+      credential.tenantKey,
+      async (transaction) => {
+        const fleet = this.#requireFleet(transaction, credential.tenantKey);
+        const session = this.#sessionOf(credential);
+        const current = this.#runDomain(() =>
+          fleet.queue.currentAssignmentForWorker(session),
+        );
+        if (
+          current &&
+          (current.workKind ?? "requirement_delivery") !== "mcp_invocation"
+        ) {
+          throw new ApplicationError(
+            409,
+            "invalid_work_kind",
+            "当前租约不是 MCP 调用",
+          );
+        }
+        const result = this.#runDomain(() =>
+          fleet.queue.completeLeaseForWorker(session, command, this.#now()),
+        );
+        if (!result.alreadyCompleted && current) {
+          await transaction.markCompletedWork(
+            current.projectKey,
+            current.workKey,
+            current.requirementRevision,
+            "mcp_invocation",
+            {
+              assignmentKey: current.assignmentKey,
+              fencingToken: current.fencingToken,
+            },
+          );
+        }
+        const completed =
+          current ??
+          this.#runDomain(() =>
+            fleet.queue.completedWorkForWorker(session, command),
+          );
+        if (
+          !completed ||
+          (completed.workKind ?? "requirement_delivery") !== "mcp_invocation"
+        ) {
+          throw new ApplicationError(
+            409,
+            "invalid_work_kind",
+            "当前完成记录不是 MCP 调用",
+          );
+        }
+        this.#saveFleet(transaction, fleet);
+        return {
+          ...result,
+          completion: {
+            projectKey: completed.projectKey,
+            invocationKey: completed.workKey,
+            assignmentKey: completed.assignmentKey,
+            fencingToken: completed.fencingToken,
+          },
+        };
+      },
+    );
+  }
+
+  async getMcpLease(
+    connection: WorkerConnectionCredentialPayload,
+    input: WorkerLeaseCommandPayload,
+  ): Promise<WorkerLeaseView> {
+    const credential = this.#parseConnection(connection);
+    const command = this.#parseLeaseCommand(input);
+    return this.#repository.transaction(credential.tenantKey, (transaction) => {
+      const fleet = this.#requireFleet(transaction, credential.tenantKey);
+      const current = this.#runDomain(() =>
+        fleet.queue.currentAssignmentForWorker(this.#sessionOf(credential)),
+      );
+      if (
+        !current ||
+        current.workKind !== "mcp_invocation" ||
+        current.assignmentKey !== command.assignmentKey ||
+        current.fencingToken !== command.fencingToken ||
+        Date.parse(current.leasedUntil) <= this.#now().getTime()
+      ) {
+        throw new ApplicationError(
+          409,
+          "invalid_lease",
+          "MCP 调用租约已经失效，请重新领取",
+        );
+      }
+      return this.#toLeaseView(current, fleet.registry);
+    });
+  }
+
+  async getCurrentLease(
+    connection: WorkerConnectionCredentialPayload,
+    input: WorkerLeaseCommandPayload,
+  ): Promise<WorkerLeaseView> {
+    const credential = this.#parseConnection(connection);
+    const command = this.#parseLeaseCommand(input);
+    return this.#repository.transaction(credential.tenantKey, (transaction) => {
+      const fleet = this.#requireFleet(transaction, credential.tenantKey);
+      const current = this.#runDomain(() =>
+        fleet.queue.currentAssignmentForWorker(this.#sessionOf(credential)),
+      );
+      if (
+        !current ||
+        current.assignmentKey !== command.assignmentKey ||
+        current.fencingToken !== command.fencingToken ||
+        Date.parse(current.leasedUntil) <= this.#now().getTime()
+      ) {
+        throw new ApplicationError(
+          409,
+          "invalid_lease",
+          "任务租约已经失效，请重新领取",
+        );
+      }
+      return this.#toLeaseView(current, fleet.registry);
+    });
+  }
+
+  async cancelMcpLease(
+    connection: WorkerConnectionCredentialPayload,
+    input: WorkerLeaseCommandPayload,
+  ): Promise<void> {
+    const credential = this.#parseConnection(connection);
+    const command = this.#parseLeaseCommand(input);
+    await this.#repository.transaction(credential.tenantKey, (transaction) => {
+      const fleet = this.#requireFleet(transaction, credential.tenantKey);
+      const session = this.#sessionOf(credential);
+      const current = this.#runDomain(() =>
+        fleet.queue.currentAssignmentForWorker(session),
+      );
+      if (!current) return;
+      if (current.workKind !== "mcp_invocation") {
+        throw new ApplicationError(
+          409,
+          "invalid_work_kind",
+          "当前租约不是 MCP 调用",
+        );
+      }
+      this.#runDomain(() => fleet.queue.cancelLeaseForWorker(session, command));
+      this.#saveFleet(transaction, fleet);
+    });
   }
 
   #loadFleet(
@@ -375,6 +664,7 @@ export class WorkerFleetService {
       queue: new DeliveryQueue(registry, {
         leaseDurationMs: this.#leaseDurationMs,
         maxPendingWork: this.#maxPendingWork,
+        maxMcpPendingWork: this.#maxMcpPendingWork,
         completionRetentionMs: this.#completionRetentionMs,
         maxCompletionTombstones: this.#maxCompletionTombstones,
       }),
@@ -406,6 +696,9 @@ export class WorkerFleetService {
       snapshot.registry.offlineAfterMs !== this.#offlineAfterMs ||
       snapshot.queue.leaseDurationMs !== this.#leaseDurationMs ||
       snapshot.queue.maxPendingWork !== this.#maxPendingWork ||
+      (snapshot.queue.maxMcpPendingWork ??
+        Math.min(100, snapshot.queue.maxPendingWork)) !==
+        this.#maxMcpPendingWork ||
       snapshot.queue.completionRetentionMs !== this.#completionRetentionMs ||
       snapshot.queue.maxCompletionTombstones !== this.#maxCompletionTombstones
     ) {
@@ -463,21 +756,36 @@ export class WorkerFleetService {
     return command.data;
   }
 
-  #toLeaseView(assignment: {
-    assignmentKey: string;
-    fencingToken: number;
-    projectKey: string;
-    requirementRevision: number;
-    workKey: string;
-    workTitle: string;
-    leasedUntil: string;
-  }): WorkerLeaseView {
+  #toLeaseView(
+    assignment: {
+      workKind: "requirement_delivery" | "mcp_invocation";
+      assignmentKey: string;
+      fencingToken: number;
+      projectKey: string;
+      requirementRevision: number;
+      workKey: string;
+      workTitle: string;
+      workerKey: string;
+      generation: number;
+      leasedUntil: string;
+    },
+    registry: WorkerRegistry,
+  ): WorkerLeaseView {
     return {
+      workKind: assignment.workKind,
       assignmentKey: assignment.assignmentKey,
       fencingToken: assignment.fencingToken,
+      workerKey: assignment.workerKey,
+      generation: assignment.generation,
+      workerFingerprintHash: registry.accountFingerprintForWorker(
+        assignment.workerKey,
+      ),
       projectKey: assignment.projectKey,
       requirementRevision: assignment.requirementRevision,
       requirementKey: assignment.workKey,
+      ...(assignment.workKind === "mcp_invocation"
+        ? { invocationKey: assignment.workKey }
+        : {}),
       title: assignment.workTitle,
       leasedUntil: assignment.leasedUntil,
     };

@@ -12,7 +12,18 @@ const internalKey = z
   .string()
   .uuid()
   .transform((value) => value.toLowerCase());
-const humanLabel = z.string().trim().min(2).max(100);
+const humanLabel = z
+  .string()
+  .trim()
+  .min(2)
+  .max(100)
+  .refine(
+    (value) =>
+      !/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/u.test(
+        value,
+      ),
+    "业务名称不能包含隐藏控制字符",
+  );
 const businessName = humanLabel.refine(
   (value) => !/^[a-z][a-z0-9_.-]*(?:\(\))?$/i.test(value),
   "请使用业务名称，不要只填写技术标识",
@@ -249,6 +260,17 @@ export class VerifiedMcpHealthReceipt {
     if (nowMs > receipt.#validUntilMs) {
       throw new Error("MCP 探测已经过期，请重新检查连接");
     }
+  }
+
+  static isUsableAt(receipt: VerifiedMcpHealthReceipt, now: Date): boolean {
+    VerifiedMcpHealthReceipt.assertAuthentic(receipt);
+    const nowMs = now.getTime();
+    if (!Number.isFinite(nowMs)) throw new Error("MCP 探测校验时间无效");
+    const producedAtMs = Date.parse(receipt.payload.producedAt);
+    return (
+      producedAtMs <= nowMs + receipt.#maxFutureSkewMs &&
+      nowMs <= receipt.#validUntilMs
+    );
   }
 }
 
@@ -1295,10 +1317,13 @@ export class McpServerRegistry {
       throw new Error("MCP 启用状态缺少可信探测");
     }
     const attestation = latestHealth(release);
-    if (!attestation || attestation.receipt.payload.status !== "healthy") {
-      throw new Error("最近一次 MCP 探测未通过");
+    if (
+      !attestation ||
+      attestation.receipt.payload.status !== "healthy" ||
+      !VerifiedMcpHealthReceipt.isUsableAt(attestation.receipt, this.#clock())
+    ) {
+      return null;
     }
-    VerifiedMcpHealthReceipt.assertUsableAt(attestation.receipt, this.#clock());
     const tool = release.manifest.tools.find(
       (candidate) => candidate.toolKey === toolKey,
     );

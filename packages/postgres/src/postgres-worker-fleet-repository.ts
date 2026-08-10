@@ -1,4 +1,5 @@
 import type {
+  WorkerCompletionProof,
   WorkerFleetRepository,
   WorkerFleetSnapshot,
   WorkerFleetTransaction,
@@ -56,6 +57,14 @@ const assertInternalKey = (value: string, label: string): string => {
   return normalized;
 };
 
+const hasMatchingCompletionProof = (
+  row: unknown,
+  proof: WorkerCompletionProof,
+): boolean =>
+  isRecord(row) &&
+  row.completion_assignment_key === proof.assignmentKey.toLowerCase() &&
+  Number(row.completion_fencing_token) === proof.fencingToken;
+
 export class PostgresWorkerFleetRepository implements WorkerFleetRepository {
   readonly #pool: PostgresPool;
 
@@ -94,36 +103,66 @@ export class PostgresWorkerFleetRepository implements WorkerFleetRepository {
           pending = copySnapshot(snapshot);
           changed = true;
         },
-        hasCompletedWork: async (projectKey, workKey, requirementRevision) => {
+        hasCompletedWork: async (
+          projectKey,
+          workKey,
+          requirementRevision,
+          workKind = "requirement_delivery",
+          proof,
+        ) => {
           const normalizedProjectKey = assertInternalKey(
             projectKey,
             "项目标识",
           );
           const normalizedWorkKey = assertInternalKey(workKey, "需求标识");
           const result = await client.query(
-            "SELECT 1 AS completed FROM forgex_completed_delivery_work WHERE tenant_key = $1 AND project_key = $2 AND work_key = $3 AND requirement_revision = $4",
+            "SELECT completion_assignment_key, completion_fencing_token FROM forgex_completed_delivery_work WHERE tenant_key = $1 AND project_key = $2 AND work_key = $3 AND requirement_revision = $4 AND work_kind = $5",
             [
               normalizedTenantKey,
               normalizedProjectKey,
               normalizedWorkKey,
               requirementRevision,
+              workKind,
             ],
           );
-          return result.rows.length > 0;
+          const row = result.rows[0];
+          return (
+            row !== undefined &&
+            (!proof || hasMatchingCompletionProof(row, proof))
+          );
         },
-        markCompletedWork: async (projectKey, workKey, requirementRevision) => {
+        markCompletedWork: async (
+          projectKey,
+          workKey,
+          requirementRevision,
+          workKind = "requirement_delivery",
+          proof,
+        ) => {
           const normalizedProjectKey = assertInternalKey(
             projectKey,
             "项目标识",
           );
           const normalizedWorkKey = assertInternalKey(workKey, "需求标识");
+          const normalizedAssignmentKey = proof
+            ? assertInternalKey(proof.assignmentKey, "任务租约标识")
+            : null;
+          if (
+            proof &&
+            (!Number.isSafeInteger(proof.fencingToken) ||
+              proof.fencingToken < 1)
+          ) {
+            throw new Error("任务隔离令牌格式不正确");
+          }
           await client.query(
-            "INSERT INTO forgex_completed_delivery_work (tenant_key, project_key, work_key, requirement_revision) VALUES ($1, $2, $3, $4) ON CONFLICT (tenant_key, project_key, work_key, requirement_revision) DO NOTHING",
+            "INSERT INTO forgex_completed_delivery_work (tenant_key, project_key, work_key, requirement_revision, work_kind, completion_assignment_key, completion_fencing_token) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (tenant_key, project_key, work_key, requirement_revision, work_kind) DO NOTHING",
             [
               normalizedTenantKey,
               normalizedProjectKey,
               normalizedWorkKey,
               requirementRevision,
+              workKind,
+              normalizedAssignmentKey,
+              proof?.fencingToken ?? null,
             ],
           );
         },

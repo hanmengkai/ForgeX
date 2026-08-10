@@ -428,6 +428,7 @@ describe("DeliveryQueue", () => {
     expect(() =>
       queue.renewLease({
         assignment: {
+          workKind: "requirement_delivery",
           assignmentKey: "missing",
           tenantKey: "tenant-a",
           projectKey: "project-a",

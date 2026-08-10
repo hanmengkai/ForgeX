@@ -125,6 +125,14 @@ export class WorkerRegistry {
     return this.#tenantKey;
   }
 
+  accountFingerprintForWorker(workerKey: string): string {
+    const worker = this.#workers.get(workerKey);
+    if (!worker) {
+      throw new WorkerDomainError("invalid_session", "找不到对应的 Codex 设备");
+    }
+    return worker.accountFingerprint;
+  }
+
   register(registration: WorkerRegistration, now: Date): WorkerSession {
     const normalized = this.#normalizeRegistration(registration);
     const timestamp = toTimestamp(now, "设备连接时间");
@@ -400,7 +408,17 @@ export class WorkerRegistry {
   }
 }
 
+export type DeliveryWorkKind = "requirement_delivery" | "mcp_invocation";
+
+const isDeliveryWorkKind = (
+  value: unknown,
+): value is DeliveryWorkKind | undefined =>
+  value === undefined ||
+  value === "requirement_delivery" ||
+  value === "mcp_invocation";
+
 export interface DeliveryWork {
+  workKind?: DeliveryWorkKind;
   projectKey: string;
   requirementRevision: number;
   key: string;
@@ -409,6 +427,7 @@ export interface DeliveryWork {
 }
 
 export interface DeliveryAssignment extends WorkerSession {
+  workKind: DeliveryWorkKind;
   assignmentKey: string;
   projectKey: string;
   requirementRevision: number;
@@ -424,6 +443,7 @@ export interface WorkerLeaseReference {
 }
 
 export interface DeliveryActiveAssignmentSnapshot {
+  workKind?: DeliveryWorkKind;
   tenantKey: string;
   assignmentKey: string;
   projectKey: string;
@@ -438,6 +458,7 @@ export interface DeliveryActiveAssignmentSnapshot {
 }
 
 export interface DeliveryCompletionSnapshot {
+  workKind?: DeliveryWorkKind;
   tenantKey: string;
   assignmentKey: string;
   projectKey: string;
@@ -453,15 +474,18 @@ type ActiveAssignment = DeliveryActiveAssignmentSnapshot;
 type CompletedAssignment = DeliveryCompletionSnapshot;
 
 const scopedWorkKey = (
+  workKind: DeliveryWorkKind | undefined,
   projectKey: string,
   workKey: string,
   requirementRevision: number,
-): string => `${projectKey}:${workKey}:${requirementRevision}`;
+): string =>
+  `${workKind ?? "requirement_delivery"}:${projectKey}:${workKey}:${requirementRevision}`;
 
 export interface DeliveryQueueSnapshot {
   schemaVersion: 1;
   leaseDurationMs: number;
   maxPendingWork: number;
+  maxMcpPendingWork?: number;
   completionRetentionMs: number;
   maxCompletionTombstones: number;
   pending: DeliveryWork[];
@@ -477,6 +501,7 @@ export class DeliveryQueue {
   readonly #registry: WorkerRegistry;
   readonly #leaseDurationMs: number;
   readonly #maxPendingWork: number;
+  readonly #maxMcpPendingWork: number;
   readonly #completionRetentionMs: number;
   readonly #maxCompletionTombstones: number;
 
@@ -485,6 +510,7 @@ export class DeliveryQueue {
     options: {
       leaseDurationMs: number;
       maxPendingWork?: number;
+      maxMcpPendingWork?: number;
       completionRetentionMs?: number;
       maxCompletionTombstones?: number;
     },
@@ -498,6 +524,15 @@ export class DeliveryQueue {
     const maxPendingWork = options.maxPendingWork ?? 500;
     if (!Number.isSafeInteger(maxPendingWork) || maxPendingWork < 1) {
       throw new Error("等待队列上限必须是正整数");
+    }
+    const maxMcpPendingWork =
+      options.maxMcpPendingWork ?? Math.min(100, maxPendingWork);
+    if (
+      !Number.isSafeInteger(maxMcpPendingWork) ||
+      maxMcpPendingWork < 1 ||
+      maxMcpPendingWork > maxPendingWork
+    ) {
+      throw new Error("MCP 等待队列上限必须是总队列范围内的正整数");
     }
     const completionRetentionMs = options.completionRetentionMs ?? 86_400_000;
     if (!Number.isFinite(completionRetentionMs) || completionRetentionMs < 1) {
@@ -513,6 +548,7 @@ export class DeliveryQueue {
     this.#registry = registry;
     this.#leaseDurationMs = options.leaseDurationMs;
     this.#maxPendingWork = maxPendingWork;
+    this.#maxMcpPendingWork = maxMcpPendingWork;
     this.#completionRetentionMs = completionRetentionMs;
     this.#maxCompletionTombstones = maxCompletionTombstones;
   }
@@ -532,12 +568,16 @@ export class DeliveryQueue {
       this.#pending.some(
         (item) =>
           item.projectKey === work.projectKey &&
+          (item.workKind ?? "requirement_delivery") ===
+            (work.workKind ?? "requirement_delivery") &&
           item.key === work.key &&
           item.requirementRevision === work.requirementRevision,
       ) ||
       [...this.#active.values()].some(
         (item) =>
           item.projectKey === work.projectKey &&
+          (item.workKind ?? "requirement_delivery") ===
+            (work.workKind ?? "requirement_delivery") &&
           item.workKey === work.key &&
           item.requirementRevision === work.requirementRevision,
       )
@@ -546,7 +586,12 @@ export class DeliveryQueue {
     }
     if (
       this.#completedWorkKeys.has(
-        scopedWorkKey(work.projectKey, work.key, work.requirementRevision),
+        scopedWorkKey(
+          work.workKind,
+          work.projectKey,
+          work.key,
+          work.requirementRevision,
+        ),
       )
     ) {
       throw new WorkerDomainError("already_completed", "这个需求已经完成交付");
@@ -557,12 +602,68 @@ export class DeliveryQueue {
         "等待交付的需求过多，请稍后再试",
       );
     }
+    if (
+      (work.workKind ?? "requirement_delivery") === "mcp_invocation" &&
+      this.#pending.filter(
+        (item) =>
+          (item.workKind ?? "requirement_delivery") === "mcp_invocation",
+      ).length +
+        [...this.#active.values()].filter(
+          (item) =>
+            (item.workKind ?? "requirement_delivery") === "mcp_invocation",
+        ).length >=
+        this.#maxMcpPendingWork
+    ) {
+      throw new WorkerDomainError(
+        "queue_full",
+        "等待执行的外部操作过多，请稍后再试",
+      );
+    }
     this.#pending.push({
       ...work,
+      workKind: work.workKind ?? "requirement_delivery",
       projectKey: work.projectKey.trim().toLowerCase(),
       title: work.title.trim(),
       requiredCapabilities: [...new Set(work.requiredCapabilities)],
     });
+  }
+
+  cancelPendingWork(input: {
+    workKind: DeliveryWorkKind;
+    projectKey: string;
+    workKey: string;
+    workRevision: number;
+  }): boolean {
+    const index = this.#pending.findIndex(
+      (work) =>
+        (work.workKind ?? "requirement_delivery") === input.workKind &&
+        work.projectKey === input.projectKey &&
+        work.key === input.workKey &&
+        work.requirementRevision === input.workRevision,
+    );
+    if (index < 0) return false;
+    this.#pending.splice(index, 1);
+    return true;
+  }
+
+  cancelWork(input: {
+    workKind: DeliveryWorkKind;
+    projectKey: string;
+    workKey: string;
+    workRevision: number;
+  }): boolean {
+    if (this.cancelPendingWork(input)) return true;
+    const active = [...this.#active.values()].find(
+      (assignment) =>
+        (assignment.workKind ?? "requirement_delivery") === input.workKind &&
+        assignment.projectKey === input.projectKey &&
+        assignment.workKey === input.workKey &&
+        assignment.requirementRevision === input.workRevision,
+    );
+    if (!active) return false;
+    this.#registry.release(active);
+    this.#active.delete(active.assignmentKey);
+    return true;
   }
 
   dispatchForWorker(
@@ -666,6 +767,7 @@ export class DeliveryQueue {
     this.#active.delete(active.assignmentKey);
     this.#rememberCompleted({
       tenantKey: active.tenantKey,
+      workKind: active.workKind ?? "requirement_delivery",
       assignmentKey: active.assignmentKey,
       projectKey: active.projectKey,
       requirementRevision: active.requirementRevision,
@@ -678,17 +780,39 @@ export class DeliveryQueue {
     return { alreadyCompleted: false };
   }
 
+  completedWorkForWorker(
+    session: WorkerSession,
+    reference: WorkerLeaseReference,
+  ): DeliveryCompletionSnapshot | null {
+    this.#registry.assertSession(session);
+    const completed = this.#completed.get(reference.assignmentKey);
+    if (!completed) return null;
+    this.#assertCompletedLease(completed, session, reference);
+    return { ...completed };
+  }
+
   abandonLease(assignment: DeliveryAssignment): void {
     const active = this.#assertActive(assignment);
     this.#registry.release(active);
     this.#active.delete(active.assignmentKey);
     this.#pending.unshift({
       key: active.workKey,
+      workKind: active.workKind ?? "requirement_delivery",
       projectKey: active.projectKey,
       requirementRevision: active.requirementRevision,
       title: active.workTitle,
       requiredCapabilities: [...active.requiredCapabilities],
     });
+  }
+
+  cancelLeaseForWorker(
+    session: WorkerSession,
+    reference: WorkerLeaseReference,
+  ): void {
+    this.#registry.assertSession(session);
+    const active = this.#assertActiveForWorker(session, reference);
+    this.#registry.release(active);
+    this.#active.delete(active.assignmentKey);
   }
 
   abandonWorker(workerKey: string): void {
@@ -702,6 +826,7 @@ export class DeliveryQueue {
     this.#active.delete(active.assignmentKey);
     this.#pending.unshift({
       key: active.workKey,
+      workKind: active.workKind ?? "requirement_delivery",
       projectKey: active.projectKey,
       requirementRevision: active.requirementRevision,
       title: active.workTitle,
@@ -720,6 +845,7 @@ export class DeliveryQueue {
       this.#active.delete(assignment.assignmentKey);
       this.#pending.push({
         key: assignment.workKey,
+        workKind: assignment.workKind ?? "requirement_delivery",
         projectKey: assignment.projectKey,
         requirementRevision: assignment.requirementRevision,
         title: assignment.workTitle,
@@ -751,6 +877,7 @@ export class DeliveryQueue {
       schemaVersion: 1,
       leaseDurationMs: this.#leaseDurationMs,
       maxPendingWork: this.#maxPendingWork,
+      maxMcpPendingWork: this.#maxMcpPendingWork,
       completionRetentionMs: this.#completionRetentionMs,
       maxCompletionTombstones: this.#maxCompletionTombstones,
       pending: this.#pending.map((work) => ({
@@ -782,12 +909,18 @@ export class DeliveryQueue {
     const queue = new DeliveryQueue(registry, {
       leaseDurationMs: snapshot.leaseDurationMs,
       maxPendingWork: snapshot.maxPendingWork,
+      maxMcpPendingWork:
+        snapshot.maxMcpPendingWork ?? Math.min(100, snapshot.maxPendingWork),
       completionRetentionMs: snapshot.completionRetentionMs,
       maxCompletionTombstones: snapshot.maxCompletionTombstones,
     });
     if (
       snapshot.pending.length + snapshot.active.length >
         snapshot.maxPendingWork ||
+      [...snapshot.pending, ...snapshot.active].filter(
+        (item) =>
+          (item.workKind ?? "requirement_delivery") === "mcp_invocation",
+      ).length > queue.#maxMcpPendingWork ||
       snapshot.completed.length > snapshot.maxCompletionTombstones
     ) {
       throw new Error("交付队列快照超过容量上限");
@@ -801,11 +934,13 @@ export class DeliveryQueue {
     let greatestFencingToken = 0;
     for (const work of snapshot.pending) {
       const key = scopedWorkKey(
+        work.workKind,
         work.projectKey,
         work.key,
         work.requirementRevision,
       );
       if (
+        !isDeliveryWorkKind(work.workKind) ||
         !work.projectKey?.trim() ||
         !work.key ||
         !work.title?.trim() ||
@@ -822,17 +957,20 @@ export class DeliveryQueue {
       scopedKeys.add(key);
       queue.#pending.push({
         ...work,
+        workKind: work.workKind ?? "requirement_delivery",
         requiredCapabilities: [...work.requiredCapabilities],
       });
     }
     for (const active of snapshot.active) {
       const worker = workers.get(active.workerKey);
       const key = scopedWorkKey(
+        active.workKind,
         active.projectKey,
         active.workKey,
         active.requirementRevision,
       );
       if (
+        !isDeliveryWorkKind(active.workKind) ||
         active.tenantKey !== registrySnapshot.tenantKey ||
         !active.projectKey?.trim() ||
         !active.assignmentKey ||
@@ -865,6 +1003,7 @@ export class DeliveryQueue {
       );
       queue.#active.set(active.assignmentKey, {
         ...active,
+        workKind: active.workKind ?? "requirement_delivery",
         requiredCapabilities: [...active.requiredCapabilities],
       });
     }
@@ -880,11 +1019,13 @@ export class DeliveryQueue {
     }
     for (const completed of snapshot.completed) {
       const key = scopedWorkKey(
+        completed.workKind,
         completed.projectKey,
         completed.workKey,
         completed.requirementRevision,
       );
       if (
+        !isDeliveryWorkKind(completed.workKind) ||
         completed.tenantKey !== registrySnapshot.tenantKey ||
         !completed.projectKey?.trim() ||
         !completed.assignmentKey ||
@@ -907,9 +1048,13 @@ export class DeliveryQueue {
         greatestFencingToken,
         completed.fencingToken,
       );
-      queue.#completed.set(completed.assignmentKey, { ...completed });
+      queue.#completed.set(completed.assignmentKey, {
+        ...completed,
+        workKind: completed.workKind ?? "requirement_delivery",
+      });
       queue.#completedWorkKeys.add(
         scopedWorkKey(
+          completed.workKind,
           completed.projectKey,
           completed.workKey,
           completed.requirementRevision,
@@ -967,6 +1112,7 @@ export class DeliveryQueue {
     const assignmentKey = randomUUID();
     const active: ActiveAssignment = {
       tenantKey: selection.tenantKey,
+      workKind: work.workKind ?? "requirement_delivery",
       workerKey: selection.workerKey,
       generation: selection.generation,
       assignmentKey,
@@ -1027,6 +1173,7 @@ export class DeliveryQueue {
     this.#completed.set(completed.assignmentKey, completed);
     this.#completedWorkKeys.add(
       scopedWorkKey(
+        completed.workKind,
         completed.projectKey,
         completed.workKey,
         completed.requirementRevision,
@@ -1050,6 +1197,7 @@ export class DeliveryQueue {
     this.#completed.delete(assignmentKey);
     this.#completedWorkKeys.delete(
       scopedWorkKey(
+        completed.workKind,
         completed.projectKey,
         completed.workKey,
         completed.requirementRevision,
@@ -1063,6 +1211,7 @@ export class DeliveryQueue {
   ): DeliveryAssignment {
     return {
       tenantKey: assignment.tenantKey,
+      workKind: assignment.workKind ?? "requirement_delivery",
       assignmentKey: assignment.assignmentKey,
       projectKey: assignment.projectKey,
       requirementRevision: assignment.requirementRevision,

@@ -9,6 +9,7 @@ import type {
 import { CreateRequirementDialog } from "./create-requirement-dialog.js";
 import { ExtensionCenter } from "./extension-center.js";
 import { ArrowIcon, CheckIcon, PlusIcon, SparkIcon } from "./icons.js";
+import { McpInvocationCenter } from "./mcp-invocation-center.js";
 import { WorkerCenter } from "./worker-center.js";
 
 interface RequirementWorkbenchProps {
@@ -216,7 +217,7 @@ export function RequirementWorkbench({
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [activeView, setActiveView] = useState<
-    "workbench" | "workers" | "extensions"
+    "workbench" | "workers" | "extensions" | "approvals"
   >("workbench");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = useState<string | null>(null);
@@ -372,6 +373,15 @@ export function RequirementWorkbench({
             <span>✓</span>质量与验收
           </span>
           <button
+            className={`nav-item ${activeView === "approvals" ? "active" : ""}`}
+            type="button"
+            aria-label="操作确认"
+            aria-current={activeView === "approvals" ? "page" : undefined}
+            onClick={() => setActiveView("approvals")}
+          >
+            <span>✓</span>操作确认
+          </button>
+          <button
             className={`nav-item ${activeView === "extensions" ? "active" : ""}`}
             type="button"
             aria-label="扩展中心"
@@ -391,7 +401,9 @@ export function RequirementWorkbench({
       </aside>
 
       <main className="workspace" id={activeView}>
-        {activeView === "extensions" ? (
+        {activeView === "approvals" ? (
+          <McpInvocationCenter client={client} />
+        ) : activeView === "extensions" ? (
           <ExtensionCenter client={client} />
         ) : activeView === "workers" ? (
           <WorkerCenter client={client} />

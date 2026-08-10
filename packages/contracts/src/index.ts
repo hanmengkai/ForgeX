@@ -178,6 +178,16 @@ export const WorkerConnectionCredentialSchema = z
   })
   .strict();
 
+export const McpInvocationRequestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    requestKey: internalKey,
+    serverKey: internalKey,
+    toolKey: internalKey,
+    arguments: z.unknown(),
+  })
+  .strict();
+
 export const StartDeliveryCommandSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -212,6 +222,11 @@ export const WorkerLeaseCommandSchema = z
     fencingToken: z.number().int().positive(),
   })
   .strict();
+
+export const WorkerMcpCompletionSchema = WorkerLeaseCommandSchema.extend({
+  outcome: z.enum(["succeeded", "failed"]),
+  summary: readableText("执行结果", 2, 500),
+}).strict();
 
 const extensionKeyPath =
   "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
@@ -270,11 +285,17 @@ export type WorkerRegistrationPayload = z.infer<
 export type WorkerConnectionCredentialPayload = z.infer<
   typeof WorkerConnectionCredentialSchema
 >;
+export type McpInvocationRequestPayload = z.infer<
+  typeof McpInvocationRequestSchema
+>;
 export type StartDeliveryCommandPayload = z.infer<
   typeof StartDeliveryCommandSchema
 >;
 export type WorkerLeaseCommandPayload = z.infer<
   typeof WorkerLeaseCommandSchema
+>;
+export type WorkerMcpCompletionPayload = z.infer<
+  typeof WorkerMcpCompletionSchema
 >;
 export type ExtensionItemForPeople = z.infer<
   typeof ExtensionItemForPeopleSchema

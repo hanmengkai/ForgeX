@@ -11,6 +11,7 @@ import {
   ApplicationError,
   DeliveryCoordinatorService,
   ExtensionCatalogApplicationService,
+  McpInvocationApplicationService,
   McpRegistryApplicationService,
   RequirementApplicationService,
   SkillRegistryApplicationService,
@@ -19,6 +20,8 @@ import {
   type AuthenticatedPrincipal,
   type ExtensionCatalogRepository,
   type McpRegistryRepository,
+  type McpInputSchemaStore,
+  type McpInvocationRepository,
   type PlatformRole,
   type PreviewArtifactStore,
   type RequirementRepository,
@@ -29,12 +32,15 @@ import {
 } from "@forgex/application";
 import {
   REQUIREMENT_REQUEST_BODY_LIMIT_BYTES,
+  McpInvocationRequestSchema,
   RequirementSpecSchema,
   StartDeliveryCommandSchema,
   WorkerConnectionCredentialSchema,
   WorkerLeaseCommandSchema,
+  WorkerMcpCompletionSchema,
   WorkerRegistrationSchema,
   type WorkerConnectionCredentialPayload,
+  type McpInvocationRequestPayload,
 } from "@forgex/contracts";
 import type { RequirementAllowedAction } from "@forgex/domain";
 import type {
@@ -53,6 +59,8 @@ export interface ControlPlaneApiOptions {
   authenticator: SessionAuthenticator;
   extensionCatalogRepository: ExtensionCatalogRepository;
   mcpHealthAuthority: McpHealthAuthority;
+  mcpInputSchemaStore: McpInputSchemaStore;
+  mcpInvocationRepository: McpInvocationRepository;
   mcpRegistryRepository: McpRegistryRepository;
   skillArtifactStore: SkillArtifactStore;
   skillEvaluationAuthority: SkillEvaluationAuthority;
@@ -84,6 +92,14 @@ const extensionParamsSchema = z
 const skillExtensionParamsSchema = z
   .object({
     skillKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const mcpInvocationParamsSchema = z
+  .object({
+    invocationKey: z
       .string()
       .uuid()
       .transform((value) => value.toLowerCase()),
@@ -242,6 +258,24 @@ const requirementLinks = (
   };
 };
 
+const mcpInvocationLinks = (
+  invocationKey: string,
+  allowedActions: ReadonlyArray<"approve" | "cancel">,
+) => {
+  const self = `/api/v1/mcp-invocations/${invocationKey}`;
+  return {
+    self,
+    actions: {
+      ...(allowedActions.includes("approve")
+        ? { approve: `${self}/approve` }
+        : {}),
+      ...(allowedActions.includes("cancel")
+        ? { cancel: `${self}/cancel` }
+        : {}),
+    },
+  };
+};
+
 const PREVIEW_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "base-uri 'none'",
@@ -346,6 +380,13 @@ export const buildControlPlaneApi = (
     projectKey: options.projectKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+  const mcpInvocations = new McpInvocationApplicationService({
+    repository: options.mcpInvocationRepository,
+    schemaStore: options.mcpInputSchemaStore,
+    toolDirectory: mcpServers,
+    projectKey: options.projectKey,
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
   const extensions = new ExtensionCatalogApplicationService({
     repository: options.extensionCatalogRepository,
     skillRegistry: skills,
@@ -420,6 +461,8 @@ export const buildControlPlaneApi = (
       path.startsWith("/api/v1/requirements/") ||
       path === "/api/v1/extensions" ||
       path.startsWith("/api/v1/extensions/") ||
+      path === "/api/v1/mcp-invocations" ||
+      path.startsWith("/api/v1/mcp-invocations/") ||
       path === "/api/v1/workers" ||
       path.startsWith("/api/v1/workers/")
     ) {
@@ -582,6 +625,117 @@ export const buildControlPlaneApi = (
       data: await extensions.overviewForPeople(principal),
     });
   });
+
+  app.get("/api/v1/mcp-invocations", async (request, reply) => {
+    const principal = principalFrom(request);
+    const items = await mcpInvocations.listItemsForPeople(principal);
+    return reply.send({
+      data: items.map((item) => {
+        return {
+          ...item.view,
+          links: mcpInvocationLinks(item.invocationKey, item.allowedActions),
+        };
+      }),
+    });
+  });
+
+  app.get("/api/v1/mcp-invocations/:invocationKey", async (request, reply) => {
+    const principal = principalFrom(request);
+    const params = mcpInvocationParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "请求内容需要调整",
+        validationDetails(params.error),
+      );
+    }
+    const item = await mcpInvocations.getItemForPeople(
+      principal,
+      params.data.invocationKey,
+    );
+    return reply.send({
+      data: {
+        ...item.view,
+        links: mcpInvocationLinks(item.invocationKey, item.allowedActions),
+      },
+    });
+  });
+
+  app.post<{ Body: McpInvocationRequestPayload }>(
+    "/api/v1/mcp-invocations",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const command = McpInvocationRequestSchema.safeParse(request.body);
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(command.error),
+        );
+      }
+      const result = await mcpInvocations.request(principal, command.data);
+      const self = `/api/v1/mcp-invocations/${result.invocationKey}`;
+      return reply
+        .code(201)
+        .header("Location", self)
+        .send({
+          data: {
+            title: result.title,
+            status: result.status,
+            links: { self },
+          },
+        });
+    },
+  );
+
+  app.post(
+    "/api/v1/mcp-invocations/:invocationKey/approve",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = mcpInvocationParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(params.error),
+        );
+      }
+      await mcpInvocations.approve(principal, params.data.invocationKey);
+      return reply.send({ data: { status: "等待设备执行" } });
+    },
+  );
+
+  app.post(
+    "/api/v1/mcp-invocations/:invocationKey/cancel",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = mcpInvocationParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(params.error),
+        );
+      }
+      const dispatch = await mcpInvocations.requestCancellation(
+        principal,
+        params.data.invocationKey,
+      );
+      if (dispatch) {
+        await workers.cancelPendingMcpInvocation(dispatch);
+        await mcpInvocations.finalizeCancellation(
+          dispatch.tenantKey,
+          dispatch.projectKey,
+          dispatch.invocationKey,
+        );
+      }
+      return reply.send({ data: { status: "已取消" } });
+    },
+  );
 
   app.get("/api/v1/extensions/:extensionKey", async (request, reply) => {
     const principal = principalFrom(request);
@@ -885,7 +1039,61 @@ export const buildControlPlaneApi = (
     const connection = workerConnectionFrom(request);
     await workers.assertConnection(connection);
     await deliveries.flushPending(connection.tenantKey);
-    return reply.send({ data: await workers.poll(connection) });
+    await mcpInvocations.flushQueuedToWorkers(connection.tenantKey, workers);
+    const result = await workers.poll(connection);
+    const assignmentForWorker = result.assignment
+      ? (({
+          workerKey: _workerKey,
+          generation: _generation,
+          workerFingerprintHash: _workerFingerprintHash,
+          ...assignment
+        }) => assignment)(result.assignment)
+      : null;
+    if (result.assignment?.workKind !== "mcp_invocation") {
+      return reply.send({ data: { assignment: assignmentForWorker } });
+    }
+    try {
+      const execution = await mcpInvocations.leaseForExecution(
+        connection.tenantKey,
+        result.assignment,
+      );
+      return reply.send({
+        data: { assignment: { ...assignmentForWorker!, execution } },
+      });
+    } catch (error) {
+      if (
+        error instanceof ApplicationError &&
+        [
+          "mcp_invocation_stale",
+          "mcp_invocation_state_conflict",
+          "mcp_invocation_not_found",
+          "expired_lease",
+          "mcp_outcome_unknown",
+        ].includes(error.code)
+      ) {
+        await workers.cancelMcpLease(connection, {
+          schemaVersion: 1,
+          assignmentKey: result.assignment.assignmentKey,
+          fencingToken: result.assignment.fencingToken,
+        });
+        if (error.code === "mcp_invocation_stale") {
+          await mcpInvocations.finalizeCancellation(
+            connection.tenantKey,
+            result.assignment.projectKey,
+            result.assignment.invocationKey!,
+          );
+        }
+        if (error.code === "mcp_outcome_unknown") {
+          await mcpInvocations.finalizeOutcomeUnknownCleanup(
+            connection.tenantKey,
+            result.assignment.projectKey,
+            result.assignment.invocationKey!,
+          );
+        }
+        return reply.send({ data: { assignment: null } });
+      }
+      throw error;
+    }
   });
 
   app.post("/api/v1/worker-connection/renew", async (request, reply) => {
@@ -898,9 +1106,31 @@ export const buildControlPlaneApi = (
         validationDetails(command.error),
       );
     }
-    return reply.send({
-      data: await workers.renew(workerConnectionFrom(request), command.data),
-    });
+    const connection = workerConnectionFrom(request);
+    const result = await workers.renew(connection, command.data);
+    const assignment = await workers.getCurrentLease(connection, command.data);
+    try {
+      await mcpInvocations.renewExecutionLease(
+        connection.tenantKey,
+        assignment,
+      );
+    } catch (error) {
+      if (
+        error instanceof ApplicationError &&
+        ["expired_lease", "mcp_outcome_unknown"].includes(error.code)
+      ) {
+        await workers.cancelMcpLease(connection, command.data);
+        if (error.code === "mcp_outcome_unknown") {
+          await mcpInvocations.finalizeOutcomeUnknownCleanup(
+            connection.tenantKey,
+            assignment.projectKey,
+            assignment.invocationKey!,
+          );
+        }
+      }
+      throw error;
+    }
+    return reply.send({ data: result });
   });
 
   app.post("/api/v1/worker-connection/complete", async (request, reply) => {
@@ -916,6 +1146,55 @@ export const buildControlPlaneApi = (
     return reply.send({
       data: await workers.complete(workerConnectionFrom(request), command.data),
     });
+  });
+
+  app.post("/api/v1/worker-connection/mcp-complete", async (request, reply) => {
+    const command = WorkerMcpCompletionSchema.safeParse(request.body);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "MCP 执行结果需要调整",
+        validationDetails(command.error),
+      );
+    }
+    const connection = workerConnectionFrom(request);
+    const leaseCommand = {
+      schemaVersion: 1 as const,
+      assignmentKey: command.data.assignmentKey,
+      fencingToken: command.data.fencingToken,
+    };
+    let currentAssignment;
+    try {
+      currentAssignment = await workers.getMcpLease(connection, leaseCommand);
+    } catch (error) {
+      if (
+        !(error instanceof ApplicationError) ||
+        error.code !== "invalid_lease"
+      ) {
+        throw error;
+      }
+      const recovered = await workers.completeMcp(connection, leaseCommand);
+      await mcpInvocations.finalizeExecutionResult(
+        connection.tenantKey,
+        recovered.completion,
+      );
+      return reply.send({ data: recovered });
+    }
+    await mcpInvocations.completeExecution(
+      connection.tenantKey,
+      currentAssignment,
+      {
+        outcome: command.data.outcome,
+        summary: command.data.summary,
+      },
+    );
+    const result = await workers.completeMcp(connection, leaseCommand);
+    await mcpInvocations.finalizeExecutionResult(
+      connection.tenantKey,
+      result.completion,
+    );
+    return reply.send({ data: result });
   });
 
   return app;

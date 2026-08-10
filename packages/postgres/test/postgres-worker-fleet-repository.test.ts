@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import type { WorkerFleetSnapshot } from "@forgex/application";
@@ -43,6 +45,7 @@ interface RecordedQuery {
 const fakeDatabase = (options?: {
   storedState?: WorkerFleetSnapshot;
   completed?: boolean;
+  completionProof?: { assignmentKey: string; fencingToken: number };
 }) => {
   const queries: RecordedQuery[] = [];
   let released = false;
@@ -54,8 +57,21 @@ const fakeDatabase = (options?: {
           rows: options?.storedState ? [{ state: options.storedState }] : [],
         };
       }
-      if (text.includes("SELECT 1 AS completed")) {
-        return { rows: options?.completed ? [{ completed: 1 }] : [] };
+      if (text.includes("SELECT completion_assignment_key")) {
+        return {
+          rows: options?.completed
+            ? [
+                options.completionProof
+                  ? {
+                      completion_assignment_key:
+                        options.completionProof.assignmentKey,
+                      completion_fencing_token:
+                        options.completionProof.fencingToken,
+                    }
+                  : {},
+              ]
+            : [],
+        };
       }
       return { rows: [] };
     },
@@ -90,7 +106,7 @@ describe("PostgresWorkerFleetRepository", () => {
       "BEGIN",
       expect.stringContaining("pg_advisory_xact_lock"),
       expect.stringContaining("SELECT state"),
-      expect.stringContaining("SELECT 1 AS completed"),
+      expect.stringContaining("SELECT completion_assignment_key"),
       expect.stringContaining("INSERT INTO forgex_completed_delivery_work"),
       expect.stringContaining("INSERT INTO forgex_worker_fleets"),
       "COMMIT",
@@ -102,6 +118,9 @@ describe("PostgresWorkerFleetRepository", () => {
       projectKey,
       workKey,
       2,
+      "requirement_delivery",
+      null,
+      null,
     ]);
     expect(database.wasReleased()).toBe(true);
   });
@@ -141,5 +160,48 @@ describe("PostgresWorkerFleetRepository", () => {
         );
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("MCP 永久完成证明严格绑定原租约和隔离令牌", async () => {
+    const proof = {
+      assignmentKey: "44444444-4444-4444-8444-444444444444",
+      fencingToken: 7,
+    };
+    const database = fakeDatabase({ completed: true, completionProof: proof });
+    const repository = new PostgresWorkerFleetRepository(database.pool);
+
+    await repository.transaction(tenantKey, async (transaction) => {
+      await expect(
+        transaction.hasCompletedWork(
+          projectKey,
+          workKey,
+          2,
+          "mcp_invocation",
+          proof,
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        transaction.hasCompletedWork(projectKey, workKey, 2, "mcp_invocation", {
+          ...proof,
+          fencingToken: 8,
+        }),
+      ).resolves.toBe(false);
+    });
+  });
+
+  it("工作类型迁移兼容旧交付记录并把类型纳入唯一键", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0009_worker_work_kinds.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migration).toContain(
+      "work_kind text NOT NULL DEFAULT 'requirement_delivery'",
+    );
+    expect(migration).toContain(
+      "work_kind IN ('requirement_delivery', 'mcp_invocation')",
+    );
+    expect(migration).toContain("completion_assignment_key uuid");
+    expect(migration).toContain("completion_fencing_token > 0");
+    expect(migration).toContain("requirement_revision,\n    work_kind\n  )");
   });
 });

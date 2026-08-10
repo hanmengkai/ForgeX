@@ -1,4 +1,9 @@
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  generateKeyPairSync,
+  randomUUID,
+  sign as signPayload,
+} from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -6,13 +11,17 @@ import {
   InMemoryRequirementRepository,
   InMemoryExtensionCatalogRepository,
   InMemoryMcpRegistryRepository,
+  InMemoryMcpInputSchemaStore,
+  InMemoryMcpInvocationRepository,
   InMemoryPreviewArtifactStore,
   InMemorySkillArtifactStore,
   InMemorySkillRegistryRepository,
   InMemoryWorkerFleetRepository,
+  McpInvocationApplicationService,
   McpRegistryApplicationService,
   RequirementApplicationService,
   SkillRegistryApplicationService,
+  canonicalizeMcpInputSchema,
   type AuthenticatedPrincipal,
   type SessionAuthenticator,
 } from "@forgex/application";
@@ -82,11 +91,14 @@ const validRequirement = {
   openQuestions: [],
 };
 
-const createTestApp = () => {
+const createTestApp = (
+  mcpHealthAuthority = new McpHealthAuthority({ verifiers: [] }),
+) => {
   const repository = new InMemoryRequirementRepository();
   const extensionCatalogRepository = new InMemoryExtensionCatalogRepository();
   const mcpRegistryRepository = new InMemoryMcpRegistryRepository();
-  const mcpHealthAuthority = new McpHealthAuthority({ verifiers: [] });
+  const mcpInputSchemaStore = new InMemoryMcpInputSchemaStore();
+  const mcpInvocationRepository = new InMemoryMcpInvocationRepository();
   const skillRegistryRepository = new InMemorySkillRegistryRepository();
   const skillArtifactStore = new InMemorySkillArtifactStore();
   const skillEvaluationAuthority = new SkillEvaluationAuthority({
@@ -112,6 +124,8 @@ const createTestApp = () => {
     extensionCatalogRepository,
     mcpRegistryRepository,
     mcpHealthAuthority,
+    mcpInputSchemaStore,
+    mcpInvocationRepository,
     skillRegistryRepository,
     skillArtifactStore,
     skillEvaluationAuthority,
@@ -128,6 +142,8 @@ const createTestApp = () => {
     extensionCatalogRepository,
     mcpRegistryRepository,
     mcpHealthAuthority,
+    mcpInputSchemaStore,
+    mcpInvocationRepository,
     skillRegistryRepository,
     skillArtifactStore,
     skillEvaluationAuthority,
@@ -340,6 +356,390 @@ describe("需求 API", () => {
     expect(detail.json()).toEqual({
       data: overview.json().data.externalTools[0],
     });
+    await app.close();
+  });
+
+  it("MCP 调用从可信能力和内容寻址 Schema 创建，写入操作只向产品负责人提供确认入口", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const verifierKey = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const keyId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const authority = new McpHealthAuthority({
+      verifiers: [
+        {
+          verifierKey,
+          keyId,
+          verifierName: "独立连接探测器",
+          publicKeyBase64: publicKey
+            .export({ type: "spki", format: "der" })
+            .toString("base64"),
+          scopes: [{ tenantKey, projectKey }],
+        },
+      ],
+      clock: () => new Date("2026-08-10T03:00:00.000Z"),
+    });
+    const {
+      app,
+      mcpRegistryRepository,
+      mcpInputSchemaStore,
+      mcpInvocationRepository,
+    } = createTestApp(authority);
+    const serverKey = "99999999-9999-4999-8999-999999999999";
+    const toolKey = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const inputSchema = {
+      type: "object",
+      properties: {
+        branchName: {
+          type: "string",
+          title: "分支名称",
+          writeOnly: false,
+          minLength: 2,
+          maxLength: 80,
+        },
+      },
+      required: ["branchName"],
+      additionalProperties: false,
+    };
+    const inputSchemaHash = canonicalizeMcpInputSchema(inputSchema).hash;
+    const manifest = {
+      schemaVersion: 1 as const,
+      serverKey,
+      tenantKey,
+      projectKey,
+      revision: 1,
+      name: "代码仓库助手",
+      summary: "读取项目结构并在确认后创建交付分支",
+      transport: "stdio" as const,
+      connectionBindingKey: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      protocolVersion: "2025-06-18",
+      tools: [
+        {
+          toolKey,
+          technicalName: "repository.create_branch",
+          displayName: "创建交付分支",
+          description: "在明确确认后创建本次需求的交付分支",
+          effect: "write" as const,
+          approval: "review_required" as const,
+          inputSchemaHashAlgorithm: "sha256" as const,
+          inputSchemaHash,
+        },
+      ],
+      publishedAt: "2026-08-10T02:00:00.000Z",
+    };
+    const registry = new McpRegistryApplicationService({
+      repository: mcpRegistryRepository,
+      healthAuthority: authority,
+      projectKey,
+      clock: () => new Date("2026-08-10T03:00:00.000Z"),
+    });
+    await registry.publish(administrator, manifest);
+    const probeBinding = await registry.getNextProbeBinding(
+      tenantKey,
+      serverKey,
+      1,
+    );
+    const healthPayload = {
+      schemaVersion: 1 as const,
+      attestationKey: randomUUID(),
+      ...probeBinding,
+      tenantKey,
+      projectKey,
+      serverKey,
+      serverRevision: 1,
+      manifestHashAlgorithm: "sha256" as const,
+      manifestHash: McpHealthAuthority.manifestHash(manifest),
+      verifierKey,
+      keyId,
+      serverIdentityHashAlgorithm: "sha256" as const,
+      serverIdentityHash: "e".repeat(64),
+      protocolVersion: manifest.protocolVersion,
+      observedTools: [
+        {
+          technicalName: manifest.tools[0]!.technicalName,
+          inputSchemaHashAlgorithm: "sha256" as const,
+          inputSchemaHash,
+        },
+      ],
+      status: "healthy" as const,
+      recoveryChallengeKey: null,
+      producedAt: "2026-08-10T02:30:00.000Z",
+    };
+    await registry.recordHealth(tenantKey, {
+      payload: healthPayload,
+      signature: signPayload(
+        null,
+        Buffer.from(McpHealthAuthority.canonicalPayload(healthPayload), "utf8"),
+        privateKey,
+      ).toString("base64"),
+    });
+    await registry.enable(administrator, serverKey, 1);
+    await mcpInputSchemaStore.put(
+      { tenantKey, projectKey, hashAlgorithm: "sha256", hash: inputSchemaHash },
+      inputSchema,
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp-invocations",
+      headers: { authorization: "Bearer developer-session" },
+      payload: {
+        schemaVersion: 1,
+        requestKey: randomUUID(),
+        serverKey,
+        toolKey,
+        arguments: { branchName: "feature/payment" },
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().data).toMatchObject({
+      title: "创建交付分支",
+      status: "等待产品确认",
+    });
+    const location = created.headers.location!;
+    const invocationDetail = await app.inject({
+      method: "GET",
+      url: location,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(invocationDetail.statusCode).toBe(200);
+    expect(invocationDetail.json().data).toMatchObject({
+      title: "创建交付分支",
+      links: {
+        self: location,
+        actions: { cancel: `${location}/cancel` },
+      },
+    });
+
+    const developerList = await app.inject({
+      method: "GET",
+      url: "/api/v1/mcp-invocations",
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(developerList.json().data).toEqual([
+      expect.objectContaining({
+        title: "创建交付分支",
+        serviceName: "代码仓库助手",
+        status: "等待产品确认",
+        links: {
+          self: location,
+          actions: { cancel: `${location}/cancel` },
+        },
+      }),
+    ]);
+    expect(JSON.stringify(developerList.json().data)).not.toContain(
+      "repository.create_branch",
+    );
+
+    const productList = await app.inject({
+      method: "GET",
+      url: "/api/v1/mcp-invocations",
+      headers: { authorization: "Bearer product-session" },
+    });
+    const approveUrl = productList.json().data[0].links.actions.approve;
+    expect(approveUrl).toBe(`${location}/approve`);
+    const forbidden = await app.inject({
+      method: "POST",
+      url: approveUrl,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(forbidden.statusCode).toBe(403);
+    const approved = await app.inject({
+      method: "POST",
+      url: approveUrl,
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(approved.statusCode).toBe(200);
+    await expect(
+      mcpInvocationRepository.listAudit(tenantKey, projectKey),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        action: "approved",
+        actorName: "产品负责人",
+      }),
+    ]);
+    const connected = await app.inject({
+      method: "POST",
+      url: "/api/v1/workers",
+      headers: { authorization: "Bearer admin-session" },
+      payload: {
+        schemaVersion: 1,
+        deviceName: "研发电脑 1",
+        accountName: "Codex 账户 1",
+        accountFingerprint: "f".repeat(64),
+        capabilities: [manifest.connectionBindingKey],
+      },
+    });
+    expect(connected.statusCode).toBe(201);
+    const connection = connected.json().data.connection;
+    const workerHeaders = {
+      authorization: `Worker ${connection.sessionKey}`,
+      "x-forgex-tenant-key": connection.tenantKey,
+      "x-forgex-worker-key": connection.workerKey,
+      "x-forgex-worker-generation": String(connection.generation),
+    };
+    const polled = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders,
+      payload: {},
+    });
+    expect(polled.statusCode).toBe(200);
+    const assignment = polled.json().data.assignment;
+    expect(assignment).toMatchObject({
+      workKind: "mcp_invocation",
+      invocationKey: location.split("/").at(-1),
+      execution: {
+        connectionBindingKey: manifest.connectionBindingKey,
+        serviceName: "代码仓库助手",
+        toolName: "创建交付分支",
+        technicalName: "repository.create_branch",
+        arguments: { branchName: "feature/payment" },
+      },
+    });
+    expect(polled.body).not.toContain(connection.workerKey);
+    expect(polled.body).not.toContain("f".repeat(64));
+    const ordinaryCompletion = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/complete",
+      headers: workerHeaders,
+      payload: {
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      },
+    });
+    expect(ordinaryCompletion.statusCode).toBe(409);
+    expect(ordinaryCompletion.json().error.code).toBe(
+      "mcp_completion_required",
+    );
+    const unauthorizedCompletion = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/mcp-complete",
+      payload: {
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+        outcome: "succeeded",
+        summary: "不应被接受的结果",
+      },
+    });
+    expect(unauthorizedCompletion.statusCode).toBe(401);
+    const crossTenantCompletion = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/mcp-complete",
+      headers: {
+        ...workerHeaders,
+        "x-forgex-tenant-key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      },
+      payload: {
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+        outcome: "succeeded",
+        summary: "不应跨租户接受的结果",
+      },
+    });
+    expect(crossTenantCompletion.statusCode).toBe(401);
+    const renewed = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/renew",
+      headers: workerHeaders,
+      payload: {
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      },
+    });
+    expect(renewed.statusCode).toBe(200);
+    expect(
+      (await mcpInvocationRepository.list(tenantKey, projectKey))[0]
+        ?.executionLease?.leasedUntil,
+    ).toBe(renewed.json().data.leasedUntil);
+    const finalize = vi
+      .spyOn(
+        McpInvocationApplicationService.prototype,
+        "finalizeExecutionResult",
+      )
+      .mockRejectedValueOnce(new Error("模拟最终状态写入暂时失败"));
+    const interrupted = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/mcp-complete",
+      headers: workerHeaders,
+      payload: {
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+        outcome: "succeeded",
+        summary: "交付分支创建完成",
+      },
+    });
+    expect(interrupted.statusCode).toBe(500);
+    expect(
+      (await mcpInvocationRepository.list(tenantKey, projectKey))[0]?.status,
+    ).toBe("completion_pending");
+    const completed = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/mcp-complete",
+      headers: workerHeaders,
+      payload: {
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+        outcome: "succeeded",
+        summary: "交付分支创建完成",
+      },
+    });
+    expect(completed.statusCode, completed.body).toBe(200);
+    finalize.mockRestore();
+    await expect(
+      mcpInvocationRepository.listAudit(tenantKey, projectKey),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        action: "completed",
+        workerKey: connection.workerKey,
+      }),
+      expect.objectContaining({
+        action: "leased",
+        workerKey: connection.workerKey,
+      }),
+      expect.objectContaining({ action: "approved" }),
+    ]);
+    expect(
+      (await mcpInvocationRepository.list(tenantKey, projectKey))[0],
+    ).toMatchObject({
+      status: "succeeded",
+      result: { outcome: "succeeded", summary: "交付分支创建完成" },
+    });
+    const cancellable = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp-invocations",
+      headers: { authorization: "Bearer developer-session" },
+      payload: {
+        schemaVersion: 1,
+        requestKey: randomUUID(),
+        serverKey,
+        toolKey,
+        arguments: { branchName: "feature/cancelled" },
+      },
+    });
+    const cancelled = await app.inject({
+      method: "POST",
+      url: `${cancellable.headers.location}/cancel`,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.json().data.status).toBe("已取消");
+    await expect(
+      mcpInvocationRepository.listAudit(tenantKey, projectKey),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "cancelled",
+          source: "user",
+          actorKey: juniorDeveloper.actorKey,
+          actorName: juniorDeveloper.actorName,
+        }),
+      ]),
+    );
     await app.close();
   });
 

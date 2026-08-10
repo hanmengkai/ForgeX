@@ -205,15 +205,21 @@ export class McpRegistryApplicationService {
     tenantKey: string,
     serverKey: string,
     toolKey: string,
+    projectKey = this.#projectKey,
   ): Promise<{ manifest: McpServerManifest; tool: McpToolDefinition } | null> {
+    if (!internalKeyPattern.test(projectKey)) {
+      throw new Error("项目范围必须使用有效的内部标识");
+    }
+    const normalizedProjectKey = projectKey.toLowerCase();
     return this.#repository.transaction(
       tenantKey,
-      this.#projectKey,
+      normalizedProjectKey,
       (transaction) =>
-        this.#restore(tenantKey, transaction.load()).getEnabledTool(
-          serverKey,
-          toolKey,
-        ),
+        this.#restore(
+          tenantKey,
+          transaction.load(),
+          normalizedProjectKey,
+        ).getEnabledTool(serverKey, toolKey),
     );
   }
 
@@ -252,10 +258,11 @@ export class McpRegistryApplicationService {
   #restore(
     tenantKey: string,
     snapshot: McpServerRegistrySnapshot | null,
+    projectKey = this.#projectKey,
   ): McpServerRegistry {
     const options = {
       tenantKey,
-      projectKey: this.#projectKey,
+      projectKey,
       healthAuthority: this.#healthAuthority,
       clock: this.#clock,
     };

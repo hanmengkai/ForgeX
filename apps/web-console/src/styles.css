@@ -1258,6 +1258,143 @@ h1 {
   }
 }
 
+.invocation-center {
+  display: grid;
+  gap: 20px;
+}
+
+.invocation-topbar p {
+  max-width: 760px;
+}
+
+.invocation-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.invocation-summary > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.invocation-summary span,
+.invocation-card small,
+.invocation-card-meta {
+  color: var(--ink-soft);
+}
+
+.invocation-summary strong {
+  color: var(--ink);
+  font-size: 24px;
+}
+
+.invocation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.invocation-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-muted);
+}
+
+.invocation-card-heading,
+.invocation-card-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.invocation-card h3,
+.invocation-card p {
+  margin: 0;
+}
+
+.invocation-card h3 {
+  margin-top: 4px;
+  font-size: 17px;
+}
+
+.invocation-card-meta {
+  font-size: 13px;
+}
+
+.invocation-inputs {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.invocation-inputs > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.45fr) 1fr;
+  gap: 12px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.invocation-inputs dt {
+  color: var(--ink-soft);
+}
+
+.invocation-inputs dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  unicode-bidi: isolate;
+}
+
+.invocation-inputs ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-inline-start: 18px;
+}
+
+.invocation-approve {
+  justify-self: start;
+}
+
+.invocation-card-actions {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: auto;
+}
+
+.invocation-card-actions .invocation-approve {
+  margin-top: 0;
+}
+
+@media (max-width: 760px) {
+  .invocation-summary,
+  .invocation-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .invocation-summary > div {
+    padding: 14px 16px;
+  }
+
+  .invocation-inputs > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
