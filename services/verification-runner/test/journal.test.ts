@@ -74,11 +74,14 @@ describe("FileVerificationJournal", () => {
     await mkdir(root, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") await chmod(root, 0o700);
     const filePath = path.join(root, "verification-journal.json");
-    const journal = new FileVerificationJournal(filePath, testJournalOptions);
+    let journal = await FileVerificationJournal.open(
+      filePath,
+      testJournalOptions,
+    );
     await journal.saveArtifact(artifactEntry);
-    await expect(
-      new FileVerificationJournal(filePath, testJournalOptions).load(),
-    ).resolves.toEqual(artifactEntry);
+    await journal.close();
+    journal = await FileVerificationJournal.open(filePath, testJournalOptions);
+    await expect(journal.load()).resolves.toEqual(artifactEntry);
 
     const { privateKey } = generateKeyPairSync("ed25519");
     const signer = new Ed25519RunnerEvidenceSigner({
@@ -109,9 +112,7 @@ describe("FileVerificationJournal", () => {
       integrityKey,
     });
     await journal.saveSigned(signedEntry);
-    await expect(
-      new FileVerificationJournal(filePath, testJournalOptions).load(),
-    ).resolves.toEqual(signedEntry);
+    await expect(journal.load()).resolves.toEqual(signedEntry);
 
     await expect(journal.clear(artifactEntry.integrityTag)).rejects.toThrow(
       "已经变化",
@@ -121,6 +122,7 @@ describe("FileVerificationJournal", () => {
     await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+    await journal.close();
   });
 
   it("拒绝用另一任务覆盖未完成日志", async () => {
@@ -128,7 +130,7 @@ describe("FileVerificationJournal", () => {
     temporaryRoots.push(root);
     await mkdir(root, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") await chmod(root, 0o700);
-    const journal = new FileVerificationJournal(
+    const journal = await FileVerificationJournal.open(
       path.join(root, "verification-journal.json"),
       testJournalOptions,
     );
@@ -140,5 +142,28 @@ describe("FileVerificationJournal", () => {
         evidenceKey: "90000000-0000-4000-8000-000000000009",
       }),
     ).rejects.toThrow("不能覆盖");
+    await journal.close();
+  });
+
+  it("同一路径只能由一个 Runner 进程持有", async () => {
+    const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
+    temporaryRoots.push(root);
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") await chmod(root, 0o700);
+    const filePath = path.join(root, "verification-journal.json");
+    const first = await FileVerificationJournal.open(
+      filePath,
+      testJournalOptions,
+    );
+
+    await expect(
+      FileVerificationJournal.open(filePath, testJournalOptions),
+    ).rejects.toThrow("已经运行");
+    await first.close();
+    const second = await FileVerificationJournal.open(
+      filePath,
+      testJournalOptions,
+    );
+    await second.close();
   });
 });
