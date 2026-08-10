@@ -61,11 +61,14 @@ export interface RequirementListPage {
 }
 
 export interface RequirementTransaction {
-  find(requirementKey: string): RequirementRecord | null;
+  find(requirementKey: string): Promise<RequirementRecord | null>;
   save(record: RequirementRecord): void;
   appendAudit(event: RequirementAuditEvent): void;
   appendDeliveryDispatch(record: DeliveryDispatchRecord): void;
-  markDeliveryDispatched(dispatchKey: string, dispatchedAt: string): boolean;
+  markDeliveryDispatched(
+    dispatchKey: string,
+    dispatchedAt: string,
+  ): Promise<boolean>;
 }
 
 export interface RequirementRepository {

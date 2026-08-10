@@ -8,7 +8,11 @@ export type {
   DeliveryCandidate,
   RequirementPeopleView,
   RequirementAllowedAction,
+  RequirementEvidenceSnapshot,
+  RequirementRevisionSnapshot,
   RequirementRevisionInput,
+  RequirementStatus,
+  RequirementWorkflowSnapshot,
   RequirementWorkflowOptions,
   VerificationTarget,
 } from "./requirement-workflow.js";

@@ -44,7 +44,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     const pendingAuditEvents: RequirementAuditEvent[] = [];
     const pendingDeliveryDispatches = new Map<string, DeliveryDispatchRecord>();
     const transaction: RequirementTransaction = {
-      find: (requirementKey) => {
+      find: async (requirementKey) => {
         const key = scopedKey(
           normalizedTenantKey,
           normalizedProjectKey,
@@ -78,6 +78,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           projectKey: record.projectKey,
           requirementKey: record.requirementKey,
         });
+        record.workflow.assertSpecIntegrity(record.spec);
         const key = scopedKey(
           normalizedTenantKey,
           normalizedProjectKey,
@@ -115,7 +116,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
         }
         pendingDeliveryDispatches.set(key, this.#copyDeliveryDispatch(record));
       },
-      markDeliveryDispatched: (dispatchKey, dispatchedAt) => {
+      markDeliveryDispatched: async (dispatchKey, dispatchedAt) => {
         const key = scopedKey(
           normalizedTenantKey,
           normalizedProjectKey,

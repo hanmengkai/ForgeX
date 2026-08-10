@@ -26,6 +26,7 @@ export interface TrustedRunner {
   runnerName: string;
   publicKeyBase64: string;
   scopes: RunnerScope[];
+  acceptNewEvidence?: boolean;
 }
 
 export interface EvidenceAuthorityOptions {
@@ -41,6 +42,7 @@ interface PreparedRunner {
   runnerName: string;
   publicKey: KeyObject;
   scopes: readonly Readonly<RunnerScope>[];
+  acceptNewEvidence: boolean;
 }
 
 const verificationToken = Symbol("forgex-verified-evidence");
@@ -66,9 +68,11 @@ export class VerifiedEvidenceReceipt {
   readonly artifactHashAlgorithm: "sha256";
   readonly artifactHash: string;
   readonly checks: readonly Readonly<EvidenceCheck>[];
+  readonly signature: string;
 
   constructor(
     payload: EvidencePayload,
+    signature: string,
     runnerName: string,
     validity: { validUntilMs: number; maxFutureSkewMs: number },
     token: typeof verificationToken,
@@ -93,6 +97,7 @@ export class VerifiedEvidenceReceipt {
     this.checks = Object.freeze(
       payload.checks.map((check) => Object.freeze({ ...check })),
     );
+    this.signature = signature;
     this.#validUntilMs = validity.validUntilMs;
     this.#maxFutureSkewMs = validity.maxFutureSkewMs;
     Object.freeze(this);
@@ -186,6 +191,17 @@ export class EvidenceAuthority {
   }
 
   verify(input: SignedEvidence): VerifiedEvidenceReceipt {
+    return this.#verify(input, true);
+  }
+
+  verifyPersisted(input: SignedEvidence): VerifiedEvidenceReceipt {
+    return this.#verify(input, false);
+  }
+
+  #verify(
+    input: SignedEvidence,
+    enforceCurrentFreshness: boolean,
+  ): VerifiedEvidenceReceipt {
     const parsed = SignedEvidenceSchema.safeParse(input);
     if (!parsed.success) {
       throw new Error("证据格式不完整或包含无效字段");
@@ -200,6 +216,9 @@ export class EvidenceAuthority {
     if (!runner) {
       throw new Error("证据执行者或签名密钥不受信任");
     }
+    if (enforceCurrentFreshness && !runner.acceptNewEvidence) {
+      throw new Error("这个 Runner 密钥只用于核验历史证据");
+    }
     if (
       !runner.scopes.some(
         (scope) =>
@@ -211,7 +230,9 @@ export class EvidenceAuthority {
       throw new Error("独立 Runner 无权验证这个租户、项目或代码仓库");
     }
 
-    this.#assertFresh(parsed.data.payload.producedAt);
+    if (enforceCurrentFreshness) {
+      this.#assertFresh(parsed.data.payload.producedAt);
+    }
     const verified = verifySignature(
       null,
       Buffer.from(
@@ -227,6 +248,7 @@ export class EvidenceAuthority {
 
     return new VerifiedEvidenceReceipt(
       parsed.data.payload,
+      parsed.data.signature,
       runner.runnerName,
       {
         validUntilMs:
@@ -259,7 +281,9 @@ export class EvidenceAuthority {
       !uuidPattern.test(runnerKey) ||
       !uuidPattern.test(keyId) ||
       !runnerName ||
-      runner.scopes.length === 0
+      runner.scopes.length === 0 ||
+      (runner.acceptNewEvidence !== undefined &&
+        typeof runner.acceptNewEvidence !== "boolean")
     ) {
       throw new Error("受信任 Runner 配置不完整");
     }
@@ -302,6 +326,7 @@ export class EvidenceAuthority {
       runnerName,
       publicKey,
       scopes: Object.freeze(scopes),
+      acceptNewEvidence: runner.acceptNewEvidence ?? true,
     };
   }
 

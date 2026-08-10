@@ -93,10 +93,13 @@ export class DeliveryCoordinatorService {
     await this.#requirementRepository.transaction(
       dispatch.tenantKey,
       dispatch.projectKey,
-      (transaction) => {
+      async (transaction) => {
         const recordedAt = this.#now().toISOString();
         if (
-          !transaction.markDeliveryDispatched(dispatch.dispatchKey, recordedAt)
+          !(await transaction.markDeliveryDispatched(
+            dispatch.dispatchKey,
+            recordedAt,
+          ))
         ) {
           return;
         }

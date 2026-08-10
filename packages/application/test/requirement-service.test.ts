@@ -159,20 +159,17 @@ describe("RequirementApplicationService", () => {
   it("游标按仓储单调位置翻页，并发新增不会因随机 UUID 排序而漏项", async () => {
     const repository = new InMemoryRequirementRepository();
     const createRecord = (title: string): RequirementRecord => {
-      const workflow = RequirementWorkflow.create(
-        {
-          title,
-          summary: spec.goal,
-          acceptanceCriteria: spec.acceptanceCriteria.map((item) => item.title),
-        },
-        { tenantKey, projectKey },
-      );
+      const recordSpec = { ...spec, title };
+      const workflow = RequirementWorkflow.createFromSpec(recordSpec, {
+        tenantKey,
+        projectKey,
+      });
       return {
         tenantKey,
         projectKey,
         requirementKey: workflow.internalKey,
         createdAt: "2026-08-10T03:00:00.000Z",
-        spec: { ...spec, title },
+        spec: recordSpec,
         workflow,
       };
     };
@@ -298,5 +295,26 @@ describe("RequirementApplicationService", () => {
         }),
       ),
     ).rejects.toThrow("聚合身份与持久化范围不一致");
+  });
+
+  it("仓储拒绝需求规格与已确认工作流不是同一份业务内容", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const workflow = RequirementWorkflow.createFromSpec(spec, {
+      tenantKey,
+      projectKey,
+    });
+
+    await expect(
+      repository.transaction(tenantKey, projectKey, (transaction) =>
+        transaction.save({
+          tenantKey,
+          projectKey,
+          requirementKey: workflow.internalKey,
+          createdAt: "2026-08-10T03:00:00.000Z",
+          spec: { ...spec, openQuestions: ["是否需要短信通知"] },
+          workflow,
+        }),
+      ),
+    ).rejects.toThrow("需求规格与工作流业务内容不一致");
   });
 });

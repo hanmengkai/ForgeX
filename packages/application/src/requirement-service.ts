@@ -106,20 +106,11 @@ export class RequirementApplicationService {
     spec: RequirementSpec,
   ): Promise<RequirementCommandResult> {
     this.#requireAction(principal, "create");
-    const workflow = RequirementWorkflow.create(
-      {
-        title: spec.title,
-        summary: spec.goal,
-        acceptanceCriteria: spec.acceptanceCriteria.map(
-          (criterion) => criterion.title,
-        ),
-      },
-      {
-        tenantKey: principal.tenantKey,
-        projectKey: this.#projectKey,
-        clock: this.#clock,
-      },
-    );
+    const workflow = RequirementWorkflow.createFromSpec(spec, {
+      tenantKey: principal.tenantKey,
+      projectKey: this.#projectKey,
+      clock: this.#clock,
+    });
     const record: RequirementRecord = {
       tenantKey: principal.tenantKey.toLowerCase(),
       projectKey: this.#projectKey,
@@ -198,8 +189,8 @@ export class RequirementApplicationService {
     return this.#repository.transaction(
       principal.tenantKey,
       this.#projectKey,
-      (transaction) => {
-        const record = transaction.find(requirementKey);
+      async (transaction) => {
+        const record = await transaction.find(requirementKey);
         if (!record || record.projectKey !== this.#projectKey) {
           throw new ApplicationError(
             404,
@@ -274,8 +265,8 @@ export class RequirementApplicationService {
     return this.#repository.transaction(
       principal.tenantKey,
       this.#projectKey,
-      (transaction) => {
-        const record = transaction.find(requirementKey);
+      async (transaction) => {
+        const record = await transaction.find(requirementKey);
         if (!record || record.projectKey !== this.#projectKey) {
           throw new ApplicationError(
             404,
@@ -302,8 +293,8 @@ export class RequirementApplicationService {
     return this.#repository.transaction(
       principal.tenantKey,
       this.#projectKey,
-      (transaction) => {
-        const record = transaction.find(requirementKey);
+      async (transaction) => {
+        const record = await transaction.find(requirementKey);
         if (!record || record.projectKey !== this.#projectKey) {
           throw new ApplicationError(
             404,

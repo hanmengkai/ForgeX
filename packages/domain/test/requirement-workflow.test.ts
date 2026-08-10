@@ -16,10 +16,11 @@ import {
   runnerKeyId,
   signEvidence,
   tenantKey,
+  trustedRunner,
 } from "./evidence-fixture.js";
 
 const actor = {
-  actorKey: "user-product-owner",
+  actorKey: "33333333-3333-4333-8333-333333333333",
   actorName: "产品负责人",
 };
 const evidenceAuthority = createEvidenceAuthority();
@@ -270,5 +271,177 @@ describe("RequirementWorkflow", () => {
     expect(() => requirement.accept({ actor })).toThrow(
       "请先完成独立验证并提交产品验收",
     );
+  });
+
+  it("工作流快照可恢复等待验收状态且不依赖原始验签对象", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+
+    const snapshot = requirement.toSnapshot();
+    expect(() => RequirementWorkflow.fromSnapshot(snapshot)).toThrow(
+      "EvidenceAuthority",
+    );
+    const restored = RequirementWorkflow.fromSnapshot(snapshot, {
+      clock: () => new Date(fixedNow.getTime()),
+      evidenceAuthority,
+    });
+    restored.accept({ actor });
+
+    expect(restored.toPeopleView()).toMatchObject({
+      status: "已完成",
+      acceptanceProgress: "2 / 2 项已通过",
+    });
+    expect(restored.listApprovalRecords()).toHaveLength(2);
+  });
+
+  it("重启恢复后仍不能用已经过期的独立证据完成验收", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+    const snapshot = requirement.toSnapshot();
+    const restored = RequirementWorkflow.fromSnapshot(snapshot, {
+      clock: () => new Date(fixedNow.getTime() + 2 * 60 * 60 * 1_000 + 1),
+      evidenceAuthority,
+    });
+
+    expect(() => restored.accept({ actor })).toThrow("验证证据已经过期");
+    expect(restored.toPeopleView().status).toBe("等待产品验收");
+  });
+
+  it("工作流快照拒绝范围伪装和状态资料不一致", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    const snapshot = requirement.toSnapshot();
+
+    expect(() =>
+      RequirementWorkflow.fromSnapshot({
+        ...snapshot,
+        requirementKey: "99999999-9999-4999-8999-999999999999",
+      }),
+    ).toThrow("需求工作流快照");
+    expect(() =>
+      RequirementWorkflow.fromSnapshot({
+        ...snapshot,
+        status: "completed",
+      }),
+    ).toThrow("需求工作流快照");
+    expect(() =>
+      RequirementWorkflow.fromSnapshot({
+        ...snapshot,
+        approvalRecords: [],
+      }),
+    ).toThrow("需求工作流快照");
+  });
+
+  it("工作流快照拒绝交付候选与验证证据不一致", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+    const snapshot = requirement.toSnapshot();
+    const tamperedHash = "f".repeat(64);
+
+    expect(() =>
+      RequirementWorkflow.fromSnapshot(
+        {
+          ...snapshot,
+          deliveryCandidate: {
+            ...snapshot.deliveryCandidate!,
+            artifactHash: tamperedHash,
+          },
+          evidence: {
+            ...snapshot.evidence!,
+            artifactHash: tamperedHash,
+          },
+        },
+        { evidenceAuthority },
+      ),
+    ).toThrow("需求工作流快照");
+  });
+
+  it("工作流快照拒绝验收记录与证据不一致且不保留契约外字段", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+    requirement.accept({ actor });
+    const snapshot = requirement.toSnapshot();
+    const acceptance = snapshot.approvalRecords.find(
+      (record) => record.action === "验收结果",
+    )!;
+
+    expect(() =>
+      RequirementWorkflow.fromSnapshot(
+        {
+          ...snapshot,
+          approvalRecords: snapshot.approvalRecords.map((record) =>
+            record.action === "验收结果"
+              ? {
+                  ...record,
+                  evidence: {
+                    ...acceptance.evidence,
+                    artifactHash: "e".repeat(64),
+                  },
+                }
+              : record,
+          ),
+        },
+        { evidenceAuthority },
+      ),
+    ).toThrow("需求工作流快照");
+
+    const restored = RequirementWorkflow.fromSnapshot(snapshot, {
+      evidenceAuthority,
+    });
+    expect(restored.toSnapshot().evidence).not.toHaveProperty("schemaVersion");
+  });
+
+  it("最终验收记录必须绑定完成时的当前需求版本", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.revise({
+      summary: "访客提交预约后，由业主确认到访时间和通行范围",
+      changedBy: "需求分析师",
+    });
+    requirement.submitForConfirmation();
+    requirement.confirm({ actor });
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+    requirement.accept({ actor });
+    const snapshot = requirement.toSnapshot();
+
+    expect(() =>
+      RequirementWorkflow.fromSnapshot(
+        {
+          ...snapshot,
+          approvalRecords: snapshot.approvalRecords.map((record) =>
+            record.action === "验收结果" ? { ...record, revision: 1 } : record,
+          ),
+        },
+        { evidenceAuthority },
+      ),
+    ).toThrow("需求工作流快照");
+  });
+
+  it("退役密钥不能签发新证据但仍可恢复已完成的历史需求", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+    requirement.accept({ actor });
+    const snapshot = requirement.toSnapshot();
+    const historicalAuthority = createEvidenceAuthority([
+      { ...trustedRunner, acceptNewEvidence: false },
+    ]);
+
+    const restored = RequirementWorkflow.fromSnapshot(snapshot, {
+      evidenceAuthority: historicalAuthority,
+    });
+
+    expect(restored.toPeopleView().status).toBe("已完成");
+    expect(restored.listApprovalRecords()).toHaveLength(2);
   });
 });

@@ -33,8 +33,8 @@ npm run typecheck
 - 需求控制面：版本化需求、确认审批、租户与项目隔离、分页和审计。
 - 独立证据链：可信 Runner、公钥验签、交付候选绑定和验收快照。
 - Codex 设备网关：最多五个账户、出站心跳、定向轮询、租约续期、fencing、重连回收和幂等完成。
-- 共享持久化边界：测试/单机开发使用内存仓储，生产设备舰队使用 PostgreSQL 事务仓储。
+- 共享持久化边界：测试/单机开发使用内存仓储；生产需求主线、审计、交付 outbox 和设备舰队均使用 PostgreSQL 事务仓储。
 
-生产接入设备网关前，需要执行 [Worker 舰队迁移](packages/postgres/migrations/0001_worker_fleet.sql)，并向所有 API 副本注入同一个 PostgreSQL 仓储。当前仍是预发布版本，不应直接用于生产交付。
+生产接入前，需要依次执行 [Worker 舰队迁移](packages/postgres/migrations/0001_worker_fleet.sql) 和 [需求控制面迁移](packages/postgres/migrations/0002_requirement_control_plane.sql)，并向所有 API 副本注入同一数据库上的 `PostgresWorkerFleetRepository` 与 `PostgresRequirementRepository`。需求仓储还必须注入保留当前及历史验证公钥的 `EvidenceAuthority`，旧密钥应设置为仅核验历史证据。当前仍是预发布版本，不应直接用于生产交付。
 
 详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。

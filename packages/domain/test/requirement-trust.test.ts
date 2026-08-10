@@ -28,7 +28,7 @@ import {
 } from "./evidence-fixture.js";
 
 const actor = {
-  actorKey: "user-product-owner",
+  actorKey: "33333333-3333-4333-8333-333333333333",
   actorName: "产品负责人",
 };
 
@@ -99,7 +99,7 @@ describe("审批审计", () => {
     expect(requirement.listApprovalRecords()).toEqual([
       {
         action: "确认需求",
-        actorKey: "user-product-owner",
+        actorKey: actor.actorKey,
         actorName: "产品负责人",
         requirementKey: requirement.internalKey,
         revision: 1,
@@ -387,6 +387,21 @@ describe("独立验证证据", () => {
         signature,
       }).keyId,
     ).toBe(rotatedKeyId);
+  });
+
+  it("已退役公钥只核验历史快照，不能签发新的验证结果", () => {
+    const requirement = enterDelivery();
+    const payload = evidencePayloadFor(requirement);
+    const signed = { payload, signature: signEvidence(payload) };
+    const authority = createEvidenceAuthority([
+      { ...trustedRunner, acceptNewEvidence: false },
+    ]);
+
+    expect(() => authority.verify(signed)).toThrow("只用于核验历史证据");
+    expect(authority.verifyPersisted(signed)).toMatchObject({
+      runnerKey,
+      keyId: runnerKeyId,
+    });
   });
 
   it("规范化 UUID 并拒绝非规范 Base64 公钥", () => {
