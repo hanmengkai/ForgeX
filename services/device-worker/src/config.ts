@@ -393,6 +393,73 @@ const assertPrivatePosixMetadata = (
 const missingFile = (error: unknown): boolean =>
   error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
 
+const sameLocalPath = (
+  left: string,
+  right: string,
+  platform: NodeJS.Platform,
+): boolean => {
+  const normalizedLeft = path.normalize(left);
+  const normalizedRight = path.normalize(right);
+  return platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+};
+
+const assertTrustedExecutable = async (input: {
+  target: string;
+  expectedSha256: string;
+  label: string;
+  platform: NodeJS.Platform;
+  windowsPathCheck: (target: string) => Promise<void>;
+}): Promise<void> => {
+  const target = path.resolve(input.target);
+  const metadata = await lstat(target);
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    metadata.size < 1 ||
+    metadata.size > 128 * 1024 * 1024 ||
+    !sameLocalPath(await realpath(target), target, input.platform)
+  ) {
+    throw new Error(`${input.label}必须是不可跳转的本地普通文件`);
+  }
+  if (input.platform !== "win32" && (Number(metadata.mode) & 0o111) === 0) {
+    throw new Error(`${input.label}必须具有可执行权限`);
+  }
+  const directory = path.dirname(target);
+  const directoryMetadata = await lstat(directory);
+  if (
+    !directoryMetadata.isDirectory() ||
+    directoryMetadata.isSymbolicLink() ||
+    !sameLocalPath(await realpath(directory), directory, input.platform)
+  ) {
+    throw new Error(`${input.label}父目录必须是不可跳转的本地目录`);
+  }
+  if (input.platform === "win32") {
+    await input.windowsPathCheck(directory);
+    await input.windowsPathCheck(target);
+  } else {
+    const currentUid =
+      typeof process.getuid === "function" ? process.getuid() : -1;
+    for (const item of [directoryMetadata, metadata]) {
+      if (
+        (Number(item.mode) & 0o022) !== 0 ||
+        (typeof item.uid === "number" && ![0, currentUid].includes(item.uid))
+      ) {
+        throw new Error(
+          `${input.label}及其父目录必须由当前用户或 root 持有，且组与其他用户不可写`,
+        );
+      }
+    }
+  }
+  const digest = createHash("sha256")
+    .update(await readFile(target))
+    .digest("hex");
+  if (digest !== input.expectedSha256) {
+    throw new Error(`${input.label}内容与配置的可信摘要不一致`);
+  }
+};
+
 export const loadDeviceWorkerConfig = async (
   filePath: string,
   options: DeviceWorkerConfigLoadOptions = {},
@@ -428,61 +495,22 @@ export const loadDeviceWorkerConfig = async (
   if (!parsed.success) {
     throw new Error("设备 Worker 配置不符合当前版本要求");
   }
-  const launcherMetadata = await lstat(parsed.data.codexIsolation.launcherPath);
-  if (
-    !launcherMetadata.isFile() ||
-    launcherMetadata.isSymbolicLink() ||
-    launcherMetadata.size < 1 ||
-    launcherMetadata.size > 128 * 1024 * 1024
-  ) {
-    throw new Error("Codex 隔离启动器必须是不可跳转的本地普通文件");
-  }
-  if (platform !== "win32" && (Number(launcherMetadata.mode) & 0o111) === 0) {
-    throw new Error("Codex 隔离启动器必须具有可执行权限");
-  }
-  const launcherDirectory = path.dirname(
-    path.resolve(parsed.data.codexIsolation.launcherPath),
-  );
-  const launcherDirectoryMetadata = await lstat(launcherDirectory);
-  const actualLauncherDirectory = path.normalize(
-    await realpath(launcherDirectory),
-  );
-  const configuredLauncherDirectory = path.normalize(launcherDirectory);
-  const launcherDirectoryMatches =
-    platform === "win32"
-      ? actualLauncherDirectory.toLowerCase() ===
-        configuredLauncherDirectory.toLowerCase()
-      : actualLauncherDirectory === configuredLauncherDirectory;
-  if (
-    !launcherDirectoryMetadata.isDirectory() ||
-    launcherDirectoryMetadata.isSymbolicLink() ||
-    !launcherDirectoryMatches
-  ) {
-    throw new Error("Codex 隔离启动器父目录必须是不可跳转的本地目录");
-  }
-  if (platform === "win32") {
-    await windowsLauncherCheck(launcherDirectory);
-    await windowsLauncherCheck(parsed.data.codexIsolation.launcherPath);
-  } else {
-    const currentUid =
-      typeof process.getuid === "function" ? process.getuid() : -1;
-    for (const metadata of [launcherDirectoryMetadata, launcherMetadata]) {
-      if (
-        (Number(metadata.mode) & 0o022) !== 0 ||
-        (typeof metadata.uid === "number" &&
-          ![0, currentUid].includes(metadata.uid))
-      ) {
-        throw new Error(
-          "Codex 隔离启动器及其父目录必须由当前用户或 root 持有，且组与其他用户不可写",
-        );
-      }
-    }
-  }
-  const launcherDigest = createHash("sha256")
-    .update(await readFile(parsed.data.codexIsolation.launcherPath))
-    .digest("hex");
-  if (launcherDigest !== parsed.data.codexIsolation.launcherSha256) {
-    throw new Error("Codex 隔离启动器内容与配置的可信摘要不一致");
+  await assertTrustedExecutable({
+    target: parsed.data.codexIsolation.launcherPath,
+    expectedSha256: parsed.data.codexIsolation.launcherSha256,
+    label: "Codex 隔离启动器",
+    platform,
+    windowsPathCheck: windowsLauncherCheck,
+  });
+  for (const connection of parsed.data.mcpConnections) {
+    if (connection.transport !== "stdio") continue;
+    await assertTrustedExecutable({
+      target: connection.commandPath,
+      expectedSha256: connection.commandSha256,
+      label: "MCP 启动器",
+      platform,
+      windowsPathCheck: windowsLauncherCheck,
+    });
   }
   const journalPath = path.resolve(parsed.data.completionJournalPath);
   const journalDirectory = path.dirname(journalPath);

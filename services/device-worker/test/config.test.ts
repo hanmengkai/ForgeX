@@ -246,11 +246,7 @@ describe("设备 Worker 配置", () => {
     await mkdir(codexHomePath);
     await mkdir(journalDirectory);
     await mkdir(mcpDirectory);
-    await writeFile(
-      isolationLauncherPath,
-      isolationLauncherContent,
-      "utf8",
-    );
+    await writeFile(isolationLauncherPath, isolationLauncherContent, "utf8");
     await writeFile(mcpLauncherPath, mcpLauncherContent, "utf8");
     await writeFile(
       configPath,
@@ -299,9 +295,7 @@ describe("设备 Worker 配置", () => {
         expect.objectContaining({ commandPath: mcpLauncherPath }),
       ],
     });
-    expect(assertWindowsTrustedLauncherPath).toHaveBeenCalledWith(
-      mcpDirectory,
-    );
+    expect(assertWindowsTrustedLauncherPath).toHaveBeenCalledWith(mcpDirectory);
     expect(assertWindowsTrustedLauncherPath).toHaveBeenCalledWith(
       mcpLauncherPath,
     );
