@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   InMemoryRequirementRepository,
   InMemoryExtensionCatalogRepository,
+  InMemoryMcpRegistryRepository,
   InMemoryPreviewArtifactStore,
   InMemorySkillArtifactStore,
   InMemorySkillRegistryRepository,
@@ -11,7 +12,10 @@ import {
   type RequirementTransaction,
   type SessionAuthenticator,
 } from "@forgex/application";
-import { SkillEvaluationAuthority } from "@forgex/extensions";
+import {
+  McpHealthAuthority,
+  SkillEvaluationAuthority,
+} from "@forgex/extensions";
 
 import { buildControlPlaneApi } from "../src/index.js";
 
@@ -119,6 +123,8 @@ const createTestApp = (
   const app = buildControlPlaneApi({
     authenticator,
     extensionCatalogRepository: new InMemoryExtensionCatalogRepository(),
+    mcpRegistryRepository: new InMemoryMcpRegistryRepository(),
+    mcpHealthAuthority: new McpHealthAuthority({ verifiers: [] }),
     skillRegistryRepository: new InMemorySkillRegistryRepository(),
     skillArtifactStore: new InMemorySkillArtifactStore(),
     skillEvaluationAuthority: new SkillEvaluationAuthority({ evaluators: [] }),

@@ -16,6 +16,7 @@ const principal: AuthenticatedPrincipal = {
   roles: ["developer"],
 };
 const emptySkillRegistry = { listItemsForPeople: async () => [] };
+const emptyMcpRegistry = { listItemsForPeople: async () => [] };
 
 describe("ExtensionCatalogApplicationService", () => {
   it("按项目返回三类人性化扩展，并只用链接承载内部标识", async () => {
@@ -38,6 +39,20 @@ describe("ExtensionCatalogApplicationService", () => {
     const service = new ExtensionCatalogApplicationService({
       repository,
       skillRegistry: emptySkillRegistry,
+      mcpRegistry: {
+        listItemsForPeople: async () => [
+          {
+            serverKey: "44444444-4444-4444-8444-444444444444",
+            view: {
+              name: "代码仓库工具",
+              summary: "读取代码、创建交付分支并运行受控检查",
+              status: "可使用" as const,
+              detail: "2 项业务能力",
+              supportingText: "每次使用前都要确认",
+            },
+          },
+        ],
+      },
       projectKey,
     });
 
@@ -54,7 +69,7 @@ describe("ExtensionCatalogApplicationService", () => {
           detail: "2 项业务能力",
           supportingText: "每次使用前都要确认",
           links: {
-            self: "/api/v1/extensions/44444444-4444-4444-8444-444444444444",
+            self: "/api/v1/extensions/mcp/44444444-4444-4444-8444-444444444444",
           },
         },
       ],
@@ -89,6 +104,7 @@ describe("ExtensionCatalogApplicationService", () => {
     const service = new ExtensionCatalogApplicationService({
       repository,
       skillRegistry: emptySkillRegistry,
+      mcpRegistry: emptyMcpRegistry,
       projectKey,
     });
 
@@ -159,6 +175,7 @@ describe("ExtensionCatalogApplicationService", () => {
     const service = new ExtensionCatalogApplicationService({
       repository,
       skillRegistry: emptySkillRegistry,
+      mcpRegistry: emptyMcpRegistry,
       projectKey,
     });
     await expect(service.overviewForPeople(principal)).resolves.toMatchObject({
@@ -191,6 +208,7 @@ describe("ExtensionCatalogApplicationService", () => {
     const service = new ExtensionCatalogApplicationService({
       repository,
       projectKey,
+      mcpRegistry: emptyMcpRegistry,
       skillRegistry: {
         listItemsForPeople: async () => [
           {
@@ -277,5 +295,68 @@ describe("ExtensionCatalogApplicationService", () => {
     await expect(repository.list(tenantKey, projectKey)).resolves.toEqual([
       expect.objectContaining({ revision: 3, sourceCount: 5 }),
     ]);
+  });
+
+  it("外部工具只采用可信 MCP 注册表，不采用目录中人工填写的可用状态", async () => {
+    const repository = new InMemoryExtensionCatalogRepository();
+    await repository.publish({
+      schemaVersion: 1,
+      extensionKey: "44444444-4444-4444-8444-444444444444",
+      tenantKey,
+      projectKey,
+      revision: 1,
+      kind: "mcp",
+      name: "人工标记的仓库工具",
+      summary: "没有绑定可信探测结果的旧目录记录",
+      status: "ready",
+      transport: "stdio",
+      capabilities: ["任意命令"],
+      approvalMode: "automatic_read",
+      lastCheckedAt: "2026-08-10T08:00:00.000Z",
+    });
+    const trustedServerKey = "55555555-5555-4555-8555-555555555555";
+    const service = new ExtensionCatalogApplicationService({
+      repository,
+      projectKey,
+      skillRegistry: emptySkillRegistry,
+      mcpRegistry: {
+        listItemsForPeople: async () => [
+          {
+            serverKey: trustedServerKey,
+            view: {
+              name: "代码仓库工具",
+              summary: "读取项目结构并在确认后创建交付分支",
+              status: "可使用",
+              detail: "2 项业务能力",
+              supportingText: "读取可自动运行，变更前需要确认",
+            },
+          },
+        ],
+      },
+    });
+
+    await expect(service.overviewForPeople(principal)).resolves.toMatchObject({
+      externalTools: [
+        {
+          name: "代码仓库工具",
+          status: "可使用",
+          links: {
+            self: `/api/v1/extensions/mcp/${trustedServerKey}`,
+          },
+        },
+      ],
+    });
+    await expect(
+      service.mcpDetailForPeople(principal, trustedServerKey),
+    ).resolves.toMatchObject({
+      name: "代码仓库工具",
+      links: { self: `/api/v1/extensions/mcp/${trustedServerKey}` },
+    });
+    await expect(
+      service.detailForPeople(
+        principal,
+        "44444444-4444-4444-8444-444444444444",
+      ),
+    ).rejects.toMatchObject({ code: "extension_not_found" });
   });
 });

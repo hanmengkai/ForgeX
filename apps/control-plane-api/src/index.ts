@@ -11,12 +11,14 @@ import {
   ApplicationError,
   DeliveryCoordinatorService,
   ExtensionCatalogApplicationService,
+  McpRegistryApplicationService,
   RequirementApplicationService,
   SkillRegistryApplicationService,
   WorkerFleetService,
   canPerformRequirementAction,
   type AuthenticatedPrincipal,
   type ExtensionCatalogRepository,
+  type McpRegistryRepository,
   type PlatformRole,
   type PreviewArtifactStore,
   type RequirementRepository,
@@ -35,7 +37,10 @@ import {
   type WorkerConnectionCredentialPayload,
 } from "@forgex/contracts";
 import type { RequirementAllowedAction } from "@forgex/domain";
-import type { SkillEvaluationAuthority } from "@forgex/extensions";
+import type {
+  McpHealthAuthority,
+  SkillEvaluationAuthority,
+} from "@forgex/extensions";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -47,6 +52,8 @@ declare module "fastify" {
 export interface ControlPlaneApiOptions {
   authenticator: SessionAuthenticator;
   extensionCatalogRepository: ExtensionCatalogRepository;
+  mcpHealthAuthority: McpHealthAuthority;
+  mcpRegistryRepository: McpRegistryRepository;
   skillArtifactStore: SkillArtifactStore;
   skillEvaluationAuthority: SkillEvaluationAuthority;
   skillRegistryRepository: SkillRegistryRepository;
@@ -77,6 +84,14 @@ const extensionParamsSchema = z
 const skillExtensionParamsSchema = z
   .object({
     skillKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const mcpExtensionParamsSchema = z
+  .object({
+    serverKey: z
       .string()
       .uuid()
       .transform((value) => value.toLowerCase()),
@@ -325,9 +340,16 @@ export const buildControlPlaneApi = (
     projectKey: options.projectKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+  const mcpServers = new McpRegistryApplicationService({
+    repository: options.mcpRegistryRepository,
+    healthAuthority: options.mcpHealthAuthority,
+    projectKey: options.projectKey,
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
   const extensions = new ExtensionCatalogApplicationService({
     repository: options.extensionCatalogRepository,
     skillRegistry: skills,
+    mcpRegistry: mcpServers,
     projectKey: options.projectKey,
   });
   const workers = new WorkerFleetService({
@@ -595,6 +617,25 @@ export const buildControlPlaneApi = (
       data: await extensions.skillDetailForPeople(
         principal,
         params.data.skillKey,
+      ),
+    });
+  });
+
+  app.get("/api/v1/extensions/mcp/:serverKey", async (request, reply) => {
+    const principal = principalFrom(request);
+    const params = mcpExtensionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "请求内容需要调整",
+        validationDetails(params.error),
+      );
+    }
+    return reply.send({
+      data: await extensions.mcpDetailForPeople(
+        principal,
+        params.data.serverKey,
       ),
     });
   });

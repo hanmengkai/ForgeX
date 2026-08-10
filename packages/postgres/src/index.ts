@@ -13,3 +13,4 @@ export { PostgresPreviewArtifactStore } from "./postgres-preview-artifact-store.
 export { PostgresExtensionCatalogRepository } from "./postgres-extension-catalog-repository.js";
 export { PostgresSkillRegistryRepository } from "./postgres-skill-registry-repository.js";
 export { PostgresSkillArtifactStore } from "./postgres-skill-artifact-store.js";
+export { PostgresMcpRegistryRepository } from "./postgres-mcp-registry-repository.js";

@@ -5,16 +5,19 @@ import { describe, expect, it, vi } from "vitest";
 import {
   InMemoryRequirementRepository,
   InMemoryExtensionCatalogRepository,
+  InMemoryMcpRegistryRepository,
   InMemoryPreviewArtifactStore,
   InMemorySkillArtifactStore,
   InMemorySkillRegistryRepository,
   InMemoryWorkerFleetRepository,
+  McpRegistryApplicationService,
   RequirementApplicationService,
   SkillRegistryApplicationService,
   type AuthenticatedPrincipal,
   type SessionAuthenticator,
 } from "@forgex/application";
 import {
+  McpHealthAuthority,
   SkillEvaluationAuthority,
   SkillPackageCodec,
 } from "@forgex/extensions";
@@ -82,6 +85,8 @@ const validRequirement = {
 const createTestApp = () => {
   const repository = new InMemoryRequirementRepository();
   const extensionCatalogRepository = new InMemoryExtensionCatalogRepository();
+  const mcpRegistryRepository = new InMemoryMcpRegistryRepository();
+  const mcpHealthAuthority = new McpHealthAuthority({ verifiers: [] });
   const skillRegistryRepository = new InMemorySkillRegistryRepository();
   const skillArtifactStore = new InMemorySkillArtifactStore();
   const skillEvaluationAuthority = new SkillEvaluationAuthority({
@@ -105,6 +110,8 @@ const createTestApp = () => {
   const app = buildControlPlaneApi({
     authenticator,
     extensionCatalogRepository,
+    mcpRegistryRepository,
+    mcpHealthAuthority,
     skillRegistryRepository,
     skillArtifactStore,
     skillEvaluationAuthority,
@@ -119,6 +126,8 @@ const createTestApp = () => {
     repository,
     previewArtifactStore,
     extensionCatalogRepository,
+    mcpRegistryRepository,
+    mcpHealthAuthority,
     skillRegistryRepository,
     skillArtifactStore,
     skillEvaluationAuthority,
@@ -267,6 +276,69 @@ describe("需求 API", () => {
     expect(detail.statusCode).toBe(200);
     expect(detail.json()).toEqual({
       data: overview.json().data.teamCapabilities[0],
+    });
+    await app.close();
+  });
+
+  it("扩展中心的外部工具来自可信 MCP 注册表而不是人工就绪状态", async () => {
+    const { app, mcpRegistryRepository, mcpHealthAuthority } = createTestApp();
+    const serverKey = "99999999-9999-4999-8999-999999999999";
+    const servers = new McpRegistryApplicationService({
+      repository: mcpRegistryRepository,
+      healthAuthority: mcpHealthAuthority,
+      projectKey,
+      clock: () => new Date("2026-08-10T03:00:00.000Z"),
+    });
+    await servers.publish(administrator, {
+      schemaVersion: 1,
+      serverKey,
+      tenantKey,
+      projectKey,
+      revision: 1,
+      name: "代码仓库工具",
+      summary: "读取项目结构并在确认后创建交付分支",
+      transport: "stdio",
+      connectionBindingKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      protocolVersion: "2025-06-18",
+      tools: [
+        {
+          toolKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          technicalName: "repository.read_structure",
+          displayName: "读取项目结构",
+          description: "读取目录与受版本控制文件的结构摘要",
+          effect: "read",
+          approval: "automatic",
+          inputSchemaHashAlgorithm: "sha256",
+          inputSchemaHash: "a".repeat(64),
+        },
+      ],
+      publishedAt: "2026-08-10T02:00:00.000Z",
+    });
+
+    const overview = await app.inject({
+      method: "GET",
+      url: "/api/v1/extensions",
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(overview.statusCode).toBe(200);
+    expect(overview.json().data.externalTools).toEqual([
+      {
+        name: "代码仓库工具",
+        summary: "读取项目结构并在确认后创建交付分支",
+        status: "需要处理",
+        detail: "1 项业务能力",
+        supportingText: "读取可自动运行",
+        links: { self: `/api/v1/extensions/mcp/${serverKey}` },
+      },
+    ]);
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/v1/extensions/mcp/${serverKey}`,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toEqual({
+      data: overview.json().data.externalTools[0],
     });
     await app.close();
   });

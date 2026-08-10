@@ -83,15 +83,23 @@ describe("createHttpForgeXClient", () => {
     );
   });
 
-  it("扩展目录只接受三类人性化条目并拒绝敏感字段", async () => {
-    const self = "/api/v1/extensions/33333333-3333-4333-8333-333333333333";
+  it("扩展目录严格绑定三类入口并拒绝敏感字段", async () => {
     const valid = {
       name: "代码仓库工具",
       summary: "读取代码、创建交付分支并运行受控检查",
       status: "可使用",
       detail: "3 项业务能力",
       supportingText: "读取自动放行，变更需要确认",
-      links: { self },
+      links: {
+        self: "/api/v1/extensions/mcp/33333333-3333-4333-8333-333333333333",
+      },
+    };
+    const businessKnowledge = {
+      ...valid,
+      name: "访客业务资料",
+      links: {
+        self: "/api/v1/extensions/55555555-5555-4555-8555-555555555555",
+      },
     };
     const trustedSkill = {
       ...valid,
@@ -106,7 +114,7 @@ describe("createHttpForgeXClient", () => {
         new Response(
           JSON.stringify({
             data: {
-              businessKnowledge: [],
+              businessKnowledge: [businessKnowledge],
               teamCapabilities: [trustedSkill],
               externalTools: [valid],
             },
@@ -123,14 +131,26 @@ describe("createHttpForgeXClient", () => {
             },
           }),
         ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              businessKnowledge: [],
+              teamCapabilities: [],
+              externalTools: [trustedSkill],
+            },
+          }),
+        ),
       );
     const client = createHttpForgeXClient({ fetcher });
 
     await expect(client.listExtensions()).resolves.toEqual({
-      businessKnowledge: [],
+      businessKnowledge: [businessKnowledge],
       teamCapabilities: [trustedSkill],
       externalTools: [valid],
     });
+    await expect(client.listExtensions()).rejects.toThrow("扩展目录格式不正确");
     await expect(client.listExtensions()).rejects.toThrow("扩展目录格式不正确");
   });
 

@@ -185,7 +185,7 @@ describe("RequirementWorkbench", () => {
           detail: "3 项业务能力",
           supportingText: "读取自动放行，变更需要确认",
           links: {
-            self: "/api/v1/extensions/55555555-5555-4555-8555-555555555555",
+            self: "/api/v1/extensions/mcp/55555555-5555-4555-8555-555555555555",
           },
         },
       ],

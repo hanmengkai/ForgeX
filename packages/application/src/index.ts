@@ -6,10 +6,21 @@ export type {
 export { ApplicationError } from "./errors.js";
 export type { ApplicationErrorDetail } from "./errors.js";
 export {
+  InMemoryMcpRegistryRepository,
+  type McpEnableAuditEvent,
+  type McpRegistryRepository,
+  type McpRegistryTransaction,
+} from "./mcp-registry-repository.js";
+export {
+  McpRegistryApplicationService,
+  type McpRegistryApplicationServiceOptions,
+} from "./mcp-registry-service.js";
+export {
   ExtensionCatalogApplicationService,
   type ExtensionCatalogApplicationServiceOptions,
   type ExtensionCatalogOverviewForPeople,
   type ExtensionItemForPeople,
+  type TrustedMcpDirectory,
   type TrustedSkillDirectory,
 } from "./extension-catalog-service.js";
 export {

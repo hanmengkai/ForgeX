@@ -213,28 +213,43 @@ export const WorkerLeaseCommandSchema = z
   })
   .strict();
 
-const extensionSelfPath = z
-  .string()
-  .regex(
-    /^\/api\/v1\/extensions\/(?:skills\/)?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-  );
+const extensionKeyPath =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const extensionItemFields = {
+  name: z.string().trim().min(2).max(100),
+  summary: z.string().trim().min(4).max(500),
+  status: z.enum(["可使用", "正在更新", "需要处理", "暂不可用"]),
+  detail: z.string().trim().min(2).max(200),
+  supportingText: z.string().trim().min(2).max(200),
+};
+const extensionItemSchema = (path: RegExp) =>
+  z
+    .object({
+      ...extensionItemFields,
+      links: z.object({ self: z.string().regex(path) }).strict(),
+    })
+    .strict();
+const knowledgeExtensionItemSchema = extensionItemSchema(
+  new RegExp(`^/api/v1/extensions/${extensionKeyPath}$`, "i"),
+);
+const skillExtensionItemSchema = extensionItemSchema(
+  new RegExp(`^/api/v1/extensions/skills/${extensionKeyPath}$`, "i"),
+);
+const mcpExtensionItemSchema = extensionItemSchema(
+  new RegExp(`^/api/v1/extensions/mcp/${extensionKeyPath}$`, "i"),
+);
 
-export const ExtensionItemForPeopleSchema = z
-  .object({
-    name: z.string().trim().min(2).max(100),
-    summary: z.string().trim().min(4).max(500),
-    status: z.enum(["可使用", "正在更新", "需要处理", "暂不可用"]),
-    detail: z.string().trim().min(2).max(200),
-    supportingText: z.string().trim().min(2).max(200),
-    links: z.object({ self: extensionSelfPath }).strict(),
-  })
-  .strict();
+export const ExtensionItemForPeopleSchema = z.union([
+  knowledgeExtensionItemSchema,
+  skillExtensionItemSchema,
+  mcpExtensionItemSchema,
+]);
 
 export const ExtensionCatalogOverviewForPeopleSchema = z
   .object({
-    businessKnowledge: z.array(ExtensionItemForPeopleSchema).max(100),
-    teamCapabilities: z.array(ExtensionItemForPeopleSchema).max(100),
-    externalTools: z.array(ExtensionItemForPeopleSchema).max(100),
+    businessKnowledge: z.array(knowledgeExtensionItemSchema).max(100),
+    teamCapabilities: z.array(skillExtensionItemSchema).max(100),
+    externalTools: z.array(mcpExtensionItemSchema).max(100),
   })
   .strict();
 

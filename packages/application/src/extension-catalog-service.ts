@@ -1,5 +1,6 @@
 import {
   ExtensionCatalog,
+  type McpServerRegistryItemForPeople,
   type SkillRegistryItemForPeople,
 } from "@forgex/extensions";
 import type {
@@ -19,6 +20,7 @@ import type { ExtensionCatalogRepository } from "./extension-catalog-repository.
 export interface ExtensionCatalogApplicationServiceOptions {
   repository: ExtensionCatalogRepository;
   skillRegistry: TrustedSkillDirectory;
+  mcpRegistry: TrustedMcpDirectory;
   projectKey: string;
 }
 
@@ -28,12 +30,19 @@ export interface TrustedSkillDirectory {
   ): Promise<SkillRegistryItemForPeople[]>;
 }
 
+export interface TrustedMcpDirectory {
+  listItemsForPeople(
+    principal: AuthenticatedPrincipal,
+  ): Promise<McpServerRegistryItemForPeople[]>;
+}
+
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class ExtensionCatalogApplicationService {
   readonly #repository: ExtensionCatalogRepository;
   readonly #skillRegistry: TrustedSkillDirectory;
+  readonly #mcpRegistry: TrustedMcpDirectory;
   readonly #projectKey: string;
 
   constructor(options: ExtensionCatalogApplicationServiceOptions) {
@@ -42,6 +51,7 @@ export class ExtensionCatalogApplicationService {
     }
     this.#repository = options.repository;
     this.#skillRegistry = options.skillRegistry;
+    this.#mcpRegistry = options.mcpRegistry;
     this.#projectKey = options.projectKey.toLowerCase();
   }
 
@@ -51,6 +61,8 @@ export class ExtensionCatalogApplicationService {
     const catalog = await this.#catalogFor(principal);
     const trustedSkills =
       await this.#skillRegistry.listItemsForPeople(principal);
+    const trustedMcpServers =
+      await this.#mcpRegistry.listItemsForPeople(principal);
     const overview: ExtensionCatalogOverviewForPeople = {
       businessKnowledge: [],
       teamCapabilities: [],
@@ -68,7 +80,6 @@ export class ExtensionCatalogApplicationService {
         case "skill":
           break;
         case "mcp":
-          overview.externalTools.push(view);
           break;
       }
     }
@@ -84,6 +95,14 @@ export class ExtensionCatalogApplicationService {
         self: `/api/v1/extensions/skills/${item.skillKey}`,
       },
     }));
+    overview.externalTools = trustedMcpServers.map((item) => ({
+      name: item.view.name,
+      summary: item.view.summary,
+      status: item.view.status === "可使用" ? "可使用" : "需要处理",
+      detail: item.view.detail,
+      supportingText: item.view.supportingText,
+      links: { self: `/api/v1/extensions/mcp/${item.serverKey}` },
+    }));
     return overview;
   }
 
@@ -96,7 +115,7 @@ export class ExtensionCatalogApplicationService {
       .listForPeople()
       .find(
         (candidate) =>
-          candidate.kind !== "skill" &&
+          candidate.kind === "knowledge" &&
           candidate.extensionKey === normalizedKey,
       );
     if (!item) {
@@ -136,6 +155,31 @@ export class ExtensionCatalogApplicationService {
         : item.view.quality,
       supportingText: item.view.safety,
       links: { self: `/api/v1/extensions/skills/${item.skillKey}` },
+    };
+  }
+
+  async mcpDetailForPeople(
+    principal: AuthenticatedPrincipal,
+    serverKey: string,
+  ): Promise<ExtensionItemForPeople> {
+    const normalizedKey = serverKey.toLowerCase();
+    const item = (await this.#mcpRegistry.listItemsForPeople(principal)).find(
+      (candidate) => candidate.serverKey === normalizedKey,
+    );
+    if (!item) {
+      throw new ApplicationError(
+        404,
+        "extension_not_found",
+        "没有找到这个扩展",
+      );
+    }
+    return {
+      name: item.view.name,
+      summary: item.view.summary,
+      status: item.view.status === "可使用" ? "可使用" : "需要处理",
+      detail: item.view.detail,
+      supportingText: item.view.supportingText,
+      links: { self: `/api/v1/extensions/mcp/${item.serverKey}` },
     };
   }
 
