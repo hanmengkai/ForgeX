@@ -100,6 +100,54 @@ describe("设备 Worker 配置", () => {
     ).toBe(false);
   });
 
+  it("本地 MCP 连接必须使用唯一绑定、明确工具白名单和受限传输", () => {
+    const stdio = {
+      schemaVersion: 1 as const,
+      connectionBindingKey: "77777777-7777-4777-8777-777777777777",
+      transport: "stdio" as const,
+      commandPath: path.resolve("fixtures/mcp-launcher"),
+      commandSha256: "a".repeat(64),
+      args: ["--profile", "team"],
+      environment: { MCP_PROFILE: "team" },
+      allowedTools: ["notifications.send"],
+      timeoutMs: 30_000,
+    };
+    const http = {
+      schemaVersion: 1 as const,
+      connectionBindingKey: "88888888-8888-4888-8888-888888888888",
+      transport: "streamable_http" as const,
+      url: "https://mcp.example.test/mcp",
+      headers: { Authorization: "Bearer local-only" },
+      allowedTools: ["deploy.status"],
+      timeoutMs: 30_000,
+    };
+
+    expect(
+      DeviceWorkerConfigSchema.safeParse({
+        ...base,
+        mcpConnections: [stdio, http],
+      }).success,
+    ).toBe(true);
+    expect(
+      DeviceWorkerConfigSchema.safeParse({
+        ...base,
+        mcpConnections: [stdio, stdio],
+      }).success,
+    ).toBe(false);
+    expect(
+      DeviceWorkerConfigSchema.safeParse({
+        ...base,
+        mcpConnections: [{ ...http, url: "http://mcp.example.test/mcp" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      DeviceWorkerConfigSchema.safeParse({
+        ...base,
+        mcpConnections: [{ ...stdio, allowedTools: [] }],
+      }).success,
+    ).toBe(false);
+  });
+
   it("Windows 启动时拒绝本机其他用户可读的明文连接配置", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-config-"));
     temporaryRoots.push(root);
