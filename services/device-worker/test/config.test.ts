@@ -231,4 +231,88 @@ describe("设备 Worker 配置", () => {
       }),
     ).rejects.toThrow("可信摘要");
   });
+
+  it("启动时校验每个 stdio MCP 启动器的文件、父目录和可信摘要", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-config-"));
+    temporaryRoots.push(root);
+    const codexHomePath = path.join(root, "codex-home");
+    const journalDirectory = path.join(root, "state");
+    const mcpDirectory = path.join(root, "mcp-bin");
+    const isolationLauncherPath = path.join(root, "isolation-launcher.exe");
+    const mcpLauncherPath = path.join(mcpDirectory, "team-mcp.exe");
+    const isolationLauncherContent = "trusted isolation launcher";
+    const mcpLauncherContent = "trusted mcp launcher";
+    const configPath = path.join(root, "worker.json");
+    await mkdir(codexHomePath);
+    await mkdir(journalDirectory);
+    await mkdir(mcpDirectory);
+    await writeFile(
+      isolationLauncherPath,
+      isolationLauncherContent,
+      "utf8",
+    );
+    await writeFile(mcpLauncherPath, mcpLauncherContent, "utf8");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...base,
+        codexHomePath,
+        codexIsolation: {
+          launcherPath: isolationLauncherPath,
+          launcherSha256: createHash("sha256")
+            .update(isolationLauncherContent, "utf8")
+            .digest("hex"),
+          isolationKind: "separate_os_identity",
+        },
+        completionJournalPath: path.join(journalDirectory, "completion.json"),
+        mcpConnections: [
+          {
+            schemaVersion: 1,
+            connectionBindingKey: "77777777-7777-4777-8777-777777777777",
+            transport: "stdio",
+            commandPath: mcpLauncherPath,
+            commandSha256: createHash("sha256")
+              .update(mcpLauncherContent, "utf8")
+              .digest("hex"),
+            args: [],
+            environment: {},
+            allowedTools: ["notifications.send"],
+            timeoutMs: 30_000,
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const assertWindowsPrivatePath = vi.fn(async () => Promise.resolve());
+    const assertWindowsTrustedLauncherPath = vi.fn(async () =>
+      Promise.resolve(),
+    );
+
+    await expect(
+      loadDeviceWorkerConfig(configPath, {
+        platform: "win32",
+        assertWindowsPrivatePath,
+        assertWindowsTrustedLauncherPath,
+      }),
+    ).resolves.toMatchObject({
+      mcpConnections: [
+        expect.objectContaining({ commandPath: mcpLauncherPath }),
+      ],
+    });
+    expect(assertWindowsTrustedLauncherPath).toHaveBeenCalledWith(
+      mcpDirectory,
+    );
+    expect(assertWindowsTrustedLauncherPath).toHaveBeenCalledWith(
+      mcpLauncherPath,
+    );
+
+    await writeFile(mcpLauncherPath, "tampered mcp launcher", "utf8");
+    await expect(
+      loadDeviceWorkerConfig(configPath, {
+        platform: "win32",
+        assertWindowsPrivatePath,
+        assertWindowsTrustedLauncherPath,
+      }),
+    ).rejects.toThrow("MCP 启动器内容与配置的可信摘要不一致");
+  });
 });
