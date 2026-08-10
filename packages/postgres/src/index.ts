@@ -6,6 +6,11 @@ export {
   type PostgresQueryResult,
 } from "./postgres-worker-fleet-repository.js";
 export {
+  loadPostgresMigrations,
+  runPostgresMigrations,
+  type PostgresMigration,
+} from "./migration-runner.js";
+export {
   PostgresRequirementRepository,
   type PostgresRequirementRepositoryOptions,
 } from "./postgres-requirement-repository.js";
