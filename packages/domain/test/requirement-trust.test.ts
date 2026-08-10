@@ -193,6 +193,11 @@ describe("独立验证证据", () => {
       acceptanceProgress: "2 / 2 项已通过",
     });
     expect(requirement.listAllowedActions()).toEqual(["accept"]);
+    expect(requirement.toPreviewArtifactReference()).toEqual({
+      requirementRevision: 1,
+      artifactHashAlgorithm: "sha256",
+      artifactHash: deliveryCandidate.artifactHash,
+    });
     expect(requirement.toAcceptanceView()).toEqual({
       verifiedBy: "独立测试 Runner",
       verifiedAt: "2026-08-10T01:30:00.000Z",

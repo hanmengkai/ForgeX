@@ -36,6 +36,9 @@ ForgeX 会同时接收产品审批、Codex Worker 执行结果和独立 Runner �
 ### 发布边界
 
 - 独立验证通过只允许进入产品验收，不等于允许发布。
+- 普通页面只打开控制面按需求和版本生成的同源 Preview 地址，不接受 Worker 或 Runner 自报的 URL。
+- Preview 制品以 Runner 已签名的 `artifactHash` 内容寻址；仓储按租户、项目、需求、版本和摘要隔离，写入与读取都对实际响应字节重新计算 SHA-256，不允许覆盖。
+- 网关不跳转到第三方来源。它返回平台生成的可信外壳，并把制品字节放进没有 `allow-same-origin`、`allow-forms`、`allow-popups` 或 `allow-top-navigation` 的沙箱 iframe；父页面 CSP 只允许 `blob:` 子帧，禁止网络连接、表单和外部导航。
 - 生产发布、数据库迁移、权限和网络变更继续使用单独审批与最小权限执行器。
 
 ## 后果

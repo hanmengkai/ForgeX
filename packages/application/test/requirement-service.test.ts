@@ -34,6 +34,52 @@ const spec = RequirementSpecSchema.parse({
 });
 
 describe("RequirementApplicationService", () => {
+  it("只从已验证的工作流读取 Preview 制品引用，并允许项目成员查看", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+    });
+    const created = await service.create(principal, spec);
+    const reference = {
+      requirementRevision: 1,
+      artifactHashAlgorithm: "sha256" as const,
+      artifactHash: "a".repeat(64),
+    };
+    const readReference = vi
+      .spyOn(RequirementWorkflow.prototype, "toPreviewArtifactReference")
+      .mockReturnValueOnce(reference);
+
+    await expect(
+      service.getPreviewTarget(
+        { ...principal, roles: ["developer"] },
+        created.requirementKey,
+      ),
+    ).resolves.toEqual({
+      tenantKey,
+      projectKey,
+      requirementKey: created.requirementKey,
+      ...reference,
+    });
+    expect(readReference).toHaveBeenCalledOnce();
+  });
+
+  it("没有可信验收证据时不提供 Preview 制品", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+    });
+    const created = await service.create(principal, spec);
+
+    await expect(
+      service.getPreviewTarget(principal, created.requirementKey),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "preview_not_ready",
+    });
+  });
+
   it("产品验收使用认证身份写入审计，分析师不能代替验收", async () => {
     const repository = new InMemoryRequirementRepository();
     const service = new RequirementApplicationService({

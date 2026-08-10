@@ -23,6 +23,7 @@ export interface RequirementListItem {
   acceptanceProgress: string;
   links: {
     self: string;
+    preview?: string | undefined;
     actions: RequirementActionLinks;
   };
 }
@@ -102,6 +103,7 @@ const actionSuffixes = {
 const requirementLinksSchema = z
   .object({
     self: z.string().regex(requirementSelfPattern),
+    preview: z.string().optional(),
     actions: z
       .object({
         submitConfirmation: z.string().optional(),
@@ -113,6 +115,16 @@ const requirementLinksSchema = z
   })
   .strict()
   .superRefine((links, context) => {
+    if (
+      links.preview !== undefined &&
+      links.preview !== `${links.self}/preview`
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["preview"],
+        message: "Preview 链接与需求不匹配",
+      });
+    }
     for (const [action, suffix] of Object.entries(actionSuffixes) as Array<
       [keyof RequirementActionLinks, string]
     >) {
@@ -202,6 +214,13 @@ const requirementDetailResponseSchema = z
             code: "custom",
             path: ["acceptance"],
             message: "验收信息与需求状态不一致",
+          });
+        }
+        if (shouldHaveAcceptance !== (detail.links.preview !== undefined)) {
+          context.addIssue({
+            code: "custom",
+            path: ["links", "preview"],
+            message: "Preview 链接与验收状态不一致",
           });
         }
         if (

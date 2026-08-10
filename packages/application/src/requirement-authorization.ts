@@ -1,7 +1,12 @@
 import type { AuthenticatedPrincipal, PlatformRole } from "./auth.js";
 
 export type RequirementAuthorizedAction =
-  "create" | "submitForConfirmation" | "confirm" | "startDelivery" | "accept";
+  | "create"
+  | "submitForConfirmation"
+  | "confirm"
+  | "startDelivery"
+  | "accept"
+  | "viewPreview";
 
 const rolesByAction = {
   create: new Set<PlatformRole>([
@@ -17,6 +22,12 @@ const rolesByAction = {
   confirm: new Set<PlatformRole>(["product_owner", "administrator"]),
   startDelivery: new Set<PlatformRole>(["product_owner", "administrator"]),
   accept: new Set<PlatformRole>(["product_owner", "administrator"]),
+  viewPreview: new Set<PlatformRole>([
+    "product_owner",
+    "requirement_analyst",
+    "developer",
+    "administrator",
+  ]),
 } satisfies Record<RequirementAuthorizedAction, ReadonlySet<PlatformRole>>;
 
 export const canPerformRequirementAction = (

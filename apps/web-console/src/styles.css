@@ -627,9 +627,28 @@ h1 {
   font-size: 12px;
 }
 
-.acceptance-action {
+.acceptance-action,
+.preview-action {
   width: 100%;
   margin-top: 12px;
+}
+
+.preview-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--surface);
+  text-decoration: none;
+  background: var(--brand);
+}
+
+.preview-action .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.acceptance-action {
   color: var(--success);
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--success) 42%, transparent);
@@ -1203,6 +1222,11 @@ h1 {
 
   .acceptance-action {
     border-color: #4e8b70;
+  }
+
+  .preview-action {
+    color: #10251d;
+    background: #67cda3;
   }
 
   .page-error,

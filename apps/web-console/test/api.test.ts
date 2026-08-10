@@ -164,6 +164,90 @@ describe("createHttpForgeXClient", () => {
     );
   });
 
+  it("拒绝把当前需求之外的 Preview 链接交给页面打开", async () => {
+    const self = "/api/v1/requirements/33333333-3333-4333-8333-333333333333";
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: requirement({
+            status: "等待产品验收",
+            links: {
+              self,
+              preview: "/api/v1/workers",
+              actions: { accept: `${self}/accept` },
+            },
+            spec: {
+              schemaVersion: 1,
+              title: "访客预约",
+              goal: "让访客到访过程更顺畅",
+              userStories: [],
+              acceptanceCriteria: [
+                {
+                  title: "访客可以提交预约",
+                  description: "填写后能够提交",
+                  priority: "must",
+                },
+              ],
+              openQuestions: [],
+            },
+            acceptance: {
+              verifiedBy: "独立测试 Runner",
+              verifiedAt: "2026-08-10T01:30:00.000Z",
+              checks: [{ title: "访客可以提交预约", status: "已通过" }],
+            },
+          }),
+        }),
+      ),
+    );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(client.getRequirement(self)).rejects.toThrow(
+      "需求详情格式不正确",
+    );
+  });
+
+  it("只接受与详情 self 精确绑定的同源 Preview 链接", async () => {
+    const self = "/api/v1/requirements/33333333-3333-4333-8333-333333333333";
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: requirement({
+            status: "等待产品验收",
+            links: {
+              self,
+              preview: `${self}/preview`,
+              actions: { accept: `${self}/accept` },
+            },
+            spec: {
+              schemaVersion: 1,
+              title: "访客预约",
+              goal: "让访客到访过程更顺畅",
+              userStories: [],
+              acceptanceCriteria: [
+                {
+                  title: "访客可以提交预约",
+                  description: "填写后能够提交",
+                  priority: "must",
+                },
+              ],
+              openQuestions: [],
+            },
+            acceptance: {
+              verifiedBy: "独立测试 Runner",
+              verifiedAt: "2026-08-10T01:30:00.000Z",
+              checks: [{ title: "访客可以提交预约", status: "已通过" }],
+            },
+          }),
+        }),
+      ),
+    );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(client.getRequirement(self)).resolves.toMatchObject({
+      links: { self, preview: `${self}/preview` },
+    });
+  });
+
   it("Cookie 会话执行写操作时附带同源请求保护头", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

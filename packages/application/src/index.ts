@@ -11,6 +11,13 @@ export {
 } from "./delivery-coordinator-service.js";
 export { canPerformRequirementAction } from "./requirement-authorization.js";
 export type { RequirementAuthorizedAction } from "./requirement-authorization.js";
+export { InMemoryPreviewArtifactStore } from "./preview-artifact-store.js";
+export type {
+  InMemoryPreviewArtifactStoreOptions,
+  PreviewArtifact,
+  PreviewArtifactReference,
+  PreviewArtifactStore,
+} from "./preview-artifact-store.js";
 export { InMemoryRequirementRepository } from "./in-memory-requirement-repository.js";
 export {
   RequirementApplicationService,

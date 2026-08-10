@@ -158,6 +158,17 @@ function RequirementCard({
                       </li>
                     ))}
                   </ul>
+                  {detail.links.preview ? (
+                    <a
+                      className="button preview-action"
+                      href={detail.links.preview}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    >
+                      打开效果预览
+                      <ArrowIcon />
+                    </a>
+                  ) : null}
                   {item.links.actions.accept ? (
                     <button
                       className="button acceptance-action"

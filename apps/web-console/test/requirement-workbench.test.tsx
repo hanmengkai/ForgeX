@@ -184,6 +184,7 @@ describe("RequirementWorkbench", () => {
       acceptanceProgress: "1 / 1 项已通过",
       links: {
         ...items[0]!.links,
+        preview: `${items[0]!.links.self}/preview`,
         actions: { accept: `${items[0]!.links.self}/accept` },
       },
     };
@@ -223,6 +224,14 @@ describe("RequirementWorkbench", () => {
     expect(await screen.findByText("独立验证已通过")).toBeInTheDocument();
     expect(screen.getByText(/独立测试 Runner/)).toBeInTheDocument();
     expect(screen.getAllByText("已通过")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "打开效果预览" })).toHaveAttribute(
+      "href",
+      `${items[0]!.links.self}/preview`,
+    );
+    expect(screen.getByRole("link", { name: "打开效果预览" })).toHaveAttribute(
+      "rel",
+      "noreferrer noopener",
+    );
 
     await user.click(screen.getByRole("button", { name: "确认验收通过" }));
     expect(client.runRequirementAction).toHaveBeenCalledWith(

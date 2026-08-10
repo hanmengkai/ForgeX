@@ -170,6 +170,12 @@ export interface RequirementAcceptanceView {
   }>;
 }
 
+export interface RequirementPreviewArtifactReference {
+  requirementRevision: number;
+  artifactHashAlgorithm: "sha256";
+  artifactHash: string;
+}
+
 export type RequirementAllowedAction =
   "submitForConfirmation" | "confirm" | "startDelivery" | "accept";
 
@@ -500,6 +506,15 @@ export class RequirementWorkflow {
         }
         return { title: criterion.title, status: "已通过" as const };
       }),
+    };
+  }
+
+  toPreviewArtifactReference(): RequirementPreviewArtifactReference | null {
+    if (!this.#evidence) return null;
+    return {
+      requirementRevision: this.#current.version,
+      artifactHashAlgorithm: this.#evidence.artifactHashAlgorithm,
+      artifactHash: this.#evidence.artifactHash,
     };
   }
 

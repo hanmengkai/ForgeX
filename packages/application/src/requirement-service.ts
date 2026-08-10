@@ -26,6 +26,7 @@ import type {
   RequirementRepository,
   RequirementTransaction,
 } from "./requirement-repository.js";
+import type { PreviewArtifactReference } from "./preview-artifact-store.js";
 
 export interface RequirementApplicationServiceOptions {
   repository: RequirementRepository;
@@ -301,6 +302,41 @@ export class RequirementApplicationService {
           allowedActions: record.workflow.listAllowedActions(),
           spec: structuredClone(record.spec),
           acceptance: record.workflow.toAcceptanceView(),
+        };
+      },
+    );
+  }
+
+  async getPreviewTarget(
+    principal: AuthenticatedPrincipal,
+    requirementKey: string,
+  ): Promise<PreviewArtifactReference> {
+    this.#requireAction(principal, "viewPreview");
+    return this.#repository.transaction(
+      principal.tenantKey,
+      this.#projectKey,
+      async (transaction) => {
+        const record = await transaction.find(requirementKey);
+        if (!record || record.projectKey !== this.#projectKey) {
+          throw new ApplicationError(
+            404,
+            "requirement_not_found",
+            "没有找到这个需求",
+          );
+        }
+        const reference = record.workflow.toPreviewArtifactReference();
+        if (!reference) {
+          throw new ApplicationError(
+            409,
+            "preview_not_ready",
+            "效果预览还没有通过独立验证",
+          );
+        }
+        return {
+          tenantKey: record.tenantKey,
+          projectKey: record.projectKey,
+          requirementKey: record.requirementKey,
+          ...reference,
         };
       },
     );

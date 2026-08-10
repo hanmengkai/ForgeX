@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
   InMemoryRequirementRepository,
+  InMemoryPreviewArtifactStore,
   InMemoryWorkerFleetRepository,
+  RequirementApplicationService,
   type AuthenticatedPrincipal,
   type SessionAuthenticator,
 } from "@forgex/application";
@@ -61,7 +65,7 @@ const validRequirement = {
     {
       title: "访客可以提交预约",
       description: "填写姓名、手机号和到访时间后能够提交",
-      priority: "must",
+      priority: "must" as const,
     },
   ],
   openQuestions: [],
@@ -69,6 +73,7 @@ const validRequirement = {
 
 const createTestApp = () => {
   const repository = new InMemoryRequirementRepository();
+  const previewArtifactStore = new InMemoryPreviewArtifactStore();
   const sessions = new Map<string, AuthenticatedPrincipal>([
     ["product-session", productOwner],
     ["developer-session", juniorDeveloper],
@@ -86,11 +91,12 @@ const createTestApp = () => {
   const app = buildControlPlaneApi({
     authenticator,
     requirementRepository: repository,
+    previewArtifactStore,
     workerFleetRepository: new InMemoryWorkerFleetRepository(),
     projectKey,
     clock: () => new Date("2026-08-10T03:00:00.000Z"),
   });
-  return { app, repository };
+  return { app, repository, previewArtifactStore };
 };
 
 describe("需求 API", () => {
@@ -179,6 +185,171 @@ describe("需求 API", () => {
     });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().data.spec).toEqual(validRequirement);
+    await app.close();
+  });
+
+  it("只通过同源 Preview 网关返回摘要匹配的不可变字节", async () => {
+    const { app, previewArtifactStore } = createTestApp();
+    const html = new TextEncoder().encode(
+      '<!doctype html><meta charset="utf-8"><h1>可信效果预览</h1>',
+    );
+    const target = {
+      tenantKey,
+      projectKey,
+      requirementKey: "99999999-9999-4999-8999-999999999999",
+      requirementRevision: 1,
+      artifactHashAlgorithm: "sha256" as const,
+      artifactHash: createHash("sha256").update(html).digest("hex"),
+    };
+    await previewArtifactStore.put({ ...target, content: html });
+    const getPreviewTarget = vi
+      .spyOn(RequirementApplicationService.prototype, "getPreviewTarget")
+      .mockResolvedValueOnce(target);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/requirements/${target.requirementKey}/preview`,
+      headers: { authorization: "Bearer developer-session" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("ForgeX 可信预览");
+    expect(response.body).toContain('sandbox="allow-scripts"');
+    expect(response.body).toContain(
+      "@media (prefers-color-scheme: dark) { header strong { color: #a9edca; } }",
+    );
+    expect(response.body).not.toContain("<h1>可信效果预览</h1>");
+    const encoded = response.body.match(
+      /const encoded = "([A-Za-z0-9+/=]+)"/,
+    )?.[1];
+    expect(Buffer.from(encoded!, "base64")).toEqual(Buffer.from(html));
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["content-security-policy"]).toContain(
+      "sandbox allow-scripts",
+    );
+    expect(response.headers["content-security-policy"]).toContain(
+      "connect-src 'none'",
+    );
+    expect(response.headers["content-security-policy"]).toContain(
+      "frame-src blob:",
+    );
+    expect(response.headers["content-security-policy"]).not.toContain(
+      "allow-top-navigation",
+    );
+    expect(getPreviewTarget).toHaveBeenCalledOnce();
+    getPreviewTarget.mockRestore();
+    await app.close();
+  });
+
+  it("Preview 制品缺失时返回不泄露摘要的业务错误", async () => {
+    const { app } = createTestApp();
+    const target = {
+      tenantKey,
+      projectKey,
+      requirementKey: "99999999-9999-4999-8999-999999999999",
+      requirementRevision: 1,
+      artifactHashAlgorithm: "sha256" as const,
+      artifactHash: "a".repeat(64),
+    };
+    const getPreviewTarget = vi
+      .spyOn(RequirementApplicationService.prototype, "getPreviewTarget")
+      .mockResolvedValueOnce(target);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/requirements/${target.requirementKey}/preview`,
+      headers: { authorization: "Bearer product-session" },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      error: {
+        code: "preview_artifact_not_found",
+        message: "效果预览暂时不可用，请稍后再试",
+      },
+    });
+    expect(response.body).not.toContain(target.artifactHash);
+    getPreviewTarget.mockRestore();
+    await app.close();
+  });
+
+  it("网关在返回前再次拒绝摘要与实际字节不一致的制品", async () => {
+    const { app, previewArtifactStore } = createTestApp();
+    const original = new TextEncoder().encode("<h1>原始制品</h1>");
+    const target = {
+      tenantKey,
+      projectKey,
+      requirementKey: "99999999-9999-4999-8999-999999999999",
+      requirementRevision: 1,
+      artifactHashAlgorithm: "sha256" as const,
+      artifactHash: createHash("sha256").update(original).digest("hex"),
+    };
+    const getPreviewTarget = vi
+      .spyOn(RequirementApplicationService.prototype, "getPreviewTarget")
+      .mockResolvedValueOnce(target);
+    const getArtifact = vi
+      .spyOn(previewArtifactStore, "get")
+      .mockResolvedValueOnce({
+        ...target,
+        content: new TextEncoder().encode("<h1>被替换的制品</h1>"),
+      });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/requirements/${target.requirementKey}/preview`,
+      headers: { authorization: "Bearer product-session" },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json().error.code).toBe("internal_error");
+    expect(response.body).not.toContain("被替换");
+    expect(response.body).not.toContain(target.artifactHash);
+    getArtifact.mockRestore();
+    getPreviewTarget.mockRestore();
+    await app.close();
+  });
+
+  it("详情只为已有可信证据的需求生成自身 Preview 链接", async () => {
+    const { app } = createTestApp();
+    const requirementKey = "99999999-9999-4999-8999-999999999999";
+    const self = `/api/v1/requirements/${requirementKey}`;
+    const get = vi
+      .spyOn(RequirementApplicationService.prototype, "get")
+      .mockResolvedValueOnce({
+        requirementKey,
+        view: {
+          title: "访客预约",
+          summary: "让访客到访过程更顺畅",
+          version: "第 1 版",
+          status: "等待产品验收",
+          nextStep: "请体验 Preview 并确认结果",
+          acceptanceProgress: "1 / 1 项已通过",
+        },
+        allowedActions: ["accept"],
+        spec: { ...validRequirement, schemaVersion: 1 as const },
+        acceptance: {
+          verifiedBy: "独立测试 Runner",
+          verifiedAt: "2026-08-10T01:30:00.000Z",
+          checks: [{ title: "访客可以提交预约", status: "已通过" }],
+        },
+      });
+
+    const response = await app.inject({
+      method: "GET",
+      url: self,
+      headers: { authorization: "Bearer product-session" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.links).toEqual({
+      self,
+      preview: `${self}/preview`,
+      actions: { accept: `${self}/accept` },
+    });
+    get.mockRestore();
     await app.close();
   });
 
@@ -523,6 +694,7 @@ describe("需求 API", () => {
         payload: validRequirement,
       },
       { method: "GET" as const, url: location },
+      { method: "GET" as const, url: `${location}/preview` },
       {
         method: "POST" as const,
         url: `${location}/submit-confirmation`,

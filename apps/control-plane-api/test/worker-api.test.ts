@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   InMemoryRequirementRepository,
+  InMemoryPreviewArtifactStore,
   InMemoryWorkerFleetRepository,
   type AuthenticatedPrincipal,
   type RequirementTransaction,
@@ -114,6 +115,7 @@ const createTestApp = (
   const app = buildControlPlaneApi({
     authenticator,
     requirementRepository,
+    previewArtifactStore: new InMemoryPreviewArtifactStore(),
     workerFleetRepository,
     projectKey: scopedProjectKey,
     clock: () => new Date(now.getTime()),

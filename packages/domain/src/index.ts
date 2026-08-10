@@ -7,6 +7,7 @@ export type {
   ApprovalRecord,
   DeliveryCandidate,
   RequirementAcceptanceView,
+  RequirementPreviewArtifactReference,
   RequirementPeopleView,
   RequirementAllowedAction,
   RequirementEvidenceSnapshot,

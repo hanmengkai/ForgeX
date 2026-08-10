@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import Fastify, {
   type FastifyInstance,
   type FastifyRequest,
@@ -13,6 +15,7 @@ import {
   canPerformRequirementAction,
   type AuthenticatedPrincipal,
   type PlatformRole,
+  type PreviewArtifactStore,
   type RequirementRepository,
   type SessionAuthenticator,
   type WorkerFleetRepository,
@@ -38,6 +41,7 @@ declare module "fastify" {
 export interface ControlPlaneApiOptions {
   authenticator: SessionAuthenticator;
   requirementRepository: RequirementRepository;
+  previewArtifactStore: PreviewArtifactStore;
   workerFleetRepository: WorkerFleetRepository;
   projectKey: string;
   clock?: () => Date;
@@ -157,6 +161,7 @@ const requirementLinks = (
   requirementKey: string,
   allowedActions: RequirementAllowedAction[],
   principal: AuthenticatedPrincipal,
+  previewAvailable = false,
 ) => {
   const self = `/api/v1/requirements/${requirementKey}`;
   const actions: {
@@ -189,7 +194,88 @@ const requirementLinks = (
   ) {
     actions.accept = `${self}/accept`;
   }
-  return { self, actions };
+  return {
+    self,
+    ...(previewAvailable ? { preview: `${self}/preview` } : {}),
+    actions,
+  };
+};
+
+const PREVIEW_CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "base-uri 'none'",
+  "connect-src 'none'",
+  "form-action 'none'",
+  "frame-src blob:",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "img-src data: blob:",
+  "font-src data:",
+  "style-src 'unsafe-inline'",
+  "script-src 'unsafe-inline'",
+  "worker-src 'none'",
+  "navigate-to 'none'",
+  "sandbox allow-scripts",
+].join("; ");
+const PREVIEW_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
+
+const previewWrapper = (content: Uint8Array): string => {
+  const base64Content = Buffer.from(content).toString("base64");
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ForgeX 效果预览</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: Canvas; color: CanvasText; }
+      header { display: flex; gap: .6rem; align-items: center; min-height: 2.5rem; padding: .5rem .8rem; border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, transparent); font-size: .82rem; }
+      header strong { color: #2f8061; }
+      iframe { display: block; width: 100%; height: calc(100vh - 2.5rem); border: 0; background: white; }
+      @media (prefers-color-scheme: dark) { header strong { color: #a9edca; } }
+    </style>
+  </head>
+  <body>
+    <header><strong>ForgeX 可信预览</strong><span>已隔离外部连接与页面跳转</span></header>
+    <iframe id="forgex-preview" title="已验证的产品效果" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    <script>
+      const encoded = "${base64Content}";
+      const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+      const frame = document.getElementById("forgex-preview");
+      frame.src = URL.createObjectURL(new Blob([bytes], { type: "text/html;charset=utf-8" }));
+    </script>
+  </body>
+</html>`;
+};
+
+const assertPreviewArtifactIntegrity = (
+  target: Awaited<
+    ReturnType<RequirementApplicationService["getPreviewTarget"]>
+  >,
+  artifact: NonNullable<Awaited<ReturnType<PreviewArtifactStore["get"]>>>,
+): void => {
+  if (
+    artifact.tenantKey !== target.tenantKey ||
+    artifact.projectKey !== target.projectKey ||
+    artifact.requirementKey !== target.requirementKey ||
+    artifact.requirementRevision !== target.requirementRevision ||
+    artifact.artifactHashAlgorithm !== target.artifactHashAlgorithm ||
+    artifact.artifactHash !== target.artifactHash ||
+    !(artifact.content instanceof Uint8Array) ||
+    artifact.content.byteLength < 1 ||
+    artifact.content.byteLength > PREVIEW_MAX_ARTIFACT_BYTES ||
+    createHash("sha256").update(artifact.content).digest("hex") !==
+      target.artifactHash
+  ) {
+    throw new Error("Preview artifact integrity validation failed");
+  }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(artifact.content);
+  } catch {
+    throw new Error("Preview artifact integrity validation failed");
+  }
 };
 
 export const buildControlPlaneApi = (
@@ -452,10 +538,53 @@ export const buildControlPlaneApi = (
           result.requirementKey,
           result.allowedActions,
           principal,
+          result.acceptance !== null,
         ),
       },
     });
   });
+
+  app.get(
+    "/api/v1/requirements/:requirementKey/preview",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(params.error),
+        );
+      }
+      const target = await requirements.getPreviewTarget(
+        principal,
+        params.data.requirementKey,
+      );
+      const artifact = await options.previewArtifactStore.get(target);
+      if (!artifact) {
+        throw new ApplicationError(
+          404,
+          "preview_artifact_not_found",
+          "效果预览暂时不可用，请稍后再试",
+        );
+      }
+      assertPreviewArtifactIntegrity(target, artifact);
+      return reply
+        .type("text/html; charset=utf-8")
+        .header("Cache-Control", "no-store")
+        .header("Content-Security-Policy", PREVIEW_CONTENT_SECURITY_POLICY)
+        .header("Cross-Origin-Resource-Policy", "same-origin")
+        .header(
+          "Permissions-Policy",
+          "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        )
+        .header("Referrer-Policy", "no-referrer")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("X-Frame-Options", "DENY")
+        .send(previewWrapper(artifact.content));
+    },
+  );
 
   app.post(
     "/api/v1/requirements/:requirementKey/submit-confirmation",
