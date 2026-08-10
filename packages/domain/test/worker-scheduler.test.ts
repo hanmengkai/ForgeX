@@ -14,6 +14,25 @@ const registryOptions = (maxAccounts = 5) => ({
   maxAccounts,
 });
 
+const dispatch = (
+  queue: DeliveryQueue,
+  session: ReturnType<WorkerRegistry["register"]>,
+  at: string,
+) => {
+  const assignment = queue.dispatchForWorker(session, new Date(at));
+  return assignment ? [assignment] : [];
+};
+
+const enqueue = (
+  queue: DeliveryQueue,
+  work: { key: string; title: string; requiredCapabilities: string[] },
+) =>
+  queue.enqueue({
+    projectKey: "project-a",
+    requirementRevision: 1,
+    ...work,
+  });
+
 describe("WorkerRegistry", () => {
   it("拒绝无效的账户上限", () => {
     expect(() => new WorkerRegistry(registryOptions(0))).toThrow(
@@ -22,6 +41,18 @@ describe("WorkerRegistry", () => {
     expect(() => new WorkerRegistry(registryOptions(6))).toThrow(
       "Codex 账户上限不能超过 5 个",
     );
+  });
+
+  it("拒绝会让设备永久在线的无效离线阈值", () => {
+    for (const offlineAfterMs of [0, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        () =>
+          new WorkerRegistry({
+            ...registryOptions(),
+            offlineAfterMs,
+          }),
+      ).toThrow("设备离线时间必须大于零");
+    }
   });
 
   it("一个租户最多登记五个 Codex 账户", () => {
@@ -93,7 +124,10 @@ describe("WorkerRegistry", () => {
       ...registryOptions(),
       offlineAfterMs: 1_000,
     });
-    registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
+    const session = registry.register(
+      worker(1),
+      new Date("2026-08-10T00:00:00Z"),
+    );
 
     expect(registry.listForPeople(new Date("2026-08-10T00:00:02Z"))[0]).toEqual(
       {
@@ -104,7 +138,11 @@ describe("WorkerRegistry", () => {
       },
     );
     expect(
-      registry.findAvailable(["typescript"], new Date("2026-08-10T00:00:02Z")),
+      registry.selectForWorker(
+        session,
+        ["typescript"],
+        new Date("2026-08-10T00:00:02Z"),
+      ),
     ).toBeNull();
   });
 
@@ -132,26 +170,88 @@ describe("DeliveryQueue", () => {
     expect(() => new DeliveryQueue(registry, { leaseDurationMs: 0 })).toThrow(
       "任务租约时间必须大于零",
     );
+    expect(
+      () => new DeliveryQueue(registry, { leaseDurationMs: Number.NaN }),
+    ).toThrow("任务租约时间必须大于零");
+  });
+
+  it("限制等待队列大小，避免无界请求耗尽内存", () => {
+    const queue = new DeliveryQueue(new WorkerRegistry(registryOptions()), {
+      leaseDurationMs: 60_000,
+      maxPendingWork: 1,
+    });
+    enqueue(queue, {
+      key: "work-a",
+      title: "需求一",
+      requiredCapabilities: [],
+    });
+
+    expect(() =>
+      enqueue(queue, {
+        key: "work-b",
+        title: "需求二",
+        requiredCapabilities: [],
+      }),
+    ).toThrow("等待交付的需求过多");
+  });
+
+  it("容量统计包含活跃租约，过期回收后快照仍可恢复", () => {
+    const registry = new WorkerRegistry(registryOptions());
+    const session = registry.register(
+      worker(1),
+      new Date("2026-08-10T00:00:00Z"),
+    );
+    const queue = new DeliveryQueue(registry, {
+      leaseDurationMs: 1_000,
+      maxPendingWork: 1,
+    });
+    enqueue(queue, {
+      key: "work-a",
+      title: "需求一",
+      requiredCapabilities: [],
+    });
+    dispatch(queue, session, "2026-08-10T00:00:01Z");
+
+    expect(() =>
+      enqueue(queue, {
+        key: "work-b",
+        title: "需求二",
+        requiredCapabilities: [],
+      }),
+    ).toThrow("等待交付的需求过多");
+    queue.reclaimExpired(new Date("2026-08-10T00:00:03Z"));
+    expect(() =>
+      DeliveryQueue.fromSnapshot(registry, queue.toSnapshot()),
+    ).not.toThrow();
   });
 
   it("把多个需求并行分配给不同的空闲账户", () => {
     const registry = new WorkerRegistry(registryOptions());
-    registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
-    registry.register(worker(2), new Date("2026-08-10T00:00:00Z"));
+    const firstSession = registry.register(
+      worker(1),
+      new Date("2026-08-10T00:00:00Z"),
+    );
+    const secondSession = registry.register(
+      worker(2),
+      new Date("2026-08-10T00:00:00Z"),
+    );
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 60_000 });
 
-    queue.enqueue({
+    enqueue(queue, {
       key: "work-a",
       title: "完善访客预约",
       requiredCapabilities: ["typescript"],
     });
-    queue.enqueue({
+    enqueue(queue, {
       key: "work-b",
       title: "增加到访统计",
       requiredCapabilities: ["browser"],
     });
 
-    const assignments = queue.dispatch(new Date("2026-08-10T00:00:10Z"));
+    const assignments = [
+      ...dispatch(queue, firstSession, "2026-08-10T00:00:10Z"),
+      ...dispatch(queue, secondSession, "2026-08-10T00:00:10Z"),
+    ];
 
     expect(assignments).toHaveLength(2);
     expect(new Set(assignments.map((item) => item.workerKey)).size).toBe(2);
@@ -173,25 +273,39 @@ describe("DeliveryQueue", () => {
 
   it("同一账户在完成前不会领取第二个需求", () => {
     const registry = new WorkerRegistry(registryOptions());
-    registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
+    const session = registry.register(
+      worker(1),
+      new Date("2026-08-10T00:00:00Z"),
+    );
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 60_000 });
-    queue.enqueue({ key: "work-a", title: "需求一", requiredCapabilities: [] });
-    queue.enqueue({ key: "work-b", title: "需求二", requiredCapabilities: [] });
+    enqueue(queue, {
+      key: "work-a",
+      title: "需求一",
+      requiredCapabilities: [],
+    });
+    enqueue(queue, {
+      key: "work-b",
+      title: "需求二",
+      requiredCapabilities: [],
+    });
 
-    expect(queue.dispatch(new Date("2026-08-10T00:00:10Z"))).toHaveLength(1);
-    expect(queue.dispatch(new Date("2026-08-10T00:00:20Z"))).toHaveLength(0);
+    expect(dispatch(queue, session, "2026-08-10T00:00:10Z")).toHaveLength(1);
+    expect(dispatch(queue, session, "2026-08-10T00:00:20Z")).toHaveLength(0);
   });
 
   it("租约超时后把需求重新排队，不伪造完成状态", () => {
     const registry = new WorkerRegistry(registryOptions());
-    registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
+    const session = registry.register(
+      worker(1),
+      new Date("2026-08-10T00:00:00Z"),
+    );
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 1_000 });
-    queue.enqueue({
+    enqueue(queue, {
       key: "work-a",
       title: "容易中断的需求",
       requiredCapabilities: [],
     });
-    queue.dispatch(new Date("2026-08-10T00:00:01Z"));
+    dispatch(queue, session, "2026-08-10T00:00:01Z");
 
     const reclaimed = queue.reclaimExpired(new Date("2026-08-10T00:00:03Z"));
 
@@ -203,36 +317,65 @@ describe("DeliveryQueue", () => {
 
   it("完成当前需求后账户可以继续领取下一项", () => {
     const registry = new WorkerRegistry(registryOptions());
-    registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
+    const session = registry.register(
+      worker(1),
+      new Date("2026-08-10T00:00:00Z"),
+    );
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 60_000 });
-    queue.enqueue({ key: "work-a", title: "需求一", requiredCapabilities: [] });
-    queue.enqueue({ key: "work-b", title: "需求二", requiredCapabilities: [] });
-    const [first] = queue.dispatch(new Date("2026-08-10T00:00:01Z"));
+    enqueue(queue, {
+      key: "work-a",
+      title: "需求一",
+      requiredCapabilities: [],
+    });
+    enqueue(queue, {
+      key: "work-b",
+      title: "需求二",
+      requiredCapabilities: [],
+    });
+    const [first] = dispatch(queue, session, "2026-08-10T00:00:01Z");
 
     queue.completeLease({
       assignment: first!,
       completedAt: new Date("2026-08-10T00:00:01.500Z"),
     });
 
-    expect(queue.dispatch(new Date("2026-08-10T00:00:02Z"))[0]?.workTitle).toBe(
+    expect(dispatch(queue, session, "2026-08-10T00:00:02Z")[0]?.workTitle).toBe(
       "需求二",
     );
   });
 
+  it("已经完成的需求不能被重复加入交付队列", () => {
+    const registry = new WorkerRegistry(registryOptions());
+    const session = registry.register(
+      worker(1),
+      new Date("2026-08-10T00:00:00Z"),
+    );
+    const queue = new DeliveryQueue(registry, { leaseDurationMs: 60_000 });
+    const work = { key: "work-a", title: "需求一", requiredCapabilities: [] };
+    enqueue(queue, work);
+    const [assignment] = dispatch(queue, session, "2026-08-10T00:00:01Z");
+    queue.completeLease({
+      assignment: assignment!,
+      completedAt: new Date("2026-08-10T00:00:02Z"),
+    });
+
+    expect(() => enqueue(queue, work)).toThrow("这个需求已经完成交付");
+  });
+
   it("没有匹配能力时保留等待状态", () => {
     const registry = new WorkerRegistry(registryOptions());
-    registry.register(
+    const session = registry.register(
       { ...worker(1), capabilities: ["typescript"] },
       new Date("2026-08-10T00:00:00Z"),
     );
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 60_000 });
-    queue.enqueue({
+    enqueue(queue, {
       key: "work-a",
       title: "移动端需求",
       requiredCapabilities: ["flutter"],
     });
 
-    expect(queue.dispatch(new Date("2026-08-10T00:00:01Z"))).toEqual([]);
+    expect(dispatch(queue, session, "2026-08-10T00:00:01Z")).toEqual([]);
     expect(queue.listForPeople()).toEqual([
       { title: "移动端需求", status: "等待空闲设备" },
     ]);
@@ -244,12 +387,16 @@ describe("DeliveryQueue", () => {
     });
 
     expect(() =>
-      queue.enqueue({ key: "empty", title: " ", requiredCapabilities: [] }),
+      enqueue(queue, { key: "empty", title: " ", requiredCapabilities: [] }),
     ).toThrow("需求标题不能为空");
 
-    queue.enqueue({ key: "same", title: "同一需求", requiredCapabilities: [] });
+    enqueue(queue, {
+      key: "same",
+      title: "同一需求",
+      requiredCapabilities: [],
+    });
     expect(() =>
-      queue.enqueue({
+      enqueue(queue, {
         key: "same",
         title: "同一需求",
         requiredCapabilities: [],
@@ -259,14 +406,17 @@ describe("DeliveryQueue", () => {
 
   it("支持续租，并对失效租约给出可读错误", () => {
     const registry = new WorkerRegistry(registryOptions());
-    registry.register(worker(1), new Date("2026-08-10T00:00:00Z"));
+    const session = registry.register(
+      worker(1),
+      new Date("2026-08-10T00:00:00Z"),
+    );
     const queue = new DeliveryQueue(registry, { leaseDurationMs: 1_000 });
-    queue.enqueue({
+    enqueue(queue, {
       key: "work-a",
       title: "长时间需求",
       requiredCapabilities: [],
     });
-    const [assignment] = queue.dispatch(new Date("2026-08-10T00:00:01Z"));
+    const [assignment] = dispatch(queue, session, "2026-08-10T00:00:01Z");
 
     expect(
       queue.renewLease({
@@ -280,6 +430,8 @@ describe("DeliveryQueue", () => {
         assignment: {
           assignmentKey: "missing",
           tenantKey: "tenant-a",
+          projectKey: "project-a",
+          requirementRevision: 1,
           workKey: "missing",
           workTitle: "missing",
           workerKey: "missing",
@@ -290,6 +442,6 @@ describe("DeliveryQueue", () => {
         },
         renewedAt: new Date(),
       }),
-    ).toThrow("任务租约已经失效，请重新领取");
+    ).toThrow("找不到对应的 Codex 设备");
   });
 });

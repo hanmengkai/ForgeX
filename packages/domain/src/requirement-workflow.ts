@@ -110,7 +110,8 @@ export interface RequirementPeopleView {
   acceptanceProgress: string;
 }
 
-export type RequirementAllowedAction = "submitForConfirmation" | "confirm";
+export type RequirementAllowedAction =
+  "submitForConfirmation" | "confirm" | "startDelivery";
 
 export class RequirementWorkflow {
   readonly #key: string;
@@ -230,7 +231,9 @@ export class RequirementWorkflow {
       this.#status !== "confirmed" ||
       this.#confirmedVersion !== this.#current.version
     ) {
-      throw new Error("需求需要先由负责人确认，才能开始交付");
+      throw new RequirementStateConflictError(
+        "需求需要先由负责人确认，才能开始交付",
+      );
     }
     this.#status = "inDelivery";
   }
@@ -379,6 +382,8 @@ export class RequirementWorkflow {
         return ["submitForConfirmation"];
       case "awaitingConfirmation":
         return ["confirm"];
+      case "confirmed":
+        return ["startDelivery"];
       default:
         return [];
     }
@@ -400,6 +405,10 @@ export class RequirementWorkflow {
 
   get internalKey(): string {
     return this.#key;
+  }
+
+  get currentRevision(): number {
+    return this.#current.version;
   }
 
   listApprovalRecords(): ApprovalRecord[] {

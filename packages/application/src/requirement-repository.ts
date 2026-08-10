@@ -8,7 +8,21 @@ import type {
 export type RequirementAuditAction =
   | "requirement.created"
   | "requirement.confirmation_submitted"
-  | "requirement.confirmed";
+  | "requirement.confirmed"
+  | "delivery.requested"
+  | "delivery.dispatched";
+
+export interface DeliveryDispatchRecord {
+  dispatchKey: string;
+  tenantKey: string;
+  projectKey: string;
+  requirementKey: string;
+  requirementRevision: number;
+  title: string;
+  requiredCapabilities: string[];
+  requestedAt: string;
+  dispatchedAt: string | null;
+}
 
 export interface RequirementAuditEvent {
   eventKey: string;
@@ -50,6 +64,8 @@ export interface RequirementTransaction {
   find(requirementKey: string): RequirementRecord | null;
   save(record: RequirementRecord): void;
   appendAudit(event: RequirementAuditEvent): void;
+  appendDeliveryDispatch(record: DeliveryDispatchRecord): void;
+  markDeliveryDispatched(dispatchKey: string, dispatchedAt: string): boolean;
 }
 
 export interface RequirementRepository {
@@ -67,4 +83,9 @@ export interface RequirementRepository {
     tenantKey: string,
     projectKey: string,
   ): Promise<RequirementAuditEvent[]>;
+  listPendingDeliveryDispatches(
+    tenantKey: string,
+    projectKey: string | null,
+    limit: number,
+  ): Promise<DeliveryDispatchRecord[]>;
 }

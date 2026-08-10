@@ -23,12 +23,23 @@ export type {
   TrustedRunner,
 } from "./evidence.js";
 
-export { DeliveryQueue, WorkerRegistry } from "./worker-scheduler.js";
+export {
+  DeliveryQueue,
+  WorkerDomainError,
+  WorkerRegistry,
+} from "./worker-scheduler.js";
 export type {
   DeliveryAssignment,
+  DeliveryActiveAssignmentSnapshot,
+  DeliveryCompletionSnapshot,
+  DeliveryQueueSnapshot,
   DeliveryWork,
   WorkerPeopleView,
+  WorkerLeaseReference,
+  WorkerNodeSnapshot,
   WorkerRegistration,
+  WorkerRegistrySnapshot,
   WorkerRegistryOptions,
   WorkerSession,
+  WorkerDomainErrorCode,
 } from "./worker-scheduler.js";

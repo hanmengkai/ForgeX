@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EvidencePayloadSchema,
   SignedEvidenceSchema,
-  DeliveryRequestSchema,
+  StartDeliveryCommandSchema,
   WorkerConnectionCredentialSchema,
   WorkerLeaseCommandSchema,
   WorkerRegistrationSchema,
@@ -131,20 +131,19 @@ describe("Codex 设备注册契约", () => {
     ).toBe(false);
   });
 
-  it("接受版本化的设备连接、交付请求和租约命令", () => {
+  it("接受版本化的设备连接、开始交付和租约命令", () => {
     expect(
       WorkerConnectionCredentialSchema.safeParse({
         schemaVersion: 1,
+        tenantKey: "11111111-1111-4111-8111-111111111111",
         workerKey: "99999999-9999-4999-8999-999999999999",
         sessionKey: "a".repeat(43),
         generation: 1,
       }).success,
     ).toBe(true);
     expect(
-      DeliveryRequestSchema.safeParse({
+      StartDeliveryCommandSchema.safeParse({
         schemaVersion: 1,
-        requirementKey: "88888888-8888-4888-8888-888888888888",
-        title: "完善访客预约",
         requiredCapabilities: ["typescript", "browser"],
       }).success,
     ).toBe(true);
@@ -170,6 +169,7 @@ describe("Codex 设备注册契约", () => {
     expect(
       WorkerConnectionCredentialSchema.safeParse({
         schemaVersion: 1,
+        tenantKey: "11111111-1111-4111-8111-111111111111",
         workerKey: "99999999-9999-4999-8999-999999999999",
         sessionKey: "too-short",
         generation: 1,

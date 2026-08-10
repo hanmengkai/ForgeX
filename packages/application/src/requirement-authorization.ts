@@ -1,7 +1,7 @@
 import type { AuthenticatedPrincipal, PlatformRole } from "./auth.js";
 
 export type RequirementAuthorizedAction =
-  "create" | "submitForConfirmation" | "confirm";
+  "create" | "submitForConfirmation" | "confirm" | "startDelivery";
 
 const rolesByAction = {
   create: new Set<PlatformRole>([
@@ -15,6 +15,7 @@ const rolesByAction = {
     "administrator",
   ]),
   confirm: new Set<PlatformRole>(["product_owner", "administrator"]),
+  startDelivery: new Set<PlatformRole>(["product_owner", "administrator"]),
 } satisfies Record<RequirementAuthorizedAction, ReadonlySet<PlatformRole>>;
 
 export const canPerformRequirementAction = (

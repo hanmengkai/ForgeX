@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   InMemoryRequirementRepository,
+  InMemoryWorkerFleetRepository,
   type AuthenticatedPrincipal,
   type SessionAuthenticator,
 } from "@forgex/application";
@@ -85,6 +86,7 @@ const createTestApp = () => {
   const app = buildControlPlaneApi({
     authenticator,
     requirementRepository: repository,
+    workerFleetRepository: new InMemoryWorkerFleetRepository(),
     projectKey,
     clock: () => new Date("2026-08-10T03:00:00.000Z"),
   });

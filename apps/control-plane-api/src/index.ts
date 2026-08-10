@@ -7,28 +7,38 @@ import { z } from "zod";
 
 import {
   ApplicationError,
+  DeliveryCoordinatorService,
   RequirementApplicationService,
+  WorkerFleetService,
   canPerformRequirementAction,
   type AuthenticatedPrincipal,
   type PlatformRole,
   type RequirementRepository,
   type SessionAuthenticator,
+  type WorkerFleetRepository,
 } from "@forgex/application";
 import {
   REQUIREMENT_REQUEST_BODY_LIMIT_BYTES,
   RequirementSpecSchema,
+  StartDeliveryCommandSchema,
+  WorkerConnectionCredentialSchema,
+  WorkerLeaseCommandSchema,
+  WorkerRegistrationSchema,
+  type WorkerConnectionCredentialPayload,
 } from "@forgex/contracts";
 import type { RequirementAllowedAction } from "@forgex/domain";
 
 declare module "fastify" {
   interface FastifyRequest {
     principal: AuthenticatedPrincipal | null;
+    workerConnection: WorkerConnectionCredentialPayload | null;
   }
 }
 
 export interface ControlPlaneApiOptions {
   authenticator: SessionAuthenticator;
   requirementRepository: RequirementRepository;
+  workerFleetRepository: WorkerFleetRepository;
   projectKey: string;
   clock?: () => Date;
   logger?: FastifyServerOptions["logger"];
@@ -119,6 +129,7 @@ const requirementLinks = (
   const actions: {
     submitConfirmation?: string;
     confirm?: string;
+    startDelivery?: string;
   } = {};
   if (
     allowedActions.includes("submitForConfirmation") &&
@@ -132,6 +143,12 @@ const requirementLinks = (
   ) {
     actions.confirm = `${self}/confirm`;
   }
+  if (
+    allowedActions.includes("startDelivery") &&
+    canPerformRequirementAction(principal, "startDelivery")
+  ) {
+    actions.startDelivery = `${self}/start-delivery`;
+  }
   return { self, actions };
 };
 
@@ -143,9 +160,20 @@ export const buildControlPlaneApi = (
     bodyLimit: REQUIREMENT_REQUEST_BODY_LIMIT_BYTES,
   });
   app.decorateRequest("principal", null);
+  app.decorateRequest("workerConnection", null);
   const requirements = new RequirementApplicationService({
     repository: options.requirementRepository,
     projectKey: options.projectKey,
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
+  const workers = new WorkerFleetService({
+    repository: options.workerFleetRepository,
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
+  const deliveries = new DeliveryCoordinatorService({
+    requirements,
+    requirementRepository: options.requirementRepository,
+    workers,
     ...(options.clock ? { clock: options.clock } : {}),
   });
 
@@ -171,11 +199,41 @@ export const buildControlPlaneApi = (
     return parsed.data;
   };
 
+  const authenticateWorkerHeaders = (
+    request: FastifyRequest,
+  ): WorkerConnectionCredentialPayload => {
+    const authorization = request.headers.authorization;
+    const sessionKey = authorization?.startsWith("Worker ")
+      ? authorization.slice("Worker ".length)
+      : undefined;
+    const parsed = WorkerConnectionCredentialSchema.safeParse({
+      schemaVersion: 1,
+      tenantKey: request.headers["x-forgex-tenant-key"],
+      workerKey: request.headers["x-forgex-worker-key"],
+      sessionKey,
+      generation: Number(request.headers["x-forgex-worker-generation"]),
+    });
+    if (!parsed.success) {
+      throw new ApplicationError(
+        401,
+        "invalid_worker_session",
+        "设备连接已经失效，请重新连接",
+      );
+    }
+    return parsed.data;
+  };
+
   app.addHook("onRequest", async (request) => {
     const path = request.url.split("?")[0] ?? "";
+    if (path.startsWith("/api/v1/worker-connection/")) {
+      request.workerConnection = authenticateWorkerHeaders(request);
+      return;
+    }
     if (
       path === "/api/v1/requirements" ||
-      path.startsWith("/api/v1/requirements/")
+      path.startsWith("/api/v1/requirements/") ||
+      path === "/api/v1/workers" ||
+      path.startsWith("/api/v1/workers/")
     ) {
       request.principal = await authenticate(request.headers.authorization);
     }
@@ -190,6 +248,19 @@ export const buildControlPlaneApi = (
       );
     }
     return request.principal;
+  };
+
+  const workerConnectionFrom = (
+    request: FastifyRequest,
+  ): WorkerConnectionCredentialPayload => {
+    if (!request.workerConnection) {
+      throw new ApplicationError(
+        401,
+        "invalid_worker_session",
+        "设备连接已经失效，请重新连接",
+      );
+    }
+    return request.workerConnection;
   };
 
   app.setErrorHandler((error, _request, reply) => {
@@ -392,6 +463,119 @@ export const buildControlPlaneApi = (
       return reply.send({ data: result.view });
     },
   );
+
+  app.post("/api/v1/workers", async (request, reply) => {
+    const principal = principalFrom(request);
+    const registration = WorkerRegistrationSchema.safeParse(request.body);
+    if (!registration.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "设备连接信息需要调整",
+        validationDetails(registration.error),
+      );
+    }
+    return reply
+      .status(201)
+      .send({ data: await workers.connect(principal, registration.data) });
+  });
+
+  app.get("/api/v1/workers", async (request, reply) => {
+    const principal = principalFrom(request);
+    return reply.send({ data: await workers.listForPeople(principal) });
+  });
+
+  app.post(
+    "/api/v1/requirements/:requirementKey/start-delivery",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          404,
+          "requirement_not_found",
+          "没有找到这个需求",
+        );
+      }
+      const command = StartDeliveryCommandSchema.safeParse(request.body);
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "交付安排需要调整",
+          validationDetails(command.error),
+        );
+      }
+      return reply.status(202).send({
+        data: await deliveries.requestDelivery(
+          principal,
+          params.data.requirementKey,
+          command.data,
+        ),
+      });
+    },
+  );
+
+  app.post("/api/v1/worker-connection/heartbeat", async (request, reply) => {
+    const body = emptyCommandSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "心跳内容需要调整",
+        validationDetails(body.error),
+      );
+    }
+    return reply.send({
+      data: await workers.heartbeat(workerConnectionFrom(request)),
+    });
+  });
+
+  app.post("/api/v1/worker-connection/poll", async (request, reply) => {
+    const body = emptyCommandSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "领取请求需要调整",
+        validationDetails(body.error),
+      );
+    }
+    const connection = workerConnectionFrom(request);
+    await workers.assertConnection(connection);
+    await deliveries.flushPending(connection.tenantKey);
+    return reply.send({ data: await workers.poll(connection) });
+  });
+
+  app.post("/api/v1/worker-connection/renew", async (request, reply) => {
+    const command = WorkerLeaseCommandSchema.safeParse(request.body);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "任务租约信息需要调整",
+        validationDetails(command.error),
+      );
+    }
+    return reply.send({
+      data: await workers.renew(workerConnectionFrom(request), command.data),
+    });
+  });
+
+  app.post("/api/v1/worker-connection/complete", async (request, reply) => {
+    const command = WorkerLeaseCommandSchema.safeParse(request.body);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "任务租约信息需要调整",
+        validationDetails(command.error),
+      );
+    }
+    return reply.send({
+      data: await workers.complete(workerConnectionFrom(request), command.data),
+    });
+  });
 
   return app;
 };

@@ -1,4 +1,5 @@
 import type {
+  DeliveryDispatchRecord,
   RequirementAuditEvent,
   RequirementRecord,
   RequirementRepository,
@@ -17,6 +18,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
   readonly #records = new Map<string, RequirementRecord>();
   readonly #positions = new Map<string, number>();
   readonly #auditEvents: RequirementAuditEvent[] = [];
+  readonly #deliveryDispatches = new Map<string, DeliveryDispatchRecord>();
   readonly #scopeTails = new Map<string, Promise<void>>();
   #nextPosition = 0;
 
@@ -40,6 +42,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     const pendingRecords = new Map<string, RequirementRecord>();
     const loadedRecords = new Map<string, RequirementRecord>();
     const pendingAuditEvents: RequirementAuditEvent[] = [];
+    const pendingDeliveryDispatches = new Map<string, DeliveryDispatchRecord>();
     const transaction: RequirementTransaction = {
       find: (requirementKey) => {
         const key = scopedKey(
@@ -93,6 +96,46 @@ export class InMemoryRequirementRepository implements RequirementRepository {
         }
         pendingAuditEvents.push({ ...event });
       },
+      appendDeliveryDispatch: (record) => {
+        this.#assertDeliveryScope(
+          record,
+          normalizedTenantKey,
+          normalizedProjectKey,
+        );
+        const key = scopedKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          record.dispatchKey,
+        );
+        if (
+          pendingDeliveryDispatches.has(key) ||
+          this.#deliveryDispatches.has(key)
+        ) {
+          throw new Error("交付派发记录不能重复");
+        }
+        pendingDeliveryDispatches.set(key, this.#copyDeliveryDispatch(record));
+      },
+      markDeliveryDispatched: (dispatchKey, dispatchedAt) => {
+        const key = scopedKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          dispatchKey,
+        );
+        const current =
+          pendingDeliveryDispatches.get(key) ??
+          this.#deliveryDispatches.get(key);
+        if (!current) {
+          throw new Error("没有找到待派发的交付记录");
+        }
+        if (current.dispatchedAt !== null) {
+          return false;
+        }
+        pendingDeliveryDispatches.set(key, {
+          ...this.#copyDeliveryDispatch(current),
+          dispatchedAt,
+        });
+        return true;
+      },
     };
 
     try {
@@ -105,6 +148,9 @@ export class InMemoryRequirementRepository implements RequirementRepository {
         this.#records.set(key, this.#copyRecord(record));
       }
       this.#auditEvents.push(...pendingAuditEvents);
+      for (const [key, dispatch] of pendingDeliveryDispatches) {
+        this.#deliveryDispatches.set(key, this.#copyDeliveryDispatch(dispatch));
+      }
       return result;
     } finally {
       release();
@@ -163,11 +209,60 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       .map((event) => ({ ...event }));
   }
 
+  async listPendingDeliveryDispatches(
+    tenantKey: string,
+    projectKey: string | null,
+    limit: number,
+  ): Promise<DeliveryDispatchRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("待派发记录查询上限必须在 1 到 100 之间");
+    }
+    const normalizedTenantKey = tenantKey.toLowerCase();
+    const normalizedProjectKey = projectKey?.toLowerCase() ?? null;
+    return [...this.#deliveryDispatches.values()]
+      .filter(
+        (record) =>
+          record.tenantKey === normalizedTenantKey &&
+          (normalizedProjectKey === null ||
+            record.projectKey === normalizedProjectKey) &&
+          record.dispatchedAt === null,
+      )
+      .sort(
+        (left, right) =>
+          left.requestedAt.localeCompare(right.requestedAt) ||
+          left.dispatchKey.localeCompare(right.dispatchKey),
+      )
+      .slice(0, limit)
+      .map((record) => this.#copyDeliveryDispatch(record));
+  }
+
   #copyRecord(record: RequirementRecord): RequirementRecord {
     return {
       ...record,
       spec: structuredClone(record.spec),
       workflow: record.workflow.copyForTransaction(),
     };
+  }
+
+  #copyDeliveryDispatch(
+    record: DeliveryDispatchRecord,
+  ): DeliveryDispatchRecord {
+    return {
+      ...record,
+      requiredCapabilities: [...record.requiredCapabilities],
+    };
+  }
+
+  #assertDeliveryScope(
+    record: DeliveryDispatchRecord,
+    tenantKey: string,
+    projectKey: string,
+  ): void {
+    if (
+      record.tenantKey.toLowerCase() !== tenantKey ||
+      record.projectKey.toLowerCase() !== projectKey
+    ) {
+      throw new Error("事务不能写入其他范围的交付记录");
+    }
   }
 }

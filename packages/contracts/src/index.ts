@@ -51,6 +51,8 @@ export const RequirementSpecSchema = z
 const sha256Pattern = /^[a-f0-9]{64}$/;
 const sha1Pattern = /^[a-f0-9]{40}$/;
 const ed25519SignaturePattern = /^[A-Za-z0-9+/]{85}[AQgw]==$/;
+const workerSessionKeyPattern = /^[A-Za-z0-9_-]{43}$/;
+const capabilityPattern = /^[a-z0-9][a-z0-9._-]{0,49}$/;
 const internalKey = z
   .string()
   .uuid()
@@ -142,7 +144,72 @@ export const WorkerRegistrationSchema = z
     deviceName: z.string().trim().min(2).max(100),
     accountName: z.string().trim().min(2).max(100),
     accountFingerprint: z.string().regex(sha256Pattern),
-    capabilities: z.array(z.string().trim().min(1).max(100)).max(50),
+    capabilities: z
+      .array(
+        z
+          .string()
+          .trim()
+          .toLowerCase()
+          .regex(capabilityPattern, "设备能力格式不正确"),
+      )
+      .max(50),
+  })
+  .strict()
+  .superRefine((registration, context) => {
+    if (
+      new Set(registration.capabilities).size !==
+      registration.capabilities.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["capabilities"],
+        message: "设备能力不能重复",
+      });
+    }
+  });
+
+export const WorkerConnectionCredentialSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    tenantKey: internalKey,
+    workerKey: internalKey,
+    sessionKey: z.string().regex(workerSessionKeyPattern),
+    generation: z.number().int().positive(),
+  })
+  .strict();
+
+export const StartDeliveryCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    requiredCapabilities: z
+      .array(
+        z
+          .string()
+          .trim()
+          .toLowerCase()
+          .regex(capabilityPattern, "交付能力格式不正确"),
+      )
+      .max(50),
+  })
+  .strict()
+  .superRefine((command, context) => {
+    if (
+      new Set(command.requiredCapabilities).size !==
+      command.requiredCapabilities.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["requiredCapabilities"],
+        message: "交付能力不能重复",
+      });
+    }
+  });
+
+export const WorkerLeaseCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    assignmentKey: internalKey,
+    fencingToken: z.number().int().positive(),
   })
   .strict();
 
@@ -155,4 +222,13 @@ export type EvidencePayload = z.infer<typeof EvidencePayloadSchema>;
 export type SignedEvidence = z.infer<typeof SignedEvidenceSchema>;
 export type WorkerRegistrationPayload = z.infer<
   typeof WorkerRegistrationSchema
+>;
+export type WorkerConnectionCredentialPayload = z.infer<
+  typeof WorkerConnectionCredentialSchema
+>;
+export type StartDeliveryCommandPayload = z.infer<
+  typeof StartDeliveryCommandSchema
+>;
+export type WorkerLeaseCommandPayload = z.infer<
+  typeof WorkerLeaseCommandSchema
 >;

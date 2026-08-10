@@ -1,0 +1,514 @@
+import {
+  WorkerConnectionCredentialSchema,
+  WorkerLeaseCommandSchema,
+  WorkerRegistrationSchema,
+  type WorkerConnectionCredentialPayload,
+  type WorkerLeaseCommandPayload,
+  type WorkerRegistrationPayload,
+} from "@forgex/contracts";
+import {
+  DeliveryQueue,
+  WorkerDomainError,
+  WorkerRegistry,
+  type WorkerPeopleView,
+  type WorkerSession,
+} from "@forgex/domain";
+
+import type { AuthenticatedPrincipal, PlatformRole } from "./auth.js";
+import { ApplicationError } from "./errors.js";
+import type { DeliveryDispatchRecord } from "./requirement-repository.js";
+import type {
+  WorkerFleetRepository,
+  WorkerFleetSnapshot,
+  WorkerFleetTransaction,
+} from "./worker-fleet-repository.js";
+
+export interface WorkerFleetServiceOptions {
+  repository: WorkerFleetRepository;
+  clock?: () => Date;
+  maxAccounts?: number;
+  offlineAfterMs?: number;
+  leaseDurationMs?: number;
+  maxPendingWork?: number;
+  completionRetentionMs?: number;
+  maxCompletionTombstones?: number;
+}
+
+export interface WorkerConnectionResult {
+  device: {
+    deviceName: string;
+    accountName: string;
+    status: "已连接";
+  };
+  connection: WorkerConnectionCredentialPayload;
+}
+
+export interface WorkerLeaseView {
+  assignmentKey: string;
+  fencingToken: number;
+  projectKey: string;
+  requirementRevision: number;
+  requirementKey: string;
+  title: string;
+  leasedUntil: string;
+}
+
+export interface WorkerPollResult {
+  assignment: WorkerLeaseView | null;
+}
+
+interface FleetAggregate {
+  registry: WorkerRegistry;
+  queue: DeliveryQueue;
+}
+
+type WorkerManagementAction = "connect";
+
+const rolesByAction = {
+  connect: new Set<PlatformRole>(["administrator"]),
+} satisfies Record<WorkerManagementAction, ReadonlySet<PlatformRole>>;
+
+const internalKeyPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export class WorkerFleetService {
+  readonly #repository: WorkerFleetRepository;
+  readonly #clock: () => Date;
+  readonly #maxAccounts: number;
+  readonly #offlineAfterMs: number;
+  readonly #leaseDurationMs: number;
+  readonly #maxPendingWork: number;
+  readonly #completionRetentionMs: number;
+  readonly #maxCompletionTombstones: number;
+
+  constructor(options: WorkerFleetServiceOptions) {
+    this.#repository = options.repository;
+    this.#clock = options.clock ?? (() => new Date());
+    this.#maxAccounts = options.maxAccounts ?? 5;
+    this.#offlineAfterMs = options.offlineAfterMs ?? 30_000;
+    this.#leaseDurationMs = options.leaseDurationMs ?? 60_000;
+    this.#maxPendingWork = options.maxPendingWork ?? 500;
+    this.#completionRetentionMs = options.completionRetentionMs ?? 86_400_000;
+    this.#maxCompletionTombstones = options.maxCompletionTombstones ?? 1_000;
+    if (
+      !Number.isSafeInteger(this.#maxAccounts) ||
+      this.#maxAccounts < 1 ||
+      this.#maxAccounts > 5
+    ) {
+      throw new Error("Codex 账户上限必须在 1 到 5 之间");
+    }
+    if (!Number.isFinite(this.#offlineAfterMs) || this.#offlineAfterMs < 1) {
+      throw new Error("设备离线时间必须大于零");
+    }
+    if (!Number.isFinite(this.#leaseDurationMs) || this.#leaseDurationMs < 1) {
+      throw new Error("任务租约时间必须大于零");
+    }
+    if (
+      !Number.isSafeInteger(this.#maxPendingWork) ||
+      this.#maxPendingWork < 1
+    ) {
+      throw new Error("等待队列上限必须是正整数");
+    }
+    if (
+      !Number.isFinite(this.#completionRetentionMs) ||
+      this.#completionRetentionMs < 1
+    ) {
+      throw new Error("完成幂等窗口必须大于零");
+    }
+    if (
+      !Number.isSafeInteger(this.#maxCompletionTombstones) ||
+      this.#maxCompletionTombstones < 1
+    ) {
+      throw new Error("完成幂等记录上限必须是正整数");
+    }
+  }
+
+  async connect(
+    principal: AuthenticatedPrincipal,
+    input: WorkerRegistrationPayload,
+  ): Promise<WorkerConnectionResult> {
+    this.#requireAction(principal, "connect");
+    const registration = WorkerRegistrationSchema.safeParse(input);
+    if (!registration.success) {
+      throw new ApplicationError(
+        422,
+        "invalid_worker_registration",
+        "设备连接信息需要调整",
+      );
+    }
+    return this.#repository.transaction(principal.tenantKey, (transaction) => {
+      const fleet = this.#loadFleet(transaction, principal.tenantKey);
+      const session = this.#runDomain(() =>
+        fleet.registry.register(
+          {
+            deviceName: registration.data.deviceName,
+            accountName: registration.data.accountName,
+            accountFingerprint: registration.data.accountFingerprint,
+            capabilities: registration.data.capabilities,
+          },
+          this.#now(),
+        ),
+      );
+      if (session.generation > 1) {
+        fleet.queue.abandonWorker(session.workerKey);
+      }
+      this.#saveFleet(transaction, fleet);
+      return {
+        device: {
+          deviceName: registration.data.deviceName,
+          accountName: registration.data.accountName,
+          status: "已连接" as const,
+        },
+        connection: WorkerConnectionCredentialSchema.parse({
+          schemaVersion: 1,
+          tenantKey: session.tenantKey,
+          workerKey: session.workerKey,
+          sessionKey: session.sessionKey,
+          generation: session.generation,
+        }),
+      };
+    });
+  }
+
+  async listForPeople(
+    principal: AuthenticatedPrincipal,
+  ): Promise<WorkerPeopleView[]> {
+    return this.#repository.transaction(principal.tenantKey, (transaction) => {
+      const snapshot = transaction.load();
+      if (!snapshot) {
+        return [];
+      }
+      return this.#restoreFleet(
+        snapshot,
+        principal.tenantKey,
+      ).registry.listForPeople(this.#now());
+    });
+  }
+
+  async enqueueDispatch(
+    dispatch: DeliveryDispatchRecord,
+  ): Promise<{ title: string; status: "等待空闲设备" | "已经完成" }> {
+    if (
+      !internalKeyPattern.test(dispatch.tenantKey) ||
+      !internalKeyPattern.test(dispatch.projectKey) ||
+      !internalKeyPattern.test(dispatch.requirementKey) ||
+      !Number.isSafeInteger(dispatch.requirementRevision) ||
+      dispatch.requirementRevision < 1
+    ) {
+      throw new Error("交付派发记录范围无效");
+    }
+    return this.#repository.transaction(
+      dispatch.tenantKey,
+      async (transaction) => {
+        const fleet = this.#loadFleet(transaction, dispatch.tenantKey);
+        if (
+          await transaction.hasCompletedWork(
+            dispatch.projectKey,
+            dispatch.requirementKey,
+            dispatch.requirementRevision,
+          )
+        ) {
+          return { title: dispatch.title, status: "已经完成" as const };
+        }
+        try {
+          this.#runDomain(() =>
+            fleet.queue.enqueue({
+              projectKey: dispatch.projectKey,
+              requirementRevision: dispatch.requirementRevision,
+              key: dispatch.requirementKey,
+              title: dispatch.title,
+              requiredCapabilities: dispatch.requiredCapabilities,
+            }),
+          );
+        } catch (error) {
+          if (
+            !(error instanceof ApplicationError) ||
+            error.code !== "duplicate_work"
+          ) {
+            throw error;
+          }
+        }
+        this.#saveFleet(transaction, fleet);
+        return { title: dispatch.title, status: "等待空闲设备" as const };
+      },
+    );
+  }
+
+  async heartbeat(
+    input: WorkerConnectionCredentialPayload,
+  ): Promise<{ status: "在线" }> {
+    const credential = this.#parseConnection(input);
+    return this.#repository.transaction(
+      credential.tenantKey,
+      async (transaction) => {
+        const fleet = this.#requireFleet(transaction, credential.tenantKey);
+        const session = this.#sessionOf(credential);
+        this.#runDomain(() => fleet.registry.heartbeat(session, this.#now()));
+        this.#saveFleet(transaction, fleet);
+        return { status: "在线" as const };
+      },
+    );
+  }
+
+  async assertConnection(
+    input: WorkerConnectionCredentialPayload,
+  ): Promise<void> {
+    const credential = this.#parseConnection(input);
+    await this.#repository.transaction(credential.tenantKey, (transaction) => {
+      const fleet = this.#requireFleet(transaction, credential.tenantKey);
+      this.#runDomain(() =>
+        fleet.registry.assertSession(this.#sessionOf(credential)),
+      );
+    });
+  }
+
+  async poll(
+    input: WorkerConnectionCredentialPayload,
+  ): Promise<WorkerPollResult> {
+    const credential = this.#parseConnection(input);
+    return this.#repository.transaction(credential.tenantKey, (transaction) => {
+      const fleet = this.#requireFleet(transaction, credential.tenantKey);
+      const session = this.#sessionOf(credential);
+      const now = this.#now();
+      this.#runDomain(() => fleet.registry.heartbeat(session, now));
+      this.#runDomain(() => fleet.queue.reclaimExpired(now));
+      const current = this.#runDomain(() =>
+        fleet.queue.currentAssignmentForWorker(session),
+      );
+      const assignment =
+        current ??
+        this.#runDomain(() => fleet.queue.dispatchForWorker(session, now));
+      this.#saveFleet(transaction, fleet);
+      return {
+        assignment: assignment ? this.#toLeaseView(assignment) : null,
+      };
+    });
+  }
+
+  async renew(
+    connection: WorkerConnectionCredentialPayload,
+    input: WorkerLeaseCommandPayload,
+  ): Promise<{ leasedUntil: string }> {
+    const credential = this.#parseConnection(connection);
+    const command = this.#parseLeaseCommand(input);
+    return this.#repository.transaction(credential.tenantKey, (transaction) => {
+      const fleet = this.#requireFleet(transaction, credential.tenantKey);
+      const leasedUntil = this.#runDomain(() =>
+        fleet.queue.renewLeaseForWorker(
+          this.#sessionOf(credential),
+          command,
+          this.#now(),
+        ),
+      );
+      this.#saveFleet(transaction, fleet);
+      return { leasedUntil };
+    });
+  }
+
+  async complete(
+    connection: WorkerConnectionCredentialPayload,
+    input: WorkerLeaseCommandPayload,
+  ): Promise<{ alreadyCompleted: boolean }> {
+    const credential = this.#parseConnection(connection);
+    const command = this.#parseLeaseCommand(input);
+    return this.#repository.transaction(
+      credential.tenantKey,
+      async (transaction) => {
+        const fleet = this.#requireFleet(transaction, credential.tenantKey);
+        const session = this.#sessionOf(credential);
+        const current = this.#runDomain(() =>
+          fleet.queue.currentAssignmentForWorker(session),
+        );
+        const result = this.#runDomain(() =>
+          fleet.queue.completeLeaseForWorker(session, command, this.#now()),
+        );
+        if (!result.alreadyCompleted && current) {
+          await transaction.markCompletedWork(
+            current.projectKey,
+            current.workKey,
+            current.requirementRevision,
+          );
+        }
+        this.#saveFleet(transaction, fleet);
+        return result;
+      },
+    );
+  }
+
+  #loadFleet(
+    transaction: WorkerFleetTransaction,
+    tenantKey: string,
+  ): FleetAggregate {
+    const snapshot = transaction.load();
+    if (snapshot) {
+      return this.#restoreFleet(snapshot, tenantKey);
+    }
+    const registry = new WorkerRegistry({
+      tenantKey: tenantKey.toLowerCase(),
+      maxAccounts: this.#maxAccounts,
+      offlineAfterMs: this.#offlineAfterMs,
+    });
+    return {
+      registry,
+      queue: new DeliveryQueue(registry, {
+        leaseDurationMs: this.#leaseDurationMs,
+        maxPendingWork: this.#maxPendingWork,
+        completionRetentionMs: this.#completionRetentionMs,
+        maxCompletionTombstones: this.#maxCompletionTombstones,
+      }),
+    };
+  }
+
+  #requireFleet(
+    transaction: WorkerFleetTransaction,
+    tenantKey: string,
+  ): FleetAggregate {
+    const snapshot = transaction.load();
+    if (!snapshot) {
+      throw new ApplicationError(
+        401,
+        "invalid_worker_session",
+        "设备连接已经失效，请重新连接",
+      );
+    }
+    return this.#restoreFleet(snapshot, tenantKey);
+  }
+
+  #restoreFleet(
+    snapshot: WorkerFleetSnapshot,
+    tenantKey: string,
+  ): FleetAggregate {
+    if (
+      snapshot.registry.tenantKey !== tenantKey.toLowerCase() ||
+      snapshot.registry.maxAccounts !== this.#maxAccounts ||
+      snapshot.registry.offlineAfterMs !== this.#offlineAfterMs ||
+      snapshot.queue.leaseDurationMs !== this.#leaseDurationMs ||
+      snapshot.queue.maxPendingWork !== this.#maxPendingWork ||
+      snapshot.queue.completionRetentionMs !== this.#completionRetentionMs ||
+      snapshot.queue.maxCompletionTombstones !== this.#maxCompletionTombstones
+    ) {
+      throw new Error("Worker 舰队运行参数与持久化配置不一致");
+    }
+    const registry = WorkerRegistry.fromSnapshot(snapshot.registry);
+    return {
+      registry,
+      queue: DeliveryQueue.fromSnapshot(registry, snapshot.queue),
+    };
+  }
+
+  #saveFleet(transaction: WorkerFleetTransaction, fleet: FleetAggregate): void {
+    transaction.save({
+      schemaVersion: 1,
+      registry: fleet.registry.toSnapshot(),
+      queue: fleet.queue.toSnapshot(),
+    });
+  }
+
+  #parseConnection(
+    input: WorkerConnectionCredentialPayload,
+  ): WorkerConnectionCredentialPayload {
+    const credential = WorkerConnectionCredentialSchema.safeParse(input);
+    if (!credential.success) {
+      throw new ApplicationError(
+        401,
+        "invalid_worker_session",
+        "设备连接已经失效，请重新连接",
+      );
+    }
+    return credential.data;
+  }
+
+  #sessionOf(credential: WorkerConnectionCredentialPayload): WorkerSession {
+    return {
+      tenantKey: credential.tenantKey,
+      workerKey: credential.workerKey,
+      sessionKey: credential.sessionKey,
+      generation: credential.generation,
+    };
+  }
+
+  #parseLeaseCommand(
+    input: WorkerLeaseCommandPayload,
+  ): WorkerLeaseCommandPayload {
+    const command = WorkerLeaseCommandSchema.safeParse(input);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "invalid_lease_command",
+        "任务租约信息需要调整",
+      );
+    }
+    return command.data;
+  }
+
+  #toLeaseView(assignment: {
+    assignmentKey: string;
+    fencingToken: number;
+    projectKey: string;
+    requirementRevision: number;
+    workKey: string;
+    workTitle: string;
+    leasedUntil: string;
+  }): WorkerLeaseView {
+    return {
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      projectKey: assignment.projectKey,
+      requirementRevision: assignment.requirementRevision,
+      requirementKey: assignment.workKey,
+      title: assignment.workTitle,
+      leasedUntil: assignment.leasedUntil,
+    };
+  }
+
+  #requireAction(
+    principal: AuthenticatedPrincipal,
+    action: WorkerManagementAction,
+  ): void {
+    if (!principal.roles.some((role) => rolesByAction[action].has(role))) {
+      throw new ApplicationError(
+        403,
+        "permission_denied",
+        "当前账号没有执行此操作的权限",
+      );
+    }
+  }
+
+  #runDomain<T>(operation: () => T): T {
+    try {
+      return operation();
+    } catch (error) {
+      if (!(error instanceof WorkerDomainError)) {
+        throw error;
+      }
+      switch (error.code) {
+        case "invalid_session":
+          throw new ApplicationError(
+            401,
+            "invalid_worker_session",
+            error.message,
+          );
+        case "invalid_registration":
+        case "invalid_work":
+          throw new ApplicationError(422, error.code, error.message);
+        case "account_limit":
+        case "worker_busy":
+        case "duplicate_work":
+        case "already_completed":
+        case "invalid_lease":
+        case "expired_lease":
+          throw new ApplicationError(409, error.code, error.message);
+        case "queue_full":
+          throw new ApplicationError(429, error.code, error.message);
+      }
+    }
+  }
+
+  #now(): Date {
+    const value = this.#clock();
+    if (!Number.isFinite(value.getTime())) {
+      throw new Error("服务端时间无效");
+    }
+    return new Date(value.getTime());
+  }
+}

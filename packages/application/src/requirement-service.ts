@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import type { RequirementSpec } from "@forgex/contracts";
+import {
+  StartDeliveryCommandSchema,
+  type RequirementSpec,
+  type StartDeliveryCommandPayload,
+} from "@forgex/contracts";
 import {
   type RequirementAllowedAction,
   RequirementStateConflictError,
@@ -15,6 +19,7 @@ import {
   type RequirementAuthorizedAction,
 } from "./requirement-authorization.js";
 import type {
+  DeliveryDispatchRecord,
   RequirementAuditAction,
   RequirementRecord,
   RequirementRepository,
@@ -173,6 +178,66 @@ export class RequirementApplicationService {
             actorName: principal.actorName,
           },
         }),
+    );
+  }
+
+  async requestDelivery(
+    principal: AuthenticatedPrincipal,
+    requirementKey: string,
+    input: StartDeliveryCommandPayload,
+  ): Promise<DeliveryDispatchRecord> {
+    this.#requireAction(principal, "startDelivery");
+    const command = StartDeliveryCommandSchema.safeParse(input);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "invalid_delivery_command",
+        "交付安排需要调整",
+      );
+    }
+    return this.#repository.transaction(
+      principal.tenantKey,
+      this.#projectKey,
+      (transaction) => {
+        const record = transaction.find(requirementKey);
+        if (!record || record.projectKey !== this.#projectKey) {
+          throw new ApplicationError(
+            404,
+            "requirement_not_found",
+            "没有找到这个需求",
+          );
+        }
+        try {
+          record.workflow.startDelivery();
+        } catch (error) {
+          if (error instanceof RequirementStateConflictError) {
+            throw new ApplicationError(
+              409,
+              "requirement_state_conflict",
+              error.message,
+            );
+          }
+          throw error;
+        }
+        const dispatch: DeliveryDispatchRecord = {
+          dispatchKey: randomUUID(),
+          tenantKey: record.tenantKey,
+          projectKey: record.projectKey,
+          requirementKey: record.requirementKey,
+          requirementRevision: record.workflow.currentRevision,
+          title: record.spec.title,
+          requiredCapabilities: [...command.data.requiredCapabilities],
+          requestedAt: this.#nowIso(),
+          dispatchedAt: null,
+        };
+        transaction.save(record);
+        transaction.appendDeliveryDispatch(dispatch);
+        this.#appendAudit(transaction, record, principal, "delivery.requested");
+        return {
+          ...dispatch,
+          requiredCapabilities: [...dispatch.requiredCapabilities],
+        };
+      },
     );
   }
 
