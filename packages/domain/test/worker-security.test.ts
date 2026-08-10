@@ -32,7 +32,7 @@ describe("Worker 会话隔离", () => {
       tenantKey: "tenant-a",
       generation: 1,
       workerKey: expect.any(String),
-      sessionKey: expect.any(String),
+      sessionKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
     });
   });
 

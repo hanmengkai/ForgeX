@@ -19,6 +19,9 @@ describe("WorkerRegistry", () => {
     expect(() => new WorkerRegistry(registryOptions(0))).toThrow(
       "Codex 账户上限必须是正整数",
     );
+    expect(() => new WorkerRegistry(registryOptions(6))).toThrow(
+      "Codex 账户上限不能超过 5 个",
+    );
   });
 
   it("一个租户最多登记五个 Codex 账户", () => {

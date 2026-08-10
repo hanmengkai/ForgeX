@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   EvidencePayloadSchema,
   SignedEvidenceSchema,
+  DeliveryRequestSchema,
+  WorkerConnectionCredentialSchema,
+  WorkerLeaseCommandSchema,
   WorkerRegistrationSchema,
 } from "../src/index.js";
 
@@ -124,6 +127,60 @@ describe("Codex 设备注册契约", () => {
         accountFingerprint: "d".repeat(64),
         capabilities: [],
         codexToken: "不应上传到控制面",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("接受版本化的设备连接、交付请求和租约命令", () => {
+    expect(
+      WorkerConnectionCredentialSchema.safeParse({
+        schemaVersion: 1,
+        workerKey: "99999999-9999-4999-8999-999999999999",
+        sessionKey: "a".repeat(43),
+        generation: 1,
+      }).success,
+    ).toBe(true);
+    expect(
+      DeliveryRequestSchema.safeParse({
+        schemaVersion: 1,
+        requirementKey: "88888888-8888-4888-8888-888888888888",
+        title: "完善访客预约",
+        requiredCapabilities: ["typescript", "browser"],
+      }).success,
+    ).toBe(true);
+    expect(
+      WorkerLeaseCommandSchema.safeParse({
+        schemaVersion: 1,
+        assignmentKey: "77777777-7777-4777-8777-777777777777",
+        fencingToken: 1,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("设备协议拒绝凭据夹带、无效能力和伪造租约", () => {
+    expect(
+      WorkerRegistrationSchema.safeParse({
+        schemaVersion: 1,
+        deviceName: "设计组工作站",
+        accountName: "产品交付一号",
+        accountFingerprint: "d".repeat(64),
+        capabilities: ["typescript", "../../shell"],
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkerConnectionCredentialSchema.safeParse({
+        schemaVersion: 1,
+        workerKey: "99999999-9999-4999-8999-999999999999",
+        sessionKey: "too-short",
+        generation: 1,
+        codexToken: "绝不能上传",
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkerLeaseCommandSchema.safeParse({
+        schemaVersion: 1,
+        assignmentKey: "not-an-assignment",
+        fencingToken: 0,
       }).success,
     ).toBe(false);
   });
