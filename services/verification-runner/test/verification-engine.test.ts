@@ -89,12 +89,16 @@ describe("FixedSuiteVerificationEngine", () => {
       {
         criterionKey: target.acceptanceCriteria[0]!.criterionKey,
         status: "passed",
-        testRunKey: expect.stringMatching(/^suite-[a-f0-9]{32}$/u),
+        testRunKey: expect.stringMatching(
+          /^plan-[a-z0-9._-]+-v\d+-[a-f0-9]{64}-result-[a-f0-9]{64}$/u,
+        ),
       },
       {
         criterionKey: target.acceptanceCriteria[1]!.criterionKey,
         status: "passed",
-        testRunKey: expect.stringMatching(/^suite-[a-f0-9]{32}$/u),
+        testRunKey: expect.stringMatching(
+          /^plan-[a-z0-9._-]+-v\d+-[a-f0-9]{64}-result-[a-f0-9]{64}$/u,
+        ),
       },
     ]);
     expect(first.artifact).toEqual(second.artifact);
@@ -187,5 +191,62 @@ describe("FixedSuiteVerificationEngine", () => {
     });
 
     await expect(engine.verify(target)).rejects.toThrow();
+  });
+
+  it("拒绝同一计划身份在后续调用中改变套件与验收条件映射", async () => {
+    let invocation = 0;
+    const engine = new FixedSuiteVerificationEngine({
+      workspace: {
+        prepare: vi.fn(async () => ({
+          path: path.resolve("verification-workspaces", "run-d"),
+          dispose: vi.fn(async () => Promise.resolve()),
+        })),
+      },
+      sandbox: {
+        run: vi.fn(async ({ plan }) => ({
+          suites: plan.suites.map((suite) => ({
+            suiteKey: suite.suiteKey,
+            status: "passed" as const,
+          })),
+        })),
+      },
+      planProvider: {
+        planFor: vi.fn(async () => {
+          invocation += 1;
+          return {
+            schemaVersion: 1 as const,
+            planKey: "project-node-v1",
+            requirementKey: target.requirementKey,
+            requirementRevision: target.requirementRevision,
+            gitHashAlgorithm: target.gitHashAlgorithm,
+            commitSha: target.commitSha,
+            suites:
+              invocation === 1
+                ? [
+                    {
+                      suiteKey: "unit",
+                      name: "单元测试",
+                      criterionKeys: [
+                        target.acceptanceCriteria[0]!.criterionKey,
+                        target.acceptanceCriteria[1]!.criterionKey,
+                      ],
+                    },
+                  ]
+                : [
+                    {
+                      suiteKey: "trivial",
+                      name: "空壳检查",
+                      criterionKeys: target.acceptanceCriteria.map(
+                        (criterion) => criterion.criterionKey,
+                      ),
+                    },
+                  ],
+          };
+        }),
+      },
+    });
+
+    await expect(engine.verify(target)).resolves.toBeDefined();
+    await expect(engine.verify(target)).rejects.toThrow("计划");
   });
 });

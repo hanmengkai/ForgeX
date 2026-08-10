@@ -19,6 +19,7 @@ const runnerKey = "40000000-0000-4000-8000-000000000004";
 const keyId = "50000000-0000-4000-8000-000000000005";
 const requirementKey = "60000000-0000-4000-8000-000000000006";
 const criterionKey = "70000000-0000-4000-8000-000000000007";
+const runnerScope = { tenantKey, projectKey, repositoryKey, runnerKey, keyId };
 
 const target: VerificationRunnerTarget = {
   requirementKey,
@@ -276,6 +277,7 @@ describe("VerificationRunnerRuntime", () => {
       artifactHash,
       artifactContentBase64: Buffer.from(preview).toString("base64"),
       checks: passedVerification.checks,
+      scope: runnerScope,
       verificationCompletedAt: "2026-08-11T03:00:00.000Z",
       integrityTag: "0".repeat(64),
     } as const;
@@ -312,6 +314,7 @@ describe("VerificationRunnerRuntime", () => {
       artifact: preview,
       artifactHash,
       checks: passedVerification.checks,
+      scope: runnerScope,
       verificationCompletedAt: "2026-08-11T03:00:00.000Z",
       integrityKey: journalIntegrityKey,
     });
@@ -349,6 +352,7 @@ describe("VerificationRunnerRuntime", () => {
       artifact: preview,
       artifactHash,
       checks: passedVerification.checks,
+      scope: runnerScope,
       verificationCompletedAt: "2026-08-11T03:00:00.000Z",
       integrityKey: journalIntegrityKey,
     });
@@ -393,6 +397,7 @@ describe("VerificationRunnerRuntime", () => {
       artifact: preview,
       artifactHash,
       checks: passedVerification.checks,
+      scope: runnerScope,
       verificationCompletedAt: "2026-08-11T03:00:00.000Z",
       integrityKey: journalIntegrityKey,
     });

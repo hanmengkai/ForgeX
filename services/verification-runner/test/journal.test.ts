@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -48,10 +48,18 @@ const artifact = new TextEncoder().encode("<html>可信预览</html>");
 const artifactHash =
   "6d161a76d3146278ed0339a5bb3ef099883fed91c30d88a98396383c94410a4e";
 const integrityKey = new Uint8Array(32).fill(0x5a);
+const runnerScope = {
+  tenantKey: "10000000-0000-4000-8000-000000000001",
+  projectKey: "20000000-0000-4000-8000-000000000002",
+  repositoryKey: target.repositoryKey,
+  runnerKey: "40000000-0000-4000-8000-000000000004",
+  keyId: "50000000-0000-4000-8000-000000000005",
+};
 const testJournalOptions = {
   assertWindowsPrivatePath: async () => Promise.resolve(),
 };
 const artifactEntry = verificationArtifactEntry({
+  scope: runnerScope,
   target,
   evidenceKey: "80000000-0000-4000-8000-000000000008",
   artifact,
@@ -111,7 +119,7 @@ describe("FileVerificationJournal", () => {
       signedEvidence,
       integrityKey,
     });
-    await journal.saveSigned(signedEntry);
+    await journal.saveSigned(signedEntry, artifactEntry.integrityTag);
     await expect(journal.load()).resolves.toEqual(signedEntry);
 
     await expect(journal.clear(artifactEntry.integrityTag)).rejects.toThrow(
@@ -155,6 +163,13 @@ describe("FileVerificationJournal", () => {
       filePath,
       testJournalOptions,
     );
+
+    const lockArtifacts = await readdir(root);
+    expect(
+      lockArtifacts.filter(
+        (name) => name.endsWith(".sock") || name.endsWith(".lock"),
+      ),
+    ).toEqual([]);
 
     await expect(
       FileVerificationJournal.open(filePath, testJournalOptions),
