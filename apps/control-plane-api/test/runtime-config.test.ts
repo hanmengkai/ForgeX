@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -6,6 +9,8 @@ import {
   ControlPlaneRuntimeConfigSchema,
   HashedRunnerSessionAuthenticator,
   HashedSessionAuthenticator,
+  loadControlPlaneRuntimeConfig,
+  requireDatabaseUrl,
 } from "../src/runtime-config.js";
 
 const tenantKey = "11111111-1111-4111-8111-111111111111";
@@ -18,6 +23,49 @@ const digest = (value: string) =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
 describe("Control Plane 运行配置", () => {
+  it("从文件加载严格配置并拒绝缺失或非 PostgreSQL 数据库地址", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "forgex-control-plane-"));
+    const path = join(directory, "runtime.json");
+    const config = {
+      schemaVersion: 1,
+      host: "0.0.0.0",
+      port: 3000,
+      projectKey,
+      repositoryKey,
+      sessions: [
+        {
+          tokenSha256: digest("people-session-token-with-enough-entropy"),
+          principal: {
+            actorKey,
+            actorName: "产品负责人",
+            tenantKey,
+            roles: ["product_owner"],
+          },
+        },
+      ],
+      runnerSessions: [],
+      trustedRunners: [],
+      skillEvaluators: [],
+      mcpVerifiers: [],
+    };
+    await writeFile(path, JSON.stringify(config), "utf8");
+
+    await expect(loadControlPlaneRuntimeConfig(path)).resolves.toMatchObject({
+      host: "0.0.0.0",
+      projectKey,
+    });
+    expect(() => requireDatabaseUrl({})).toThrow("FORGEX_DATABASE_URL");
+    expect(() =>
+      requireDatabaseUrl({ FORGEX_DATABASE_URL: "https://example.test/db" }),
+    ).toThrow("PostgreSQL");
+    expect(
+      requireDatabaseUrl({
+        FORGEX_DATABASE_URL: "postgresql://user:secret@db:5432/forgex",
+      }),
+    ).toBe("postgresql://user:secret@db:5432/forgex");
+    await rm(directory, { recursive: true, force: true });
+  });
+
   it("只用令牌摘要认证人员和 Runner，不把明文令牌放进配置", async () => {
     const peopleToken = "people-session-token-with-enough-entropy";
     const runnerToken = "runner-session-token-with-enough-entropy";
