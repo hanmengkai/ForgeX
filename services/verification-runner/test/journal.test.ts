@@ -1,5 +1,12 @@
-import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, readdir } from "node:fs/promises";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
+import {
+  chmod,
+  link,
+  mkdir,
+  readFile,
+  readdir,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -183,7 +190,8 @@ describe("FileVerificationJournal", () => {
       state: "active",
       identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
       ownerToken: expect.stringMatching(/^[a-f0-9-]{36}$/u),
-      challenge: expect.stringMatching(/^[a-f0-9-]{36}$/u),
+      processId: process.pid,
+      processStartKey: expect.stringMatching(/^[A-Za-z0-9:._-]+$/u),
     });
 
     await expect(
@@ -195,5 +203,112 @@ describe("FileVerificationJournal", () => {
       testJournalOptions,
     );
     await second.close();
+  });
+
+  it("多个 Runner 并发竞争同一路径时只能有一个实例取得锁", async () => {
+    const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
+    temporaryRoots.push(root);
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") await chmod(root, 0o700);
+    for (let index = 0; index < 10; index += 1) {
+      const filePath = path.join(root, `verification-journal-${index}.json`);
+      const results = await Promise.allSettled(
+        Array.from({ length: 5 }, async () =>
+          FileVerificationJournal.open(filePath, testJournalOptions),
+        ),
+      );
+      const acquired = results.filter(
+        (result): result is PromiseFulfilledResult<FileVerificationJournal> =>
+          result.status === "fulfilled",
+      );
+      expect(acquired).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === "rejected"),
+      ).toHaveLength(4);
+      await acquired[0]!.value.close();
+    }
+  });
+
+  it("只在 OS 能证明原进程已退出时回收崩溃遗留锁", async () => {
+    const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
+    temporaryRoots.push(root);
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") await chmod(root, 0o700);
+    const filePath = path.join(root, "verification-journal.json");
+    const identity =
+      process.platform === "win32"
+        ? path.resolve(filePath).toLowerCase()
+        : path.resolve(filePath);
+    const identityHash = createHash("sha256")
+      .update(identity, "utf8")
+      .digest("hex");
+    const lockPath = path.join(
+      root,
+      `.forgex-verification-runner-${identityHash.slice(0, 24)}.lck`,
+    );
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        state: "active",
+        identityHash,
+        ownerToken: randomUUID(),
+        processId: 2_147_483_647,
+        processStartKey: "dead-process-start",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    const recovered = await FileVerificationJournal.open(
+      filePath,
+      testJournalOptions,
+    );
+    const descriptor = JSON.parse(await readFile(lockPath, "utf8")) as {
+      processId: number;
+    };
+    expect(descriptor.processId).toBe(process.pid);
+    expect((await readdir(root)).some((name) => name.includes(".stale-"))).toBe(
+      false,
+    );
+    await recovered.close();
+  });
+
+  it("旧锁回收在落盘后中断时仍能由下一实例安全完成", async () => {
+    const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
+    temporaryRoots.push(root);
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") await chmod(root, 0o700);
+    const filePath = path.join(root, "verification-journal.json");
+    const identity =
+      process.platform === "win32"
+        ? path.resolve(filePath).toLowerCase()
+        : path.resolve(filePath);
+    const identityHash = createHash("sha256")
+      .update(identity, "utf8")
+      .digest("hex");
+    const lockPath = path.join(
+      root,
+      `.forgex-verification-runner-${identityHash.slice(0, 24)}.lck`,
+    );
+    const ownerToken = randomUUID();
+    await writeFile(
+      lockPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        state: "active",
+        identityHash,
+        ownerToken,
+        processId: 2_147_483_647,
+        processStartKey: "dead-process-start",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await link(lockPath, `${lockPath}.stale-${ownerToken}`);
+
+    const recovered = await FileVerificationJournal.open(
+      filePath,
+      testJournalOptions,
+    );
+    await recovered.close();
   });
 });
