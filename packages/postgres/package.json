@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "migrate": "node --enable-source-maps dist/migrate.js"
+  },
   "dependencies": {
     "@forgex/application": "0.1.0",
     "@forgex/contracts": "0.1.0",

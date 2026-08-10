@@ -10,6 +10,8 @@
     "packages/*"
   ],
   "scripts": {
+    "build": "tsc -b",
+    "db:migrate": "npm run build -w @forgex/postgres && npm run migrate -w @forgex/postgres",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",

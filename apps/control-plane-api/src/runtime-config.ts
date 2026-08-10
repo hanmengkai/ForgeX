@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import {
   AuthenticatedRunnerSchema,
@@ -123,6 +124,43 @@ export const ControlPlaneRuntimeConfigSchema = z
 export type ControlPlaneRuntimeConfig = z.infer<
   typeof ControlPlaneRuntimeConfigSchema
 >;
+
+export const loadControlPlaneRuntimeConfig = async (
+  path: string,
+): Promise<ControlPlaneRuntimeConfig> => {
+  let input: unknown;
+  try {
+    input = JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch {
+    throw new Error("Control Plane 运行配置无法读取或不是有效 JSON");
+  }
+  const parsed = ControlPlaneRuntimeConfigSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new Error("Control Plane 运行配置格式不正确");
+  }
+  return parsed.data;
+};
+
+export const requireDatabaseUrl = (
+  environment: Readonly<Record<string, string | undefined>>,
+): string => {
+  const value = environment.FORGEX_DATABASE_URL;
+  if (!value) {
+    throw new Error("缺少 FORGEX_DATABASE_URL");
+  }
+  if (value.length > 4_096) {
+    throw new Error("FORGEX_DATABASE_URL 不是有效的 PostgreSQL 地址");
+  }
+  try {
+    const parsed = new URL(value);
+    if (!["postgres:", "postgresql:"].includes(parsed.protocol)) {
+      throw new Error("unsupported protocol");
+    }
+  } catch {
+    throw new Error("FORGEX_DATABASE_URL 不是有效的 PostgreSQL 地址");
+  }
+  return value;
+};
 
 const tokenPattern = /^[A-Za-z0-9._~-]{24,512}$/u;
 
