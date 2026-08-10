@@ -265,16 +265,28 @@ export class WorkerControlPlaneClient {
   }
 
   async completeMcp(
-    assignment: Pick<WorkerAssignment, "assignmentKey" | "fencingToken">,
-    result: { outcome: "succeeded" | "failed"; summary: string },
+    assignment: Pick<WorkerAssignment, "assignmentKey" | "fencingToken"> &
+      Partial<Pick<McpWorkerAssignment, "projectKey" | "invocationKey">>,
+    result: {
+      outcome: "succeeded" | "failed" | "unknown";
+      summary: string;
+    },
     signal?: AbortSignal,
   ): Promise<boolean> {
+    const scope =
+      result.outcome === "unknown"
+        ? {
+            projectKey: assignment.projectKey,
+            invocationKey: assignment.invocationKey,
+          }
+        : {};
     const response = await this.#post(
       "/api/v1/worker-connection/mcp-complete",
       WorkerMcpCompletionSchema.parse({
         schemaVersion: 1,
         assignmentKey: assignment.assignmentKey,
         fencingToken: assignment.fencingToken,
+        ...scope,
         outcome: result.outcome,
         summary: result.summary,
       }),

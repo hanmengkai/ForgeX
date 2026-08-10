@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   WORKER_MCP_FAILED_SUMMARY,
   WORKER_MCP_SUCCEEDED_SUMMARY,
+  WORKER_MCP_UNKNOWN_SUMMARY,
   WORKER_REQUIREMENT_COMPLETION_SUMMARY,
 } from "@forgex/contracts";
 
@@ -20,6 +21,8 @@ import type {
 import type {
   PendingRequirementCommit,
   PendingRequirementCompletion,
+  PendingMcpCompletion,
+  PendingMcpExecutionIntent,
   PendingWorkerCompletion,
   WorkerCompletionJournal,
 } from "./completion-journal.js";
@@ -56,8 +59,12 @@ interface ControlPlanePort {
     signal?: AbortSignal,
   ): Promise<boolean>;
   completeMcp(
-    assignment: Pick<WorkerAssignment, "assignmentKey" | "fencingToken">,
-    result: { outcome: "succeeded" | "failed"; summary: string },
+    assignment: Pick<WorkerAssignment, "assignmentKey" | "fencingToken"> &
+      Partial<Pick<McpWorkerAssignment, "projectKey" | "invocationKey">>,
+    result: {
+      outcome: "succeeded" | "failed" | "unknown";
+      summary: string;
+    },
     signal?: AbortSignal,
   ): Promise<boolean>;
 }
@@ -117,6 +124,9 @@ export class DeviceWorkerRuntime {
     if (!journalEntry) {
       throw new Error("设备完成日志没有保留刚刚形成的执行结果");
     }
+    if (journalEntry.kind === "mcp_invocation_started") {
+      throw new Error("MCP 执行完成后没有形成可提交的持久结果");
+    }
     const pending =
       journalEntry.kind === "requirement_commit_pending"
         ? await this.#recoverRequirementCommit(journalEntry)
@@ -160,16 +170,7 @@ export class DeviceWorkerRuntime {
     if (!result.mcpResult) {
       throw new Error("MCP 调用没有形成可持久化的执行结果");
     }
-    return {
-      schemaVersion: 1,
-      kind: "mcp_invocation",
-      assignment: {
-        assignmentKey: assignment.assignmentKey,
-        fencingToken: assignment.fencingToken,
-        title: assignment.title,
-      },
-      result: result.mcpResult,
-    };
+    return this.#mcpCompletion(assignment, result.mcpResult.outcome);
   }
 
   async #submitPendingCompletion(
@@ -196,14 +197,18 @@ export class DeviceWorkerRuntime {
   ): Promise<DeviceWorkerRunResult | null> {
     const entry = await this.#completionJournal.load();
     if (!entry) return null;
-    const pending =
-      entry.kind === "requirement_commit_pending"
-        ? await this.#withLeaseRenewal(
-            entry.assignment,
-            async () => this.#recoverRequirementCommit(entry),
-            signal,
-          )
-        : entry;
+    let pending: PendingWorkerCompletion;
+    if (entry.kind === "requirement_commit_pending") {
+      pending = await this.#withLeaseRenewal(
+        entry.assignment,
+        async () => this.#recoverRequirementCommit(entry),
+        signal,
+      );
+    } else if (entry.kind === "mcp_invocation_started") {
+      pending = await this.#recoverMcpExecution(entry, signal);
+    } else {
+      pending = entry;
+    }
     await this.#completePendingWithFreshLease(pending, signal);
     if (pending.kind === "requirement_delivery") {
       await this.#completionJournal.clear();
@@ -214,6 +219,43 @@ export class DeviceWorkerRuntime {
     }
     await this.#completionJournal.clear();
     return { kind: "mcp_completed", title: pending.assignment.title };
+  }
+
+  async #recoverMcpExecution(
+    intent: PendingMcpExecutionIntent,
+    signal?: AbortSignal,
+  ): Promise<PendingMcpCompletion> {
+    if (intent.assignment.execution.effect !== "read") {
+      const pending = this.#mcpCompletion(intent.assignment, "unknown");
+      await this.#completionJournal.save(pending);
+      return pending;
+    }
+    try {
+      return await this.#withLeaseRenewal(
+        intent.assignment,
+        async (executionSignal) => {
+          const result = await this.#executeMcp(
+            intent.assignment,
+            executionSignal,
+          );
+          const pending = this.#mcpCompletion(
+            intent.assignment,
+            result.outcome,
+          );
+          await this.#completionJournal.save(pending);
+          return pending;
+        },
+        signal,
+      );
+    } catch (error) {
+      if (
+        error instanceof ControlPlaneClientError &&
+        ["invalid_lease", "expired_lease"].includes(error.code)
+      ) {
+        await this.#completionJournal.clear();
+      }
+      throw error;
+    }
   }
 
   async #recoverRequirementCommit(
@@ -370,8 +412,14 @@ export class DeviceWorkerRuntime {
     if (!this.#mcp) {
       throw new Error("设备没有配置 MCP 本地执行适配器");
     }
-    const result = await this.#mcp.execute({ assignment, signal });
-    return {
+    const intent: PendingMcpExecutionIntent = {
+      schemaVersion: 1,
+      kind: "mcp_invocation_started",
+      assignment: structuredClone(assignment),
+    };
+    await this.#completionJournal.saveMcpIntent(intent);
+    const result = await this.#executeMcp(assignment, signal);
+    const executionResult = {
       kind: "mcp_completed",
       title: assignment.title,
       mcpResult: {
@@ -381,6 +429,43 @@ export class DeviceWorkerRuntime {
             ? WORKER_MCP_SUCCEEDED_SUMMARY
             : WORKER_MCP_FAILED_SUMMARY,
       },
+    } as const;
+    await this.#completionJournal.save(
+      this.#mcpCompletion(assignment, result.outcome),
+    );
+    return executionResult;
+  }
+
+  async #executeMcp(
+    assignment: McpWorkerAssignment,
+    signal: AbortSignal,
+  ): Promise<{ outcome: "succeeded" | "failed" }> {
+    if (!this.#mcp) {
+      throw new Error("设备没有配置 MCP 本地执行适配器");
+    }
+    return this.#mcp.execute({ assignment, signal });
+  }
+
+  #mcpCompletion(
+    assignment: McpWorkerAssignment,
+    outcome: "succeeded" | "failed" | "unknown",
+  ): PendingMcpCompletion {
+    return {
+      schemaVersion: 1,
+      kind: "mcp_invocation",
+      assignment: {
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+        title: assignment.title,
+        projectKey: assignment.projectKey,
+        invocationKey: assignment.invocationKey,
+      },
+      result:
+        outcome === "succeeded"
+          ? { outcome, summary: WORKER_MCP_SUCCEEDED_SUMMARY }
+          : outcome === "failed"
+            ? { outcome, summary: WORKER_MCP_FAILED_SUMMARY }
+            : { outcome, summary: WORKER_MCP_UNKNOWN_SUMMARY },
     };
   }
 

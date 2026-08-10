@@ -6,6 +6,14 @@ import { promisify } from "node:util";
 
 import { z } from "zod";
 
+import {
+  WORKER_MCP_FAILED_SUMMARY,
+  WORKER_MCP_SUCCEEDED_SUMMARY,
+  WORKER_MCP_UNKNOWN_SUMMARY,
+} from "@forgex/contracts";
+
+import { McpWorkerAssignmentSchema } from "./control-plane-client.js";
+
 const execFileAsync = promisify(execFile);
 
 const internalKey = z
@@ -67,13 +75,33 @@ export const PendingWorkerCompletionSchema = z.discriminatedUnion("kind", [
     .object({
       schemaVersion: z.literal(1),
       kind: z.literal("mcp_invocation"),
-      assignment: z.object(lease).strict(),
-      result: z
+      assignment: z
         .object({
-          outcome: z.enum(["succeeded", "failed"]),
-          summary: z.string().trim().min(2).max(500),
+          ...lease,
+          projectKey: internalKey,
+          invocationKey: internalKey,
         })
         .strict(),
+      result: z.discriminatedUnion("outcome", [
+        z
+          .object({
+            outcome: z.literal("succeeded"),
+            summary: z.literal(WORKER_MCP_SUCCEEDED_SUMMARY),
+          })
+          .strict(),
+        z
+          .object({
+            outcome: z.literal("failed"),
+            summary: z.literal(WORKER_MCP_FAILED_SUMMARY),
+          })
+          .strict(),
+        z
+          .object({
+            outcome: z.literal("unknown"),
+            summary: z.literal(WORKER_MCP_UNKNOWN_SUMMARY),
+          })
+          .strict(),
+      ]),
     })
     .strict(),
 ]);
@@ -88,6 +116,18 @@ export type PendingRequirementCompletion = Extract<
 export type PendingMcpCompletion = Extract<
   PendingWorkerCompletion,
   { kind: "mcp_invocation" }
+>;
+
+export const PendingMcpExecutionIntentSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("mcp_invocation_started"),
+    assignment: McpWorkerAssignmentSchema,
+  })
+  .strict();
+
+export type PendingMcpExecutionIntent = z.infer<
+  typeof PendingMcpExecutionIntentSchema
 >;
 
 export const PendingRequirementCommitSchema = z
@@ -120,12 +160,29 @@ export type PendingRequirementCommit = z.infer<
   typeof PendingRequirementCommitSchema
 >;
 export type WorkerJournalEntry =
-  PendingWorkerCompletion | PendingRequirementCommit;
+  | PendingWorkerCompletion
+  | PendingRequirementCommit
+  | PendingMcpExecutionIntent;
 
 const assertCompletionMatchesIntent = (
-  intent: PendingRequirementCommit,
+  intent: PendingRequirementCommit | PendingMcpExecutionIntent,
   completion: PendingWorkerCompletion,
 ): void => {
+  if (intent.kind === "mcp_invocation_started") {
+    if (
+      completion.kind !== "mcp_invocation" ||
+      completion.assignment.assignmentKey !== intent.assignment.assignmentKey ||
+      completion.assignment.fencingToken !== intent.assignment.fencingToken ||
+      completion.assignment.projectKey !== intent.assignment.projectKey ||
+      completion.assignment.invocationKey !== intent.assignment.invocationKey ||
+      completion.assignment.title !== intent.assignment.title ||
+      (intent.assignment.execution.effect === "read" &&
+        completion.result.outcome === "unknown")
+    ) {
+      throw new Error("MCP 执行结果与持久化执行意图不一致");
+    }
+    return;
+  }
   if (
     completion.kind !== "requirement_delivery" ||
     JSON.stringify(completion.assignment) !==
@@ -142,6 +199,7 @@ export interface WorkerCompletionJournal {
   load(): Promise<WorkerJournalEntry | null>;
   save(completion: PendingWorkerCompletion): Promise<void>;
   saveCommitIntent(intent: PendingRequirementCommit): Promise<void>;
+  saveMcpIntent(intent: PendingMcpExecutionIntent): Promise<void>;
   clear(): Promise<void>;
   quarantine(
     completion: PendingWorkerCompletion,
@@ -269,9 +327,15 @@ export class FileWorkerCompletionJournal implements WorkerCompletionJournal {
       ) {
         throw new Error("设备提交意图不是可信的普通小文件");
       }
-      return PendingRequirementCommitSchema.parse(
-        JSON.parse(await readFile(this.#intentPath, "utf8")) as unknown,
+      const parsed: unknown = JSON.parse(
+        await readFile(this.#intentPath, "utf8"),
       );
+      return z
+        .union([
+          PendingRequirementCommitSchema,
+          PendingMcpExecutionIntentSchema,
+        ])
+        .parse(parsed);
     } catch (error) {
       if (missingFile(error)) return null;
       throw error;
@@ -281,7 +345,10 @@ export class FileWorkerCompletionJournal implements WorkerCompletionJournal {
   async save(completion: PendingWorkerCompletion): Promise<void> {
     const parsed = PendingWorkerCompletionSchema.parse(completion);
     const current = await this.load();
-    if (current?.kind === "requirement_commit_pending") {
+    if (
+      current?.kind === "requirement_commit_pending" ||
+      current?.kind === "mcp_invocation_started"
+    ) {
       assertCompletionMatchesIntent(current, parsed);
     }
     await mkdir(path.dirname(this.#filePath), { recursive: true });
@@ -329,11 +396,20 @@ export class FileWorkerCompletionJournal implements WorkerCompletionJournal {
   }
 
   async saveCommitIntent(intent: PendingRequirementCommit): Promise<void> {
-    const parsed = PendingRequirementCommitSchema.parse(intent);
+    await this.#saveIntent(PendingRequirementCommitSchema.parse(intent));
+  }
+
+  async saveMcpIntent(intent: PendingMcpExecutionIntent): Promise<void> {
+    await this.#saveIntent(PendingMcpExecutionIntentSchema.parse(intent));
+  }
+
+  async #saveIntent(
+    parsed: PendingRequirementCommit | PendingMcpExecutionIntent,
+  ): Promise<void> {
     const current = await this.load();
     if (current) {
       if (JSON.stringify(current) === JSON.stringify(parsed)) return;
-      throw new Error("未确认的设备结果存在时不能开始另一个提交意图");
+      throw new Error("未确认的设备结果存在时不能开始另一个执行意图");
     }
     await mkdir(path.dirname(this.#intentPath), { recursive: true });
     const temporaryPath = `${this.#intentPath}.${process.pid}.${randomUUID()}.tmp`;
@@ -353,7 +429,7 @@ export class FileWorkerCompletionJournal implements WorkerCompletionJournal {
         if (!missingFile(cleanupError)) {
           throw new AggregateError(
             [error, cleanupError],
-            "设备提交意图写入失败且临时文件未能清理",
+            "设备执行意图写入失败且临时文件未能清理",
           );
         }
       }
@@ -423,7 +499,10 @@ export class InMemoryWorkerCompletionJournal implements WorkerCompletionJournal 
 
   async save(completion: PendingWorkerCompletion): Promise<void> {
     const parsed = PendingWorkerCompletionSchema.parse(completion);
-    if (this.#pending?.kind === "requirement_commit_pending") {
+    if (
+      this.#pending?.kind === "requirement_commit_pending" ||
+      this.#pending?.kind === "mcp_invocation_started"
+    ) {
       assertCompletionMatchesIntent(this.#pending, parsed);
     } else if (this.#pending) {
       if (JSON.stringify(this.#pending) === JSON.stringify(parsed)) return;
@@ -441,6 +520,15 @@ export class InMemoryWorkerCompletionJournal implements WorkerCompletionJournal 
     this.#pending = structuredClone(parsed);
   }
 
+  async saveMcpIntent(intent: PendingMcpExecutionIntent): Promise<void> {
+    const parsed = PendingMcpExecutionIntentSchema.parse(intent);
+    if (this.#pending) {
+      if (JSON.stringify(this.#pending) === JSON.stringify(parsed)) return;
+      throw new Error("未确认的设备结果存在时不能开始另一个执行意图");
+    }
+    this.#pending = structuredClone(parsed);
+  }
+
   async clear(): Promise<void> {
     this.#pending = null;
   }
@@ -453,6 +541,7 @@ export class InMemoryWorkerCompletionJournal implements WorkerCompletionJournal 
     if (
       !this.#pending ||
       this.#pending.kind === "requirement_commit_pending" ||
+      this.#pending.kind === "mcp_invocation_started" ||
       JSON.stringify(this.#pending) !== JSON.stringify(parsed)
     ) {
       throw new Error("待隔离的设备完成结果与当前持久日志不一致");

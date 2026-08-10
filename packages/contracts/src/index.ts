@@ -247,6 +247,8 @@ export const WORKER_REQUIREMENT_COMPLETION_SUMMARY =
   "已生成本地提交，等待独立验证" as const;
 export const WORKER_MCP_SUCCEEDED_SUMMARY = "本地工具操作已完成" as const;
 export const WORKER_MCP_FAILED_SUMMARY = "本地工具操作未完成" as const;
+export const WORKER_MCP_UNKNOWN_SUMMARY =
+  "本地工具操作结果需要人工核对" as const;
 
 export const WorkerRequirementCompletionSchema =
   WorkerLeaseCommandSchema.extend({
@@ -295,6 +297,12 @@ export const WorkerMcpCompletionSchema = z.discriminatedUnion("outcome", [
   WorkerLeaseCommandSchema.extend({
     outcome: z.literal("failed"),
     summary: z.literal(WORKER_MCP_FAILED_SUMMARY),
+  }).strict(),
+  WorkerLeaseCommandSchema.extend({
+    projectKey: internalKey,
+    invocationKey: internalKey,
+    outcome: z.literal("unknown"),
+    summary: z.literal(WORKER_MCP_UNKNOWN_SUMMARY),
   }).strict(),
 ]);
 

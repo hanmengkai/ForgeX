@@ -35,6 +35,16 @@ const internalKey = z
   .string()
   .uuid()
   .transform((value) => value.toLowerCase());
+const executionOutcomeUnknownReportSchema = z
+  .object({
+    projectKey: internalKey,
+    invocationKey: internalKey,
+    assignmentKey: internalKey,
+    fencingToken: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    workerKey: internalKey,
+    workerGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
 export interface TrustedMcpToolDirectory {
   getEnabledToolForInvocation(
     tenantKey: string,
@@ -1205,6 +1215,75 @@ export class McpInvocationApplicationService {
           status: "completion_pending",
           result: { ...result, summary, completedAt },
         });
+      },
+    );
+  }
+
+  async reportExecutionOutcomeUnknown(
+    tenantKey: string,
+    input: z.input<typeof executionOutcomeUnknownReportSchema>,
+  ): Promise<"pending_cleanup" | "settled"> {
+    const report = executionOutcomeUnknownReportSchema.parse(input);
+    return this.#repository.transaction(
+      tenantKey,
+      report.projectKey,
+      async (transaction) => {
+        const record = await transaction.find(report.invocationKey);
+        if (!record) {
+          throw new ApplicationError(
+            404,
+            "mcp_invocation_not_found",
+            "找不到这项调用",
+          );
+        }
+        const lease = record.executionLease;
+        const sameExecution =
+          lease?.assignmentKey === report.assignmentKey &&
+          lease.fencingToken === report.fencingToken &&
+          lease.workerKey === report.workerKey &&
+          lease.workerGeneration <= report.workerGeneration;
+        if (!sameExecution) {
+          throw new ApplicationError(
+            409,
+            "mcp_invocation_state_conflict",
+            "结果待核对报告与原设备租约不匹配",
+          );
+        }
+        if (record.status === "outcome_unknown") return "settled";
+        if (record.status === "outcome_unknown_pending_cleanup") {
+          return "pending_cleanup";
+        }
+        if (record.effect === "read" || record.status !== "leased" || !lease) {
+          throw new ApplicationError(
+            409,
+            "mcp_invocation_state_conflict",
+            "这项调用当前不能标记为结果待核对",
+          );
+        }
+        transaction.appendAudit({
+          schemaVersion: 1,
+          eventKey: randomUUID(),
+          tenantKey: record.tenantKey,
+          projectKey: record.projectKey,
+          invocationKey: record.invocationKey,
+          action: "outcome_unknown",
+          workerKey: lease.workerKey,
+          workerGeneration: lease.workerGeneration,
+          workerFingerprintHash: lease.workerFingerprintHash,
+          assignmentKey: lease.assignmentKey,
+          fencingToken: lease.fencingToken,
+          leasedUntil: lease.leasedUntil,
+          recordedAt: this.#now(),
+          manifestHashAlgorithm: record.manifestHashAlgorithm,
+          manifestHash: record.manifestHash,
+          argumentsHashAlgorithm: record.argumentsHashAlgorithm,
+          argumentsHash: record.argumentsHash,
+        });
+        transaction.save({
+          ...record,
+          status: "outcome_unknown_pending_cleanup",
+        });
+        return "pending_cleanup";
       },
     );
   }

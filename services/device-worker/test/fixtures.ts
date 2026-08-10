@@ -50,8 +50,7 @@ export const requirementAssignment = RequirementWorkerAssignmentSchema.parse({
   },
 });
 
-export const mcpConnectionBindingKey =
-  "77777777-7777-4777-8777-777777777777";
+export const mcpConnectionBindingKey = "77777777-7777-4777-8777-777777777777";
 export const mcpInputSchema = {
   type: "object",
   properties: {

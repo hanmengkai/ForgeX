@@ -2,6 +2,8 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { WORKER_MCP_SUCCEEDED_SUMMARY } from "@forgex/contracts";
+
 import { DeviceWorkerRuntime } from "../src/runtime.js";
 import { InMemoryWorkerCompletionJournal } from "../src/completion-journal.js";
 import { ControlPlaneClientError } from "../src/control-plane-client.js";
@@ -546,8 +548,13 @@ describe("DeviceWorkerRuntime", () => {
         assignmentKey,
         fencingToken: 7,
         title: "发送通知",
+        projectKey: mcpAssignment.projectKey,
+        invocationKey: mcpAssignment.invocationKey,
       },
-      result: { outcome: "succeeded", summary: "通知已经发送" },
+      result: {
+        outcome: "succeeded",
+        summary: WORKER_MCP_SUCCEEDED_SUMMARY,
+      },
     });
     const stale = new ControlPlaneClientError(
       409,

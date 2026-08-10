@@ -1601,6 +1601,24 @@ export const buildControlPlaneApi = (
       assignmentKey: command.data.assignmentKey,
       fencingToken: command.data.fencingToken,
     };
+    if (command.data.outcome === "unknown") {
+      await workers.assertConnection(connection);
+      await mcpInvocations.reportExecutionOutcomeUnknown(connection.tenantKey, {
+        projectKey: command.data.projectKey,
+        invocationKey: command.data.invocationKey,
+        assignmentKey: command.data.assignmentKey,
+        fencingToken: command.data.fencingToken,
+        workerKey: connection.workerKey,
+        workerGeneration: connection.generation,
+      });
+      await workers.cancelMcpLease(connection, leaseCommand);
+      await mcpInvocations.finalizeOutcomeUnknownCleanup(
+        connection.tenantKey,
+        command.data.projectKey,
+        command.data.invocationKey,
+      );
+      return reply.send({ data: { alreadyCompleted: false } });
+    }
     let currentAssignment;
     try {
       currentAssignment = await workers.getMcpLease(connection, leaseCommand);
