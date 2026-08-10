@@ -135,6 +135,18 @@ export type LocalMcpConnector = (
   signal: AbortSignal,
 ) => Promise<BoundMcpClient>;
 
+const withoutRemoteErrorDetails = async <Result>(
+  publicMessage: string,
+  operation: () => Promise<Result>,
+): Promise<Result> => {
+  try {
+    return await operation();
+  } catch {
+    // MCP 服务端错误可能包含本地凭据或业务数据，不能进入 Worker 日志。
+    throw new Error(publicMessage);
+  }
+};
+
 const boundedFetch: typeof fetch = async (input, init) => {
   const response = await fetch(input, { ...init, redirect: "error" });
   const declaredLength = Number(response.headers.get("content-length"));
@@ -288,18 +300,25 @@ export class OfficialMcpExecutionAdapter implements LocalMcpExecutionAdapter {
     }
 
     const signal = input.signal ?? new AbortController().signal;
-    const client = await this.#connect(connection, signal);
+    const client = await withoutRemoteErrorDetails(
+      "本地 MCP 连接失败，服务端详情已隐藏",
+      () => this.#connect(connection, signal),
+    );
     try {
       let cursor: string | undefined;
       let targetSchema: Record<string, unknown> | null = null;
       const cursors = new Set<string>();
       for (let page = 0; page < 20; page += 1) {
-        const response = McpToolListSchema.parse(
-          await client.listTools(cursor ? { cursor } : {}, {
-            signal,
-            timeout: connection.timeoutMs,
-            maxTotalTimeout: connection.timeoutMs,
-          }),
+        const response = await withoutRemoteErrorDetails(
+          "本地 MCP 工具清单读取失败，服务端详情已隐藏",
+          async () =>
+            McpToolListSchema.parse(
+              await client.listTools(cursor ? { cursor } : {}, {
+                signal,
+                timeout: connection.timeoutMs,
+                maxTotalTimeout: connection.timeoutMs,
+              }),
+            ),
         );
         for (const tool of response.tools) {
           if (tool.name === input.assignment.execution.technicalName) {
@@ -321,23 +340,27 @@ export class OfficialMcpExecutionAdapter implements LocalMcpExecutionAdapter {
       ) {
         throw new Error("本地 MCP 工具参数定义与可信任务不一致");
       }
-      const result = McpToolResultSchema.parse(
-        await client.callTool(
-          {
-            name: input.assignment.execution.technicalName,
-            arguments: input.assignment.execution.arguments,
-            _meta: {
-              "forgex/invocationKey": input.assignment.invocationKey,
-              "forgex/assignmentKey": input.assignment.assignmentKey,
-              "forgex/fencingToken": input.assignment.fencingToken,
-            },
-          },
-          {
-            signal,
-            timeout: connection.timeoutMs,
-            maxTotalTimeout: connection.timeoutMs,
-          },
-        ),
+      const result = await withoutRemoteErrorDetails(
+        "本地 MCP 工具调用失败，服务端详情已隐藏",
+        async () =>
+          McpToolResultSchema.parse(
+            await client.callTool(
+              {
+                name: input.assignment.execution.technicalName,
+                arguments: input.assignment.execution.arguments,
+                _meta: {
+                  "forgex/invocationKey": input.assignment.invocationKey,
+                  "forgex/assignmentKey": input.assignment.assignmentKey,
+                  "forgex/fencingToken": input.assignment.fencingToken,
+                },
+              },
+              {
+                signal,
+                timeout: connection.timeoutMs,
+                maxTotalTimeout: connection.timeoutMs,
+              },
+            ),
+          ),
       );
       return result.isError === true
         ? { outcome: "failed", summary: WORKER_MCP_FAILED_SUMMARY }
