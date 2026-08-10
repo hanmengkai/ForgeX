@@ -85,6 +85,39 @@ const authenticatedPrincipalSchema = z
     roles: [...new Set(principal.roles)] as PlatformRole[],
   }));
 
+const SESSION_COOKIE_NAME = "forgex_session";
+const sessionCookieValuePattern = /^[A-Za-z0-9._~-]{1,4096}$/;
+
+const readSessionCookie = (cookieHeader: string | undefined): string | null => {
+  if (!cookieHeader) return null;
+  const matches = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(`${SESSION_COOKIE_NAME}=`));
+  if (matches.length !== 1) return null;
+  const encodedValue = matches[0]!.slice(SESSION_COOKIE_NAME.length + 1);
+  try {
+    const value = decodeURIComponent(encodedValue);
+    return sessionCookieValuePattern.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const requestSessionCredential = (request: FastifyRequest) => {
+  if (request.headers.authorization) {
+    return {
+      authorization: request.headers.authorization,
+      cookieAuthenticated: false,
+    };
+  }
+  const cookieSession = readSessionCookie(request.headers.cookie);
+  return {
+    authorization: cookieSession ? `Bearer ${cookieSession}` : undefined,
+    cookieAuthenticated: cookieSession !== null,
+  };
+};
+
 type ValidationIssue = z.ZodError["issues"][number];
 
 const validationMessage = (issue: ValidationIssue): string => {
@@ -235,7 +268,19 @@ export const buildControlPlaneApi = (
       path === "/api/v1/workers" ||
       path.startsWith("/api/v1/workers/")
     ) {
-      request.principal = await authenticate(request.headers.authorization);
+      const credential = requestSessionCredential(request);
+      request.principal = await authenticate(credential.authorization);
+      if (
+        credential.cookieAuthenticated &&
+        !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+        request.headers["x-forgex-csrf"] !== "1"
+      ) {
+        throw new ApplicationError(
+          403,
+          "csrf_validation_failed",
+          "页面验证已失效，请刷新后重试",
+        );
+      }
     }
   });
 

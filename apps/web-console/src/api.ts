@@ -1,0 +1,266 @@
+import { z } from "zod";
+
+export interface RequirementActionLinks {
+  submitConfirmation?: string | undefined;
+  confirm?: string | undefined;
+  startDelivery?: string | undefined;
+}
+
+export interface RequirementListItem {
+  title: string;
+  summary: string;
+  version: string;
+  status:
+    | "正在整理"
+    | "等待负责人确认"
+    | "已确认，等待交付"
+    | "内容已更新，等待重新确认"
+    | "AI 正在实现"
+    | "等待产品验收"
+    | "已完成";
+  nextStep: string;
+  acceptanceProgress: string;
+  links: {
+    self: string;
+    actions: RequirementActionLinks;
+  };
+}
+
+export interface RequirementDetail extends RequirementListItem {
+  spec: RequirementSpecInput;
+}
+
+export interface RequirementSpecInput {
+  schemaVersion: 1;
+  title: string;
+  goal: string;
+  userStories: Array<{ role: string; need: string; value: string }>;
+  acceptanceCriteria: Array<{
+    title: string;
+    description: string;
+    priority: "must" | "should" | "could";
+  }>;
+  openQuestions: string[];
+}
+
+export interface RequirementListPage {
+  items: RequirementListItem[];
+  nextCursor: string | null;
+}
+
+export interface ForgeXClient {
+  listRequirements(): Promise<RequirementListPage>;
+  getRequirement(selfUrl: string): Promise<RequirementDetail>;
+  createRequirement(spec: RequirementSpecInput): Promise<void>;
+  runRequirementAction(
+    actionUrl: string | undefined,
+    body: Record<string, unknown>,
+  ): Promise<void>;
+}
+
+const requirementStatuses = [
+  "正在整理",
+  "等待负责人确认",
+  "已确认，等待交付",
+  "内容已更新，等待重新确认",
+  "AI 正在实现",
+  "等待产品验收",
+  "已完成",
+] as const;
+const requirementSelfPattern =
+  /^\/api\/v1\/requirements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const actionSuffixes = {
+  submitConfirmation: "/submit-confirmation",
+  confirm: "/confirm",
+  startDelivery: "/start-delivery",
+} as const;
+
+const requirementLinksSchema = z
+  .object({
+    self: z.string().regex(requirementSelfPattern),
+    actions: z
+      .object({
+        submitConfirmation: z.string().optional(),
+        confirm: z.string().optional(),
+        startDelivery: z.string().optional(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((links, context) => {
+    for (const [action, suffix] of Object.entries(actionSuffixes) as Array<
+      [keyof RequirementActionLinks, string]
+    >) {
+      const actionUrl = links.actions[action];
+      if (actionUrl !== undefined && actionUrl !== `${links.self}${suffix}`) {
+        context.addIssue({
+          code: "custom",
+          path: ["actions", action],
+          message: "动作链接与需求不匹配",
+        });
+      }
+    }
+  });
+
+const requirementListItemSchema = z
+  .object({
+    title: z.string().trim().min(1).max(150),
+    summary: z.string().trim().min(1).max(2_000),
+    version: z.string().trim().min(1).max(40),
+    status: z.enum(requirementStatuses),
+    nextStep: z.string().trim().min(1).max(500),
+    acceptanceProgress: z.string().trim().min(1).max(500),
+    links: requirementLinksSchema,
+  })
+  .strict();
+
+const requirementSpecSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    title: z.string(),
+    goal: z.string(),
+    userStories: z.array(
+      z
+        .object({ role: z.string(), need: z.string(), value: z.string() })
+        .strict(),
+    ),
+    acceptanceCriteria: z.array(
+      z
+        .object({
+          title: z.string(),
+          description: z.string(),
+          priority: z.enum(["must", "should", "could"]),
+        })
+        .strict(),
+    ),
+    openQuestions: z.array(z.string()),
+  })
+  .strict();
+
+const requirementListResponseSchema = z
+  .object({
+    data: z.array(requirementListItemSchema).max(100),
+    meta: z
+      .object({ nextCursor: z.string().min(1).max(500).nullable() })
+      .strict(),
+  })
+  .strict();
+const requirementDetailResponseSchema = z
+  .object({
+    data: requirementListItemSchema.extend({ spec: requirementSpecSchema }),
+  })
+  .strict();
+
+const assertRequirementSelfUrl = (url: string): void => {
+  if (!requirementSelfPattern.test(url)) {
+    throw new Error("这个需求入口已经失效，请刷新页面后重试");
+  }
+};
+
+const assertRequirementActionUrl = (url: string | undefined): string => {
+  if (!url) {
+    throw new Error("这个操作已经失效，请刷新页面后重试");
+  }
+  const suffix = Object.values(actionSuffixes).find((item) =>
+    url.endsWith(item),
+  );
+  const selfUrl = suffix ? url.slice(0, -suffix.length) : "";
+  if (!suffix || !requirementSelfPattern.test(selfUrl)) {
+    throw new Error("这个操作已经失效，请刷新页面后重试");
+  }
+  return url;
+};
+
+interface HttpClientOptions {
+  baseUrl?: string;
+  authorization?: string;
+  fetcher?: typeof fetch;
+}
+
+const readErrorMessage = async (response: Response): Promise<string> => {
+  try {
+    const body = (await response.json()) as {
+      error?: { message?: unknown };
+    };
+    if (typeof body.error?.message === "string" && body.error.message.trim()) {
+      return body.error.message;
+    }
+  } catch {
+    // 非 JSON 响应使用统一的用户提示。
+  }
+  return "服务暂时没有响应，请稍后再试";
+};
+
+export const createHttpForgeXClient = (
+  options: HttpClientOptions = {},
+): ForgeXClient => {
+  const fetcher = options.fetcher ?? fetch;
+  const baseUrl = options.baseUrl?.replace(/\/$/, "") ?? "";
+  const request = async (
+    path: string,
+    init: RequestInit = {},
+  ): Promise<Response> => {
+    const headers = new Headers(init.headers);
+    headers.set("Accept", "application/json");
+    if (init.body) {
+      headers.set("Content-Type", "application/json");
+    }
+    if (init.method && !["GET", "HEAD", "OPTIONS"].includes(init.method)) {
+      headers.set("X-ForgeX-CSRF", "1");
+    }
+    if (options.authorization) {
+      headers.set("Authorization", options.authorization);
+    }
+    const response = await fetcher(`${baseUrl}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
+    return response;
+  };
+
+  return {
+    listRequirements: async () => {
+      const response = await request("/api/v1/requirements?limit=100");
+      const parsed = requirementListResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("需求列表格式不正确，请联系管理员");
+      }
+      return {
+        items: parsed.data.data,
+        nextCursor: parsed.data.meta.nextCursor,
+      };
+    },
+    getRequirement: async (selfUrl) => {
+      assertRequirementSelfUrl(selfUrl);
+      const response = await request(selfUrl);
+      const parsed = requirementDetailResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("需求详情格式不正确，请联系管理员");
+      }
+      if (parsed.data.data.links.self !== selfUrl) {
+        throw new Error("需求详情与当前需求不匹配，请刷新页面后重试");
+      }
+      return parsed.data.data;
+    },
+    createRequirement: async (spec) => {
+      await request("/api/v1/requirements", {
+        method: "POST",
+        body: JSON.stringify(spec),
+      });
+    },
+    runRequirementAction: async (actionUrl, body) => {
+      await request(assertRequirementActionUrl(actionUrl), {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+  };
+};

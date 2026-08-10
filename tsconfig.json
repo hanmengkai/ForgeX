@@ -5,6 +5,7 @@
     { "path": "./packages/domain" },
     { "path": "./packages/application" },
     { "path": "./packages/postgres" },
-    { "path": "./apps/control-plane-api" }
+    { "path": "./apps/control-plane-api" },
+    { "path": "./apps/web-console" }
   ]
 }

@@ -113,6 +113,38 @@ describe("需求 API", () => {
     await app.close();
   });
 
+  it("接受同源 HttpOnly Cookie 会话，并保护写操作免受跨站请求", async () => {
+    const { app } = createTestApp();
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/v1/requirements",
+      headers: { cookie: "forgex_session=product-session" },
+    });
+    expect(list.statusCode).toBe(200);
+
+    const unprotected = await app.inject({
+      method: "POST",
+      url: "/api/v1/requirements",
+      headers: { cookie: "forgex_session=product-session" },
+      payload: validRequirement,
+    });
+    expect(unprotected.statusCode).toBe(403);
+    expect(unprotected.json().error.code).toBe("csrf_validation_failed");
+
+    const protectedRequest = await app.inject({
+      method: "POST",
+      url: "/api/v1/requirements",
+      headers: {
+        cookie: "forgex_session=product-session",
+        "x-forgex-csrf": "1",
+      },
+      payload: validRequirement,
+    });
+    expect(protectedRequest.statusCode).toBe(201);
+    await app.close();
+  });
+
   it("创建需求只返回业务视图，内部标识仅用于 Location", async () => {
     const { app } = createTestApp();
 
