@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/contracts" },
     { "path": "./packages/domain" },
+    { "path": "./packages/extensions" },
     { "path": "./packages/application" },
     { "path": "./packages/postgres" },
     { "path": "./apps/control-plane-api" },

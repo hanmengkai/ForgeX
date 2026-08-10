@@ -71,9 +71,25 @@ export interface WorkerFleetOverview {
   };
 }
 
+export interface ExtensionCatalogItem {
+  name: string;
+  summary: string;
+  status: "可使用" | "正在更新" | "需要处理" | "暂不可用";
+  detail: string;
+  supportingText: string;
+  links: { self: string };
+}
+
+export interface ExtensionCatalogOverview {
+  businessKnowledge: ExtensionCatalogItem[];
+  teamCapabilities: ExtensionCatalogItem[];
+  externalTools: ExtensionCatalogItem[];
+}
+
 export interface ForgeXClient {
   listRequirements(): Promise<RequirementListPage>;
   listWorkers(): Promise<WorkerFleetOverview>;
+  listExtensions(): Promise<ExtensionCatalogOverview>;
   getRequirement(selfUrl: string): Promise<RequirementDetail>;
   createRequirement(spec: RequirementSpecInput): Promise<void>;
   runRequirementAction(
@@ -291,6 +307,30 @@ const workerListResponseSchema = z
     }
   });
 
+const extensionSelfPattern =
+  /^\/api\/v1\/extensions\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const extensionCatalogItemSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100),
+    summary: z.string().trim().min(4).max(500),
+    status: z.enum(["可使用", "正在更新", "需要处理", "暂不可用"]),
+    detail: z.string().trim().min(2).max(200),
+    supportingText: z.string().trim().min(2).max(200),
+    links: z.object({ self: z.string().regex(extensionSelfPattern) }).strict(),
+  })
+  .strict();
+const extensionCatalogResponseSchema = z
+  .object({
+    data: z
+      .object({
+        businessKnowledge: z.array(extensionCatalogItemSchema).max(100),
+        teamCapabilities: z.array(extensionCatalogItemSchema).max(100),
+        externalTools: z.array(extensionCatalogItemSchema).max(100),
+      })
+      .strict(),
+  })
+  .strict();
+
 const assertRequirementSelfUrl = (url: string): void => {
   if (!requirementSelfPattern.test(url)) {
     throw new Error("这个需求入口已经失效，请刷新页面后重试");
@@ -386,6 +426,16 @@ export const createHttpForgeXClient = (
         workers: parsed.data.data,
         capacity: parsed.data.meta,
       };
+    },
+    listExtensions: async () => {
+      const response = await request("/api/v1/extensions");
+      const parsed = extensionCatalogResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("扩展目录格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
     },
     getRequirement: async (selfUrl) => {
       assertRequirementSelfUrl(selfUrl);

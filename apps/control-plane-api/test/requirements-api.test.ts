@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   InMemoryRequirementRepository,
+  InMemoryExtensionCatalogRepository,
   InMemoryPreviewArtifactStore,
   InMemoryWorkerFleetRepository,
   RequirementApplicationService,
@@ -73,6 +74,7 @@ const validRequirement = {
 
 const createTestApp = () => {
   const repository = new InMemoryRequirementRepository();
+  const extensionCatalogRepository = new InMemoryExtensionCatalogRepository();
   const previewArtifactStore = new InMemoryPreviewArtifactStore();
   const sessions = new Map<string, AuthenticatedPrincipal>([
     ["product-session", productOwner],
@@ -90,16 +92,93 @@ const createTestApp = () => {
   };
   const app = buildControlPlaneApi({
     authenticator,
+    extensionCatalogRepository,
     requirementRepository: repository,
     previewArtifactStore,
     workerFleetRepository: new InMemoryWorkerFleetRepository(),
     projectKey,
     clock: () => new Date("2026-08-10T03:00:00.000Z"),
   });
-  return { app, repository, previewArtifactStore };
+  return {
+    app,
+    repository,
+    previewArtifactStore,
+    extensionCatalogRepository,
+  };
 };
 
 describe("需求 API", () => {
+  it("扩展目录按业务资料、团队能力和外部工具返回人性化视图", async () => {
+    const { app, extensionCatalogRepository } = createTestApp();
+    await extensionCatalogRepository.publish({
+      schemaVersion: 1,
+      extensionKey: "99999999-9999-4999-8999-999999999999",
+      tenantKey,
+      projectKey,
+      revision: 1,
+      kind: "skill",
+      name: "需求风险检查",
+      summary: "在进入开发前检查遗漏、歧义和高风险变更",
+      status: "ready",
+      version: "1.0.0",
+      compatibleBlueprints: ["Web 应用"],
+      successRate: 94,
+      evaluationCount: 126,
+      updatedAt: "2026-08-10T06:00:00.000Z",
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/extensions",
+      headers: { authorization: "Bearer developer-session" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: {
+        businessKnowledge: [],
+        teamCapabilities: [
+          {
+            name: "需求风险检查",
+            summary: "在进入开发前检查遗漏、歧义和高风险变更",
+            status: "可使用",
+            detail: "版本 1.0.0 · 已验证 126 次",
+            supportingText: "成功率 94%",
+            links: {
+              self: "/api/v1/extensions/99999999-9999-4999-8999-999999999999",
+            },
+          },
+        ],
+        externalTools: [],
+      },
+    });
+    expect(response.body).not.toContain("extensionKey");
+
+    const detail = await app.inject({
+      method: "GET",
+      url: response.json().data.teamCapabilities[0].links.self,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toEqual({
+      data: response.json().data.teamCapabilities[0],
+    });
+
+    const hiddenFromOtherTenant = await app.inject({
+      method: "GET",
+      url: response.json().data.teamCapabilities[0].links.self,
+      headers: { authorization: "Bearer other-tenant-session" },
+    });
+    expect(hiddenFromOtherTenant.statusCode).toBe(404);
+    expect(hiddenFromOtherTenant.json()).toEqual({
+      error: {
+        code: "extension_not_found",
+        message: "没有找到这个扩展",
+      },
+    });
+    await app.close();
+  });
+
   it("未登录时返回清晰的 401 错误", async () => {
     const { app } = createTestApp();
 
@@ -688,6 +767,7 @@ describe("需求 API", () => {
     const location = created.headers.location!;
     const requests = [
       { method: "GET" as const, url: "/api/v1/requirements" },
+      { method: "GET" as const, url: "/api/v1/extensions" },
       {
         method: "POST" as const,
         url: "/api/v1/requirements",

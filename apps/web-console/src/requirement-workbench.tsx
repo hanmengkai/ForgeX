@@ -7,6 +7,7 @@ import type {
   RequirementListItem,
 } from "./api.js";
 import { CreateRequirementDialog } from "./create-requirement-dialog.js";
+import { ExtensionCenter } from "./extension-center.js";
 import { ArrowIcon, CheckIcon, PlusIcon, SparkIcon } from "./icons.js";
 import { WorkerCenter } from "./worker-center.js";
 
@@ -214,9 +215,9 @@ export function RequirementWorkbench({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [activeView, setActiveView] = useState<"workbench" | "workers">(
-    "workbench",
-  );
+  const [activeView, setActiveView] = useState<
+    "workbench" | "workers" | "extensions"
+  >("workbench");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = useState<string | null>(null);
   const [detail, setDetail] = useState<RequirementDetail | null>(null);
@@ -370,9 +371,15 @@ export function RequirementWorkbench({
           <span className="nav-item disabled" aria-disabled="true">
             <span>✓</span>质量与验收
           </span>
-          <span className="nav-item disabled" aria-disabled="true">
+          <button
+            className={`nav-item ${activeView === "extensions" ? "active" : ""}`}
+            type="button"
+            aria-label="扩展中心"
+            aria-current={activeView === "extensions" ? "page" : undefined}
+            onClick={() => setActiveView("extensions")}
+          >
             <span>◇</span>扩展中心
-          </span>
+          </button>
         </nav>
         <div className="sidebar-note">
           <CheckIcon />
@@ -383,11 +390,10 @@ export function RequirementWorkbench({
         </div>
       </aside>
 
-      <main
-        className="workspace"
-        id={activeView === "workbench" ? "workbench" : "workers"}
-      >
-        {activeView === "workers" ? (
+      <main className="workspace" id={activeView}>
+        {activeView === "extensions" ? (
+          <ExtensionCenter client={client} />
+        ) : activeView === "workers" ? (
           <WorkerCenter client={client} />
         ) : (
           <>

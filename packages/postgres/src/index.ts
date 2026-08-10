@@ -10,3 +10,4 @@ export {
   type PostgresRequirementRepositoryOptions,
 } from "./postgres-requirement-repository.js";
 export { PostgresPreviewArtifactStore } from "./postgres-preview-artifact-store.js";
+export { PostgresExtensionCatalogRepository } from "./postgres-extension-catalog-repository.js";

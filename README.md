@@ -36,11 +36,12 @@ Web Console 默认运行在 `http://localhost:4173`，并把 `/api` 转发到本
 - 需求控制面：版本化需求、确认审批、租户与项目隔离、分页和审计。
 - 独立证据链：可信 Runner、公钥验签、交付候选绑定、内容寻址的同源 Preview 网关，以及验收快照。
 - Codex 设备网关：最多五个账户、出站心跳、定向轮询、租约续期、fencing、重连回收和幂等完成。
+- 扩展控制面：按“业务资料、团队能力、外部工具”管理知识库、Skills 和 MCP 元数据，页面不暴露传输方式、凭据或内部标识。
 - 共享持久化边界：测试/单机开发使用内存仓储；生产需求主线、审计、交付 outbox、Preview 制品和设备舰队均使用 PostgreSQL 事务仓储。
 - 人性化 Web 工作台：使用业务语言展示需求状态、下一步和验收标准，支持需求创建、详情下钻和受服务端授权约束的操作；设备中心可查看五账户容量、在线忙闲和当前交付，页面已覆盖桌面/移动端、明暗主题和键盘操作。
 
 浏览器生产认证由同源认证层签发名为 `forgex_session` 的 HttpOnly Cookie，建议同时启用 `Secure`、`SameSite=Strict` 和 `Path=/`。Control Plane 对 Cookie 会话的写请求额外要求 `X-ForgeX-CSRF: 1`；非浏览器客户端仍可通过现有 `Authorization: Bearer ...` 适配器接入。Cookie 的签发、轮换和注销属于后续身份模块，不由 Web 静态资源处理。
 
-生产接入前，需要按编号依次执行 [Worker 舰队迁移](packages/postgres/migrations/0001_worker_fleet.sql)、[需求控制面迁移](packages/postgres/migrations/0002_requirement_control_plane.sql)、[验收审计迁移](packages/postgres/migrations/0003_requirement_acceptance_audit.sql) 和 [Preview 制品迁移](packages/postgres/migrations/0004_preview_artifacts.sql)，并向所有 API 副本注入同一数据库上的 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository` 与 `PostgresPreviewArtifactStore`。需求仓储还必须注入保留当前及历史验证公钥的 `EvidenceAuthority`，旧密钥应设置为仅核验历史证据。当前仍是预发布版本，不应直接用于生产交付。
+生产接入前，需要按编号依次执行 [Worker 舰队迁移](packages/postgres/migrations/0001_worker_fleet.sql)、[需求控制面迁移](packages/postgres/migrations/0002_requirement_control_plane.sql)、[验收审计迁移](packages/postgres/migrations/0003_requirement_acceptance_audit.sql)、[Preview 制品迁移](packages/postgres/migrations/0004_preview_artifacts.sql) 和 [扩展目录迁移](packages/postgres/migrations/0005_extension_catalog.sql)，并向所有 API 副本注入同一数据库上的 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository`、`PostgresPreviewArtifactStore` 与 `PostgresExtensionCatalogRepository`。需求仓储还必须注入保留当前及历史验证公钥的 `EvidenceAuthority`，旧密钥应设置为仅核验历史证据。当前仍是预发布版本，不应直接用于生产交付。
 
 详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。

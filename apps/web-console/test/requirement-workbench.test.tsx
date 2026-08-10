@@ -50,6 +50,11 @@ const items: RequirementListItem[] = [
 
 const createClient = (): ForgeXClient => ({
   listRequirements: vi.fn().mockResolvedValue({ items, nextCursor: null }),
+  listExtensions: vi.fn().mockResolvedValue({
+    businessKnowledge: [],
+    teamCapabilities: [],
+    externalTools: [],
+  }),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [
       {
@@ -142,6 +147,61 @@ describe("RequirementWorkbench", () => {
     expect(screen.getByText("还有 3 个可用槽位")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/sessionKey|workerKey|指纹/);
     expect(client.listWorkers).toHaveBeenCalledTimes(1);
+  });
+
+  it("扩展中心用业务资料、团队能力和外部工具组织项目能力", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.listExtensions).mockResolvedValue({
+      businessKnowledge: [
+        {
+          name: "访客业务资料",
+          summary: "物业访客预约的规则、术语和历史决策",
+          status: "可使用",
+          detail: "已整理 12 份资料",
+          supportingText: "项目成员可使用",
+          links: {
+            self: "/api/v1/extensions/33333333-3333-4333-8333-333333333333",
+          },
+        },
+      ],
+      teamCapabilities: [
+        {
+          name: "需求风险检查",
+          summary: "在进入开发前检查遗漏、歧义和高风险变更",
+          status: "可使用",
+          detail: "版本 1.3.0 · 已验证 126 次",
+          supportingText: "成功率 94%",
+          links: {
+            self: "/api/v1/extensions/44444444-4444-4444-8444-444444444444",
+          },
+        },
+      ],
+      externalTools: [
+        {
+          name: "代码仓库工具",
+          summary: "读取代码、创建交付分支并运行受控检查",
+          status: "可使用",
+          detail: "3 项业务能力",
+          supportingText: "读取自动放行，变更需要确认",
+          links: {
+            self: "/api/v1/extensions/55555555-5555-4555-8555-555555555555",
+          },
+        },
+      ],
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(screen.getByRole("button", { name: "扩展中心" }));
+
+    expect(await screen.findByText("访客业务资料")).toBeInTheDocument();
+    expect(screen.getByText("需求风险检查")).toBeInTheDocument();
+    expect(screen.getByText("代码仓库工具")).toBeInTheDocument();
+    expect(screen.getByText("读取自动放行，变更需要确认")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
+    );
+    expect(client.listExtensions).toHaveBeenCalledTimes(1);
   });
 
   it("只把服务端允许的动作显示成清晰按钮", async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   InMemoryRequirementRepository,
+  InMemoryExtensionCatalogRepository,
   InMemoryPreviewArtifactStore,
   InMemoryWorkerFleetRepository,
   type AuthenticatedPrincipal,
@@ -114,6 +115,7 @@ const createTestApp = (
   };
   const app = buildControlPlaneApi({
     authenticator,
+    extensionCatalogRepository: new InMemoryExtensionCatalogRepository(),
     requirementRepository,
     previewArtifactStore: new InMemoryPreviewArtifactStore(),
     workerFleetRepository,

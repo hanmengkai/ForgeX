@@ -10,10 +10,12 @@ import { z } from "zod";
 import {
   ApplicationError,
   DeliveryCoordinatorService,
+  ExtensionCatalogApplicationService,
   RequirementApplicationService,
   WorkerFleetService,
   canPerformRequirementAction,
   type AuthenticatedPrincipal,
+  type ExtensionCatalogRepository,
   type PlatformRole,
   type PreviewArtifactStore,
   type RequirementRepository,
@@ -40,6 +42,7 @@ declare module "fastify" {
 
 export interface ControlPlaneApiOptions {
   authenticator: SessionAuthenticator;
+  extensionCatalogRepository: ExtensionCatalogRepository;
   requirementRepository: RequirementRepository;
   previewArtifactStore: PreviewArtifactStore;
   workerFleetRepository: WorkerFleetRepository;
@@ -51,6 +54,14 @@ export interface ControlPlaneApiOptions {
 const requirementParamsSchema = z
   .object({
     requirementKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const extensionParamsSchema = z
+  .object({
+    extensionKey: z
       .string()
       .uuid()
       .transform((value) => value.toLowerCase()),
@@ -292,6 +303,10 @@ export const buildControlPlaneApi = (
     projectKey: options.projectKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+  const extensions = new ExtensionCatalogApplicationService({
+    repository: options.extensionCatalogRepository,
+    projectKey: options.projectKey,
+  });
   const workers = new WorkerFleetService({
     repository: options.workerFleetRepository,
     ...(options.clock ? { clock: options.clock } : {}),
@@ -358,6 +373,8 @@ export const buildControlPlaneApi = (
     if (
       path === "/api/v1/requirements" ||
       path.startsWith("/api/v1/requirements/") ||
+      path === "/api/v1/extensions" ||
+      path.startsWith("/api/v1/extensions/") ||
       path === "/api/v1/workers" ||
       path.startsWith("/api/v1/workers/")
     ) {
@@ -511,6 +528,32 @@ export const buildControlPlaneApi = (
         ),
       })),
       meta: { nextCursor: result.nextCursor },
+    });
+  });
+
+  app.get("/api/v1/extensions", async (request, reply) => {
+    const principal = principalFrom(request);
+    return reply.send({
+      data: await extensions.overviewForPeople(principal),
+    });
+  });
+
+  app.get("/api/v1/extensions/:extensionKey", async (request, reply) => {
+    const principal = principalFrom(request);
+    const params = extensionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "请求内容需要调整",
+        validationDetails(params.error),
+      );
+    }
+    return reply.send({
+      data: await extensions.detailForPeople(
+        principal,
+        params.data.extensionKey,
+      ),
     });
   });
 

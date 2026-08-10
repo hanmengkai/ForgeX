@@ -6,6 +6,16 @@ export type {
 export { ApplicationError } from "./errors.js";
 export type { ApplicationErrorDetail } from "./errors.js";
 export {
+  ExtensionCatalogApplicationService,
+  type ExtensionCatalogApplicationServiceOptions,
+  type ExtensionCatalogOverviewForPeople,
+  type ExtensionItemForPeople,
+} from "./extension-catalog-service.js";
+export {
+  InMemoryExtensionCatalogRepository,
+  type ExtensionCatalogRepository,
+} from "./extension-catalog-repository.js";
+export {
   DeliveryCoordinatorService,
   type DeliveryCoordinatorServiceOptions,
 } from "./delivery-coordinator-service.js";

@@ -8,6 +8,7 @@
     "@forgex/application": "0.1.0",
     "@forgex/contracts": "0.1.0",
     "@forgex/domain": "0.1.0",
+    "@forgex/extensions": "0.1.0",
     "pg": "^8.16.3"
   },
   "devDependencies": {

@@ -6,6 +6,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@forgex/contracts": "0.1.0",
-    "@forgex/domain": "0.1.0"
+    "@forgex/domain": "0.1.0",
+    "@forgex/extensions": "0.1.0"
   }
 }

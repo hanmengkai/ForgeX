@@ -5,6 +5,5 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src/**/*.ts"],
-  "references": [{ "path": "../application" }, { "path": "../extensions" }]
+  "include": ["src/**/*.ts"]
 }
