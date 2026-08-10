@@ -170,6 +170,21 @@ describe("FileVerificationJournal", () => {
         (name) => name.endsWith(".sock") || name.endsWith(".lock"),
       ),
     ).toEqual([]);
+    const lockDescriptorName = lockArtifacts.find((name) =>
+      name.endsWith(".lck"),
+    );
+    expect(lockDescriptorName).toBeDefined();
+    await expect(
+      readFile(path.join(root, lockDescriptorName!), "utf8").then(
+        (value) => JSON.parse(value) as unknown,
+      ),
+    ).resolves.toMatchObject({
+      schemaVersion: 1,
+      state: "active",
+      identityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      ownerToken: expect.stringMatching(/^[a-f0-9-]{36}$/u),
+      challenge: expect.stringMatching(/^[a-f0-9-]{36}$/u),
+    });
 
     await expect(
       FileVerificationJournal.open(filePath, testJournalOptions),
