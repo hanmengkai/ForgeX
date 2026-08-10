@@ -229,6 +229,11 @@ describe("Codex 设备网关 API", () => {
           currentWork: null,
         },
       ],
+      meta: {
+        connectedAccounts: 1,
+        maxAccounts: 5,
+        availableSlots: 4,
+      },
     });
     expect(list.body).not.toContain("accountFingerprint");
     expect(list.body).not.toContain("sessionKey");

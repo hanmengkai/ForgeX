@@ -8,6 +8,7 @@ import type {
 } from "./api.js";
 import { CreateRequirementDialog } from "./create-requirement-dialog.js";
 import { ArrowIcon, CheckIcon, PlusIcon, SparkIcon } from "./icons.js";
+import { WorkerCenter } from "./worker-center.js";
 
 interface RequirementWorkbenchProps {
   client: ForgeXClient;
@@ -160,6 +161,9 @@ export function RequirementWorkbench({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [activeView, setActiveView] = useState<"workbench" | "workers">(
+    "workbench",
+  );
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = useState<string | null>(null);
   const [detail, setDetail] = useState<RequirementDetail | null>(null);
@@ -284,15 +288,32 @@ export function RequirementWorkbench({
           </span>
         </div>
         <nav aria-label="主导航">
-          <a className="nav-item active" href="#workbench">
+          <button
+            className={`nav-item ${activeView === "workbench" ? "active" : ""}`}
+            type="button"
+            aria-label="工作台"
+            aria-current={activeView === "workbench" ? "page" : undefined}
+            onClick={() => setActiveView("workbench")}
+          >
             <span>⌂</span>工作台
-          </a>
-          <a className="nav-item" href="#requirements">
+          </button>
+          <button
+            className="nav-item"
+            type="button"
+            aria-label="需求"
+            onClick={() => setActiveView("workbench")}
+          >
             <span>◫</span>需求
-          </a>
-          <span className="nav-item disabled" aria-disabled="true">
+          </button>
+          <button
+            className={`nav-item ${activeView === "workers" ? "active" : ""}`}
+            type="button"
+            aria-label="设备中心"
+            aria-current={activeView === "workers" ? "page" : undefined}
+            onClick={() => setActiveView("workers")}
+          >
             <span>⌘</span>设备中心
-          </span>
+          </button>
           <span className="nav-item disabled" aria-disabled="true">
             <span>✓</span>质量与验收
           </span>
@@ -309,103 +330,114 @@ export function RequirementWorkbench({
         </div>
       </aside>
 
-      <main className="workspace" id="workbench">
-        <header className="topbar">
-          <div>
-            <span className="eyebrow">今天的交付概况</span>
-            <h1>你好，欢迎回来</h1>
-            <p>先处理需要判断的事项，其余工作交给 AI 和独立验证流程。</p>
-          </div>
-          <button
-            className="button primary"
-            type="button"
-            onClick={() => setCreating(true)}
-          >
-            <PlusIcon />
-            新建需求
-          </button>
-        </header>
-
-        <section className="summary-grid" aria-label="需求概况">
-          <div className="summary-card attention">
-            <span>需要我处理</span>
-            <strong>{summary.needsAction}</strong>
-            <small>确认或安排交付</small>
-          </div>
-          <div className="summary-card running">
-            <span>AI 正在执行</span>
-            <strong>{summary.running}</strong>
-            <small>设备并行处理中</small>
-          </div>
-          <div className="summary-card neutral">
-            <span>等待我验收</span>
-            <strong>{summary.accepting}</strong>
-            <small>可查看真实效果</small>
-          </div>
-          <div className="summary-card success">
-            <span>本轮已完成</span>
-            <strong>{summary.completed}</strong>
-            <small>证据链完整</small>
-          </div>
-        </section>
-
-        <section className="content-section" id="requirements">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">需求主线</span>
-              <h2>正在推进的工作</h2>
-            </div>
-            <span className="filter-button">共 {items.length} 项</span>
-          </div>
-
-          {error ? (
-            <div className="page-error" role="alert">
-              {error}
-              <button type="button" onClick={() => void load()}>
-                重新加载
-              </button>
-            </div>
-          ) : null}
-          {loading ? (
-            <div className="loading-state" role="status">
-              正在整理需求进度…
-            </div>
-          ) : items.length === 0 && !error ? (
-            <div className="empty-state">
-              <SparkIcon />
-              <h3>从第一个业务目标开始</h3>
-              <p>创建需求后，ForgeX 会引导确认、实现和验证。</p>
+      <main
+        className="workspace"
+        id={activeView === "workbench" ? "workbench" : "workers"}
+      >
+        {activeView === "workers" ? (
+          <WorkerCenter client={client} />
+        ) : (
+          <>
+            <header className="topbar">
+              <div>
+                <span className="eyebrow">今天的交付概况</span>
+                <h1>你好，欢迎回来</h1>
+                <p>先处理需要判断的事项，其余工作交给 AI 和独立验证流程。</p>
+              </div>
               <button
                 className="button primary"
                 type="button"
                 onClick={() => setCreating(true)}
               >
+                <PlusIcon />
                 新建需求
               </button>
-            </div>
-          ) : items.length > 0 ? (
-            <div className="requirement-list">
-              {items.map((item) => (
-                <RequirementCard
-                  key={item.links.self}
-                  item={item}
-                  busyAction={busyAction}
-                  actionsBusy={busyAction !== null}
-                  expanded={expandedDetail === item.links.self}
-                  detail={expandedDetail === item.links.self ? detail : null}
-                  detailError={
-                    expandedDetail === item.links.self ? detailError : null
-                  }
-                  detailLoading={
-                    expandedDetail === item.links.self && detailLoading
-                  }
-                  onAction={runAction}
-                  onToggleDetail={toggleDetail}
-                />
-              ))}
-            </div>
-          ) : null}
-        </section>
+            </header>
+
+            <section className="summary-grid" aria-label="需求概况">
+              <div className="summary-card attention">
+                <span>需要我处理</span>
+                <strong>{summary.needsAction}</strong>
+                <small>确认或安排交付</small>
+              </div>
+              <div className="summary-card running">
+                <span>AI 正在执行</span>
+                <strong>{summary.running}</strong>
+                <small>设备并行处理中</small>
+              </div>
+              <div className="summary-card neutral">
+                <span>等待我验收</span>
+                <strong>{summary.accepting}</strong>
+                <small>可查看真实效果</small>
+              </div>
+              <div className="summary-card success">
+                <span>本轮已完成</span>
+                <strong>{summary.completed}</strong>
+                <small>证据链完整</small>
+              </div>
+            </section>
+
+            <section className="content-section" id="requirements">
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">需求主线</span>
+                  <h2>正在推进的工作</h2>
+                </div>
+                <span className="filter-button">共 {items.length} 项</span>
+              </div>
+
+              {error ? (
+                <div className="page-error" role="alert">
+                  {error}
+                  <button type="button" onClick={() => void load()}>
+                    重新加载
+                  </button>
+                </div>
+              ) : null}
+              {loading ? (
+                <div className="loading-state" role="status">
+                  正在整理需求进度…
+                </div>
+              ) : items.length === 0 && !error ? (
+                <div className="empty-state">
+                  <SparkIcon />
+                  <h3>从第一个业务目标开始</h3>
+                  <p>创建需求后，ForgeX 会引导确认、实现和验证。</p>
+                  <button
+                    className="button primary"
+                    type="button"
+                    onClick={() => setCreating(true)}
+                  >
+                    新建需求
+                  </button>
+                </div>
+              ) : items.length > 0 ? (
+                <div className="requirement-list">
+                  {items.map((item) => (
+                    <RequirementCard
+                      key={item.links.self}
+                      item={item}
+                      busyAction={busyAction}
+                      actionsBusy={busyAction !== null}
+                      expanded={expandedDetail === item.links.self}
+                      detail={
+                        expandedDetail === item.links.self ? detail : null
+                      }
+                      detailError={
+                        expandedDetail === item.links.self ? detailError : null
+                      }
+                      detailLoading={
+                        expandedDetail === item.links.self && detailLoading
+                      }
+                      onAction={runAction}
+                      onToggleDetail={toggleDetail}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </section>
+          </>
+        )}
       </main>
 
       {creating ? (

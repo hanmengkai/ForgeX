@@ -153,4 +153,18 @@ describe("createHttpForgeXClient", () => {
     const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
     expect(headers.get("X-ForgeX-CSRF")).toBe("1");
   });
+
+  it("设备列表损坏时不向页面泄漏未知运行时数据", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [{ deviceName: "研发电脑", sessionKey: "secret" }],
+          meta: { connectedAccounts: 1, maxAccounts: 5, availableSlots: 4 },
+        }),
+      ),
+    );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(client.listWorkers()).rejects.toThrow("设备列表格式不正确");
+  });
 });

@@ -48,8 +48,25 @@ export interface RequirementListPage {
   nextCursor: string | null;
 }
 
+export interface WorkerListItem {
+  deviceName: string;
+  accountName: string;
+  status: "空闲" | "正在工作" | "离线";
+  currentWork: string | null;
+}
+
+export interface WorkerFleetOverview {
+  workers: WorkerListItem[];
+  capacity: {
+    connectedAccounts: number;
+    maxAccounts: number;
+    availableSlots: number;
+  };
+}
+
 export interface ForgeXClient {
   listRequirements(): Promise<RequirementListPage>;
+  listWorkers(): Promise<WorkerFleetOverview>;
   getRequirement(selfUrl: string): Promise<RequirementDetail>;
   createRequirement(spec: RequirementSpecInput): Promise<void>;
   runRequirementAction(
@@ -151,6 +168,55 @@ const requirementDetailResponseSchema = z
   })
   .strict();
 
+const workerListResponseSchema = z
+  .object({
+    data: z
+      .array(
+        z
+          .object({
+            deviceName: z.string().trim().min(2).max(100),
+            accountName: z.string().trim().min(2).max(100),
+            status: z.enum(["空闲", "正在工作", "离线"]),
+            currentWork: z.string().trim().min(2).max(150).nullable(),
+          })
+          .strict()
+          .superRefine((worker, context) => {
+            if (
+              (worker.status === "正在工作" && worker.currentWork === null) ||
+              (worker.status !== "正在工作" && worker.currentWork !== null)
+            ) {
+              context.addIssue({
+                code: "custom",
+                path: ["currentWork"],
+                message: "设备工作内容与状态不一致",
+              });
+            }
+          }),
+      )
+      .max(5),
+    meta: z
+      .object({
+        connectedAccounts: z.number().int().min(0).max(5),
+        maxAccounts: z.number().int().min(1).max(5),
+        availableSlots: z.number().int().min(0).max(5),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((overview, context) => {
+    if (
+      overview.data.length !== overview.meta.connectedAccounts ||
+      overview.meta.connectedAccounts + overview.meta.availableSlots !==
+        overview.meta.maxAccounts
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["meta"],
+        message: "设备容量与列表不一致",
+      });
+    }
+  });
+
 const assertRequirementSelfUrl = (url: string): void => {
   if (!requirementSelfPattern.test(url)) {
     throw new Error("这个需求入口已经失效，请刷新页面后重试");
@@ -234,6 +300,17 @@ export const createHttpForgeXClient = (
       return {
         items: parsed.data.data,
         nextCursor: parsed.data.meta.nextCursor,
+      };
+    },
+    listWorkers: async () => {
+      const response = await request("/api/v1/workers");
+      const parsed = workerListResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        throw new Error("设备列表格式不正确，请联系管理员");
+      }
+      return {
+        workers: parsed.data.data,
+        capacity: parsed.data.meta,
       };
     },
     getRequirement: async (selfUrl) => {

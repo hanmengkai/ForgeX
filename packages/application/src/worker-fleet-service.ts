@@ -57,6 +57,15 @@ export interface WorkerPollResult {
   assignment: WorkerLeaseView | null;
 }
 
+export interface WorkerFleetPeopleOverview {
+  workers: WorkerPeopleView[];
+  capacity: {
+    connectedAccounts: number;
+    maxAccounts: number;
+    availableSlots: number;
+  };
+}
+
 interface FleetAggregate {
   registry: WorkerRegistry;
   queue: DeliveryQueue;
@@ -173,15 +182,28 @@ export class WorkerFleetService {
   async listForPeople(
     principal: AuthenticatedPrincipal,
   ): Promise<WorkerPeopleView[]> {
+    return (await this.overviewForPeople(principal)).workers;
+  }
+
+  async overviewForPeople(
+    principal: AuthenticatedPrincipal,
+  ): Promise<WorkerFleetPeopleOverview> {
     return this.#repository.transaction(principal.tenantKey, (transaction) => {
       const snapshot = transaction.load();
-      if (!snapshot) {
-        return [];
-      }
-      return this.#restoreFleet(
-        snapshot,
-        principal.tenantKey,
-      ).registry.listForPeople(this.#now());
+      const workers = snapshot
+        ? this.#restoreFleet(
+            snapshot,
+            principal.tenantKey,
+          ).registry.listForPeople(this.#now())
+        : [];
+      return {
+        workers,
+        capacity: {
+          connectedAccounts: workers.length,
+          maxAccounts: this.#maxAccounts,
+          availableSlots: this.#maxAccounts - workers.length,
+        },
+      };
     });
   }
 

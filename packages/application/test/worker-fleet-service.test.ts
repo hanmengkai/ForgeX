@@ -70,6 +70,29 @@ describe("WorkerFleetService", () => {
     expect(views[0]).not.toHaveProperty("accountFingerprint");
   });
 
+  it("设备概况同时返回五账户容量且离线账户仍占用槽位", async () => {
+    let now = new Date("2026-08-10T05:00:00.000Z");
+    const service = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+      clock: () => new Date(now),
+    });
+    await service.connect(administrator, registration(1));
+    await service.connect(administrator, registration(2));
+    now = new Date("2026-08-10T05:01:00.000Z");
+
+    const overview = await service.overviewForPeople(productOwner);
+
+    expect(overview.capacity).toEqual({
+      connectedAccounts: 2,
+      maxAccounts: 5,
+      availableSlots: 3,
+    });
+    expect(overview.workers).toHaveLength(2);
+    expect(overview.workers.every((worker) => worker.status === "离线")).toBe(
+      true,
+    );
+  });
+
   it("两台设备并行领取两个需求，且同一设备不会同时领取第二项", async () => {
     const service = new WorkerFleetService({
       repository: new InMemoryWorkerFleetRepository(),

@@ -50,6 +50,27 @@ const items: RequirementListItem[] = [
 
 const createClient = (): ForgeXClient => ({
   listRequirements: vi.fn().mockResolvedValue({ items, nextCursor: null }),
+  listWorkers: vi.fn().mockResolvedValue({
+    workers: [
+      {
+        deviceName: "研发电脑 1",
+        accountName: "Codex 账户 1",
+        status: "正在工作",
+        currentWork: "访客预约",
+      },
+      {
+        deviceName: "研发电脑 2",
+        accountName: "Codex 账户 2",
+        status: "空闲",
+        currentWork: null,
+      },
+    ],
+    capacity: {
+      connectedAccounts: 2,
+      maxAccounts: 5,
+      availableSlots: 3,
+    },
+  }),
   getRequirement: vi.fn().mockResolvedValue({
     ...items[0]!,
     spec: {
@@ -105,6 +126,21 @@ describe("RequirementWorkbench", () => {
       "暂时无法读取需求",
     );
     expect(screen.queryByText("从第一个业务目标开始")).toBeNull();
+  });
+
+  it("设备中心用账户槽位和业务状态展示并行交付能力", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(screen.getByRole("button", { name: "设备中心" }));
+
+    expect(await screen.findByText("2 / 5 个账户已连接")).toBeInTheDocument();
+    expect(screen.getByText("研发电脑 1")).toBeInTheDocument();
+    expect(screen.getByText("正在处理：访客预约")).toBeInTheDocument();
+    expect(screen.getByText("还有 3 个可用槽位")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/sessionKey|workerKey|指纹/);
+    expect(client.listWorkers).toHaveBeenCalledTimes(1);
   });
 
   it("只把服务端允许的动作显示成清晰按钮", async () => {

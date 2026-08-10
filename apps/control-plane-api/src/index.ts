@@ -527,7 +527,11 @@ export const buildControlPlaneApi = (
 
   app.get("/api/v1/workers", async (request, reply) => {
     const principal = principalFrom(request);
-    return reply.send({ data: await workers.listForPeople(principal) });
+    const overview = await workers.overviewForPeople(principal);
+    return reply.send({
+      data: overview.workers,
+      meta: overview.capacity,
+    });
   });
 
   app.post(

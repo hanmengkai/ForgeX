@@ -40,6 +40,7 @@ export {
 export {
   WorkerFleetService,
   type WorkerConnectionResult,
+  type WorkerFleetPeopleOverview,
   type WorkerFleetServiceOptions,
   type WorkerLeaseView,
   type WorkerPollResult,
