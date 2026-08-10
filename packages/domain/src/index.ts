@@ -6,6 +6,7 @@ export type {
   ApprovalActor,
   ApprovalRecord,
   DeliveryCandidate,
+  RequirementAcceptanceView,
   RequirementPeopleView,
   RequirementAllowedAction,
   RequirementEvidenceSnapshot,

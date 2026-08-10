@@ -348,6 +348,40 @@ describe("需求 API", () => {
     await app.close();
   });
 
+  it("验收入口只允许产品负责人，并把未完成验证解释为状态冲突", async () => {
+    const { app } = createTestApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/requirements",
+      headers: { authorization: "Bearer product-session" },
+      payload: validRequirement,
+    });
+    const location = created.headers.location!;
+
+    const analyst = await app.inject({
+      method: "POST",
+      url: `${location}/accept`,
+      headers: { authorization: "Bearer analyst-session" },
+      payload: {},
+    });
+    expect(analyst.statusCode).toBe(403);
+
+    const premature = await app.inject({
+      method: "POST",
+      url: `${location}/accept`,
+      headers: { authorization: "Bearer product-session" },
+      payload: {},
+    });
+    expect(premature.statusCode).toBe(409);
+    expect(premature.json()).toEqual({
+      error: {
+        code: "requirement_state_conflict",
+        message: "请先完成独立验证并提交产品验收",
+      },
+    });
+    await app.close();
+  });
+
   it("未知地址也使用统一且可读的错误格式", async () => {
     const { app } = createTestApp();
 
@@ -495,6 +529,7 @@ describe("需求 API", () => {
         payload: {},
       },
       { method: "POST" as const, url: `${location}/confirm`, payload: {} },
+      { method: "POST" as const, url: `${location}/accept`, payload: {} },
     ];
 
     for (const request of requests) {

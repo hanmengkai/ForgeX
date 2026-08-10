@@ -7,6 +7,7 @@ import {
 } from "@forgex/contracts";
 import {
   type RequirementAllowedAction,
+  type RequirementAcceptanceView,
   RequirementStateConflictError,
   RequirementWorkflow,
   type RequirementPeopleView,
@@ -40,6 +41,7 @@ export interface RequirementCommandResult {
 
 export interface RequirementDetailResult extends RequirementCommandResult {
   spec: RequirementSpec;
+  acceptance: RequirementAcceptanceView | null;
 }
 
 export interface RequirementListQuery {
@@ -232,6 +234,25 @@ export class RequirementApplicationService {
     );
   }
 
+  async accept(
+    principal: AuthenticatedPrincipal,
+    requirementKey: string,
+  ): Promise<RequirementCommandResult> {
+    this.#requireAction(principal, "accept");
+    return this.#mutate(
+      principal,
+      requirementKey,
+      "requirement.accepted",
+      (workflow) =>
+        workflow.accept({
+          actor: {
+            actorKey: principal.actorKey,
+            actorName: principal.actorName,
+          },
+        }),
+    );
+  }
+
   async list(
     principal: AuthenticatedPrincipal,
     query: RequirementListQuery = {},
@@ -279,6 +300,7 @@ export class RequirementApplicationService {
           view: record.workflow.toPeopleView(),
           allowedActions: record.workflow.listAllowedActions(),
           spec: structuredClone(record.spec),
+          acceptance: record.workflow.toAcceptanceView(),
         };
       },
     );

@@ -89,6 +89,20 @@ const fakeDatabase = (options?: {
 };
 
 describe("PostgresRequirementRepository", () => {
+  it("向前迁移允许验收审计进入数据库约束", () => {
+    const migration = readFileSync(
+      new URL(
+        "../migrations/0003_requirement_acceptance_audit.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    expect(migration).toContain("DROP CONSTRAINT IF EXISTS");
+    expect(migration).toContain("'requirement.accepted'");
+    expect(migration).toContain("ADD CONSTRAINT");
+  });
+
   it("在同一项目事务中恢复聚合并提交需求、审计和 outbox", async () => {
     const database = fakeDatabase();
     const repository = new PostgresRequirementRepository(database.pool, {

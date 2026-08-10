@@ -161,8 +161,17 @@ export interface RequirementPeopleView {
   acceptanceProgress: string;
 }
 
+export interface RequirementAcceptanceView {
+  verifiedBy: string;
+  verifiedAt: string;
+  checks: Array<{
+    title: string;
+    status: "已通过";
+  }>;
+}
+
 export type RequirementAllowedAction =
-  "submitForConfirmation" | "confirm" | "startDelivery";
+  "submitForConfirmation" | "confirm" | "startDelivery" | "accept";
 
 export class RequirementWorkflow {
   readonly #key: string;
@@ -423,7 +432,7 @@ export class RequirementWorkflow {
 
   accept(input: { actor: ApprovalActor }): void {
     if (this.#status !== "awaitingAcceptance") {
-      throw new Error("请先完成独立验证并提交产品验收");
+      throw new RequirementStateConflictError("请先完成独立验证并提交产品验收");
     }
     const actor = RequirementWorkflow.#validateActor(input.actor, "验收人");
     const recordedAt = this.#nowIso("验收时间");
@@ -431,10 +440,16 @@ export class RequirementWorkflow {
     if (!evidence || !this.#verifiedEvidenceReceipt) {
       throw new Error("验收证据缺失，请重新执行独立验证");
     }
-    VerifiedEvidenceReceipt.assertUsableAt(
-      this.#verifiedEvidenceReceipt,
-      this.#clock(),
-    );
+    try {
+      VerifiedEvidenceReceipt.assertUsableAt(
+        this.#verifiedEvidenceReceipt,
+        this.#clock(),
+      );
+    } catch (error) {
+      throw new RequirementStateConflictError(
+        error instanceof Error ? error.message : "验收证据已经失效",
+      );
+    }
     this.#approvalRecords.push({
       action: "验收结果",
       ...actor,
@@ -470,6 +485,24 @@ export class RequirementWorkflow {
     };
   }
 
+  toAcceptanceView(): RequirementAcceptanceView | null {
+    if (!this.#evidence) return null;
+    const checksByCriterion = new Map(
+      this.#evidence.checks.map((check) => [check.criterionKey, check]),
+    );
+    return {
+      verifiedBy: this.#evidence.runnerName,
+      verifiedAt: this.#evidence.producedAt,
+      checks: this.#current.acceptanceCriteria.map((criterion) => {
+        const check = checksByCriterion.get(criterion.criterionKey);
+        if (!check || check.status !== "passed") {
+          throw new Error("需求验收视图与可信证据不一致");
+        }
+        return { title: criterion.title, status: "已通过" as const };
+      }),
+    };
+  }
+
   listAllowedActions(): RequirementAllowedAction[] {
     switch (this.#status) {
       case "draft":
@@ -479,6 +512,8 @@ export class RequirementWorkflow {
         return ["confirm"];
       case "confirmed":
         return ["startDelivery"];
+      case "awaitingAcceptance":
+        return ["accept"];
       default:
         return [];
     }

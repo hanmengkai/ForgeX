@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RequirementSpecSchema } from "@forgex/contracts";
 import { RequirementWorkflow } from "@forgex/domain";
@@ -34,6 +34,46 @@ const spec = RequirementSpecSchema.parse({
 });
 
 describe("RequirementApplicationService", () => {
+  it("产品验收使用认证身份写入审计，分析师不能代替验收", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      clock: () => new Date("2026-08-10T03:00:00.000Z"),
+    });
+    const created = await service.create(principal, spec);
+    const analyst: AuthenticatedPrincipal = {
+      ...principal,
+      actorKey: "77777777-7777-4777-8777-777777777777",
+      actorName: "需求分析师",
+      roles: ["requirement_analyst"],
+    };
+
+    await expect(
+      service.accept(analyst, created.requirementKey),
+    ).rejects.toMatchObject({ statusCode: 403, code: "permission_denied" });
+
+    const accept = vi
+      .spyOn(RequirementWorkflow.prototype, "accept")
+      .mockImplementationOnce(() => undefined);
+    await service.accept(principal, created.requirementKey);
+
+    expect(accept).toHaveBeenCalledWith({
+      actor: {
+        actorKey: principal.actorKey,
+        actorName: "产品负责人",
+      },
+    });
+    expect(await repository.listAuditEvents(tenantKey, projectKey)).toEqual([
+      expect.objectContaining({ action: "requirement.created" }),
+      expect.objectContaining({
+        action: "requirement.accepted",
+        actorKey: principal.actorKey,
+        actorName: "产品负责人",
+      }),
+    ]);
+  });
+
   it("审计写入失败时回滚需求状态，下一次操作仍可正常执行", async () => {
     const repository = new InMemoryRequirementRepository();
     let clockValue = new Date("2026-08-10T03:00:00.000Z");

@@ -118,6 +118,7 @@ describe("createHttpForgeXClient", () => {
               acceptanceCriteria: [],
               openQuestions: [],
             },
+            acceptance: null,
           }),
         }),
       ),
@@ -126,6 +127,40 @@ describe("createHttpForgeXClient", () => {
 
     await expect(client.getRequirement(requested)).rejects.toThrow(
       "需求详情与当前需求不匹配",
+    );
+  });
+
+  it("拒绝状态与可信验收结果互相矛盾的详情", async () => {
+    const self = "/api/v1/requirements/33333333-3333-4333-8333-333333333333";
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: requirement({
+            status: "等待产品验收",
+            links: { self, actions: { accept: `${self}/accept` } },
+            spec: {
+              schemaVersion: 1,
+              title: "访客预约",
+              goal: "让访客到访过程更顺畅",
+              userStories: [],
+              acceptanceCriteria: [
+                {
+                  title: "访客可以提交预约",
+                  description: "填写后能够提交",
+                  priority: "must",
+                },
+              ],
+              openQuestions: [],
+            },
+            acceptance: null,
+          }),
+        }),
+      ),
+    );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(client.getRequirement(self)).rejects.toThrow(
+      "需求详情格式不正确",
     );
   });
 

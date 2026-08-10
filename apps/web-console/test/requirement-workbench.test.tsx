@@ -87,6 +87,7 @@ const createClient = (): ForgeXClient => ({
       ],
       openQuestions: [],
     },
+    acceptance: null,
   }),
   createRequirement: vi.fn().mockResolvedValue(undefined),
   runRequirementAction: vi.fn().mockResolvedValue(undefined),
@@ -171,6 +172,63 @@ describe("RequirementWorkbench", () => {
 
     expect(client.getRequirement).toHaveBeenCalledWith(items[0]!.links.self);
     expect(await screen.findByText("填写后能够提交")).toBeInTheDocument();
+  });
+
+  it("用业务条件展示可信验证结果并允许产品验收", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const ready = {
+      ...items[0]!,
+      status: "等待产品验收" as const,
+      nextStep: "查看验证结果并决定是否验收",
+      acceptanceProgress: "1 / 1 项已通过",
+      links: {
+        ...items[0]!.links,
+        actions: { accept: `${items[0]!.links.self}/accept` },
+      },
+    };
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [ready],
+      nextCursor: null,
+    });
+    vi.mocked(client.getRequirement).mockResolvedValue({
+      ...ready,
+      spec: {
+        schemaVersion: 1,
+        title: "访客预约",
+        goal: "让访客到访过程更顺畅",
+        userStories: [],
+        acceptanceCriteria: [
+          {
+            title: "访客可以提交预约",
+            description: "填写后能够提交",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      },
+      acceptance: {
+        verifiedBy: "独立测试 Runner",
+        verifiedAt: "2026-08-10T01:30:00.000Z",
+        checks: [{ title: "访客可以提交预约", status: "已通过" }],
+      },
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    expect(
+      await screen.findByRole("button", { name: "查看访客预约详情" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认验收通过" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看访客预约详情" }));
+    expect(await screen.findByText("独立验证已通过")).toBeInTheDocument();
+    expect(screen.getByText(/独立测试 Runner/)).toBeInTheDocument();
+    expect(screen.getAllByText("已通过")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "确认验收通过" }));
+    expect(client.runRequirementAction).toHaveBeenCalledWith(
+      `${items[0]!.links.self}/accept`,
+      {},
+    );
   });
 
   it("同一时刻只执行一个需求动作", async () => {

@@ -4,6 +4,7 @@ export interface RequirementActionLinks {
   submitConfirmation?: string | undefined;
   confirm?: string | undefined;
   startDelivery?: string | undefined;
+  accept?: string | undefined;
 }
 
 export interface RequirementListItem {
@@ -28,6 +29,11 @@ export interface RequirementListItem {
 
 export interface RequirementDetail extends RequirementListItem {
   spec: RequirementSpecInput;
+  acceptance: {
+    verifiedBy: string;
+    verifiedAt: string;
+    checks: Array<{ title: string; status: "已通过" }>;
+  } | null;
 }
 
 export interface RequirementSpecInput {
@@ -90,6 +96,7 @@ const actionSuffixes = {
   submitConfirmation: "/submit-confirmation",
   confirm: "/confirm",
   startDelivery: "/start-delivery",
+  accept: "/accept",
 } as const;
 
 const requirementLinksSchema = z
@@ -100,6 +107,7 @@ const requirementLinksSchema = z
         submitConfirmation: z.string().optional(),
         confirm: z.string().optional(),
         startDelivery: z.string().optional(),
+        accept: z.string().optional(),
       })
       .strict(),
   })
@@ -164,7 +172,54 @@ const requirementListResponseSchema = z
   .strict();
 const requirementDetailResponseSchema = z
   .object({
-    data: requirementListItemSchema.extend({ spec: requirementSpecSchema }),
+    data: requirementListItemSchema
+      .extend({
+        spec: requirementSpecSchema,
+        acceptance: z
+          .object({
+            verifiedBy: z.string().trim().min(2).max(100),
+            verifiedAt: z.iso.datetime(),
+            checks: z
+              .array(
+                z
+                  .object({
+                    title: z.string().trim().min(2).max(150),
+                    status: z.literal("已通过"),
+                  })
+                  .strict(),
+              )
+              .min(1)
+              .max(80),
+          })
+          .strict()
+          .nullable(),
+      })
+      .superRefine((detail, context) => {
+        const shouldHaveAcceptance =
+          detail.status === "等待产品验收" || detail.status === "已完成";
+        if (shouldHaveAcceptance !== (detail.acceptance !== null)) {
+          context.addIssue({
+            code: "custom",
+            path: ["acceptance"],
+            message: "验收信息与需求状态不一致",
+          });
+        }
+        if (
+          detail.acceptance &&
+          (detail.acceptance.checks.length !==
+            detail.spec.acceptanceCriteria.length ||
+            detail.acceptance.checks.some(
+              (check, index) =>
+                check.title !== detail.spec.acceptanceCriteria[index]?.title,
+            ))
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["acceptance", "checks"],
+            message: "验收结果没有覆盖全部完成标准",
+          });
+        }
+      }),
   })
   .strict();
 

@@ -581,6 +581,60 @@ h1 {
   color: var(--danger);
 }
 
+.acceptance-evidence {
+  padding: 14px;
+  background: var(--success-soft);
+  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
+  border-radius: 12px;
+}
+
+.acceptance-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.acceptance-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--success);
+  font-weight: 800;
+}
+
+.acceptance-heading .icon,
+.acceptance-evidence li .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.card-detail .acceptance-evidence ul {
+  gap: 6px;
+}
+
+.card-detail .acceptance-evidence li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+.card-detail .acceptance-evidence li strong {
+  color: var(--success);
+  font-size: 12px;
+}
+
+.acceptance-action {
+  width: 100%;
+  margin-top: 12px;
+  color: var(--success);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--success) 42%, transparent);
+}
+
 .text-action {
   color: var(--brand);
   font-size: 12px;
@@ -1139,6 +1193,16 @@ h1 {
 
   .status-pill.success {
     color: #a9edca;
+  }
+
+  .acceptance-heading > span,
+  .card-detail .acceptance-evidence li strong,
+  .acceptance-action {
+    color: #a9edca;
+  }
+
+  .acceptance-action {
+    border-color: #4e8b70;
   }
 
   .page-error,

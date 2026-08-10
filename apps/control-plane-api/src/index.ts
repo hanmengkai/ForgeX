@@ -163,6 +163,7 @@ const requirementLinks = (
     submitConfirmation?: string;
     confirm?: string;
     startDelivery?: string;
+    accept?: string;
   } = {};
   if (
     allowedActions.includes("submitForConfirmation") &&
@@ -181,6 +182,12 @@ const requirementLinks = (
     canPerformRequirementAction(principal, "startDelivery")
   ) {
     actions.startDelivery = `${self}/start-delivery`;
+  }
+  if (
+    allowedActions.includes("accept") &&
+    canPerformRequirementAction(principal, "accept")
+  ) {
+    actions.accept = `${self}/accept`;
   }
   return { self, actions };
 };
@@ -440,6 +447,7 @@ export const buildControlPlaneApi = (
       data: {
         ...result.view,
         spec: result.spec,
+        acceptance: result.acceptance,
         links: requirementLinks(
           result.requirementKey,
           result.allowedActions,
@@ -562,6 +570,35 @@ export const buildControlPlaneApi = (
           command.data,
         ),
       });
+    },
+  );
+
+  app.post(
+    "/api/v1/requirements/:requirementKey/accept",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      const body = emptyCommandSchema.safeParse(request.body ?? {});
+      if (!params.success) {
+        throw new ApplicationError(
+          404,
+          "requirement_not_found",
+          "没有找到这个需求",
+        );
+      }
+      if (!body.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "验收请求需要调整",
+          validationDetails(body.error),
+        );
+      }
+      const result = await requirements.accept(
+        principal,
+        params.data.requirementKey,
+      );
+      return reply.send({ data: result.view });
     },
   );
 

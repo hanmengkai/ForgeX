@@ -30,6 +30,7 @@ const auditActions = new Set<RequirementAuditAction>([
   "requirement.created",
   "requirement.confirmation_submitted",
   "requirement.confirmed",
+  "requirement.accepted",
   "delivery.requested",
   "delivery.dispatched",
 ]);

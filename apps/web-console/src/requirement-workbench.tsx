@@ -55,6 +55,14 @@ const actionEntries = (
     : []),
 ];
 
+const formatVerifiedAt = (value: string) =>
+  new Intl.DateTimeFormat("zh-CN", {
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+
 const statusTone = (status: RequirementListItem["status"]) => {
   if (status === "已完成") return "success";
   if (status === "AI 正在实现") return "running";
@@ -130,6 +138,40 @@ function RequirementCard({
                   ))}
                 </ul>
               </div>
+              {detail.acceptance ? (
+                <div className="acceptance-evidence">
+                  <div className="acceptance-heading">
+                    <span>
+                      <CheckIcon /> 独立验证已通过
+                    </span>
+                    <small>
+                      {detail.acceptance.verifiedBy} ·{" "}
+                      {formatVerifiedAt(detail.acceptance.verifiedAt)}
+                    </small>
+                  </div>
+                  <ul>
+                    {detail.acceptance.checks.map((check, index) => (
+                      <li key={`${check.title}:${index}`}>
+                        <CheckIcon />
+                        <span>{check.title}</span>
+                        <strong>{check.status}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                  {item.links.actions.accept ? (
+                    <button
+                      className="button acceptance-action"
+                      type="button"
+                      disabled={actionsBusy}
+                      onClick={() => onAction(item.links.actions.accept!, {})}
+                    >
+                      {busyAction === item.links.actions.accept
+                        ? "正在记录验收…"
+                        : "确认验收通过"}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </>
           ) : null}
         </div>

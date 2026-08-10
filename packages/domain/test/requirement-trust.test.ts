@@ -192,6 +192,15 @@ describe("独立验证证据", () => {
       status: "等待产品验收",
       acceptanceProgress: "2 / 2 项已通过",
     });
+    expect(requirement.listAllowedActions()).toEqual(["accept"]);
+    expect(requirement.toAcceptanceView()).toEqual({
+      verifiedBy: "独立测试 Runner",
+      verifiedAt: "2026-08-10T01:30:00.000Z",
+      checks: [
+        { title: "访客可以提交预约", status: "已通过" },
+        { title: "业主可以确认预约", status: "已通过" },
+      ],
+    });
   });
 
   it("拒绝未授权范围的 Runner 和已经切换掉的候选提交", () => {

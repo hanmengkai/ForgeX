@@ -41,6 +41,6 @@ Web Console 默认运行在 `http://localhost:4173`，并把 `/api` 转发到本
 
 浏览器生产认证由同源认证层签发名为 `forgex_session` 的 HttpOnly Cookie，建议同时启用 `Secure`、`SameSite=Strict` 和 `Path=/`。Control Plane 对 Cookie 会话的写请求额外要求 `X-ForgeX-CSRF: 1`；非浏览器客户端仍可通过现有 `Authorization: Bearer ...` 适配器接入。Cookie 的签发、轮换和注销属于后续身份模块，不由 Web 静态资源处理。
 
-生产接入前，需要依次执行 [Worker 舰队迁移](packages/postgres/migrations/0001_worker_fleet.sql) 和 [需求控制面迁移](packages/postgres/migrations/0002_requirement_control_plane.sql)，并向所有 API 副本注入同一数据库上的 `PostgresWorkerFleetRepository` 与 `PostgresRequirementRepository`。需求仓储还必须注入保留当前及历史验证公钥的 `EvidenceAuthority`，旧密钥应设置为仅核验历史证据。当前仍是预发布版本，不应直接用于生产交付。
+生产接入前，需要按编号依次执行 [Worker 舰队迁移](packages/postgres/migrations/0001_worker_fleet.sql)、[需求控制面迁移](packages/postgres/migrations/0002_requirement_control_plane.sql) 和 [验收审计迁移](packages/postgres/migrations/0003_requirement_acceptance_audit.sql)，并向所有 API 副本注入同一数据库上的 `PostgresWorkerFleetRepository` 与 `PostgresRequirementRepository`。需求仓储还必须注入保留当前及历史验证公钥的 `EvidenceAuthority`，旧密钥应设置为仅核验历史证据。当前仍是预发布版本，不应直接用于生产交付。
 
 详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。
