@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "planKey": "repository-integrity",
+  "planVersion": 1,
+  "repositoryKey": "30000000-0000-4000-8000-000000000003",
+  "requirementKey": "60000000-0000-4000-8000-000000000006",
+  "requirementRevision": 1,
+  "gitHashAlgorithm": "sha1",
+  "commitSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "suites": [
+    {
+      "suiteKey": "repository-integrity",
+      "name": "候选仓库完整性",
+      "criterionKeys": ["70000000-0000-4000-8000-000000000007"],
+      "execution": {
+        "image": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "command": ["/forgex-verifier/node-quality"],
+        "timeoutMs": 120000
+      }
+    }
+  ]
+}

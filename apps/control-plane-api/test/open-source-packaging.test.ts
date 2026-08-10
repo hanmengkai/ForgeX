@@ -77,6 +77,7 @@ describe("开源交付包装", () => {
       "npm run typecheck",
       "npm test",
       "npm run build:all",
+      "npm run --workspace @forgex/verification-runner build:verifier",
       "npx playwright install --with-deps chromium",
       "npm run test:e2e",
     ]) {
@@ -85,6 +86,27 @@ describe("开源交付包装", () => {
     expect(workflow).toContain("services:");
     expect(workflow).toContain("postgres:17-alpine");
     expect(workflow).toContain("FORGEX_TEST_DATABASE_URL");
+  });
+
+  it("仓库交付可构建且不执行候选脚本的独立验证镜像", async () => {
+    const [dockerfile, driver, runnerPackage, readme] = await Promise.all([
+      read("services/verification-runner/verifier-image/Dockerfile"),
+      read("services/verification-runner/verifier-image/node-quality.mjs"),
+      read("services/verification-runner/package.json"),
+      read("README.md"),
+    ]);
+
+    expect(dockerfile).toContain("USER 65532:65532");
+    expect(dockerfile).toContain("/forgex-verifier/node-quality");
+    expect(dockerfile).toMatch(
+      /^FROM node:24\.18\.1-bookworm-slim@sha256:[a-f0-9]{64}$/mu,
+    );
+    expect(driver).not.toContain("npm test");
+    expect(driver).not.toContain("npm run");
+    expect(runnerPackage).toContain('"build:verifier"');
+    expect(runnerPackage).toContain('"admin"');
+    expect(readme).toContain("runner.bootstrap.example.json");
+    expect(readme).toContain("runner.plan.example.json");
   });
 
   it("生产 Node 进程解析编译产物，测试环境仍可直接加载源码", async () => {

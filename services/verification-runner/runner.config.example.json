@@ -18,7 +18,7 @@
   "gitCommandSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "dockerCommandPath": "/usr/bin/docker",
   "dockerCommandSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "containerUser": "65532:65532",
+  "containerUser": "1000:1000",
   "plans": [
     {
       "schemaVersion": 1,
@@ -35,7 +35,7 @@
           "name": "项目测试与构建",
           "criterionKeys": ["70000000-0000-4000-8000-000000000007"],
           "execution": {
-            "image": "registry.example.com/forgex/node@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "image": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "command": ["/forgex-verifier/node-quality"],
             "timeoutMs": 600000
           }
@@ -48,7 +48,7 @@
       "repositoryKey": "30000000-0000-4000-8000-000000000003",
       "planKey": "node-quality",
       "planVersion": 1,
-      "planHash": "61690b0ca172892f000009b20701ff0d8be2c2f8bfddf09fbf2da774e0098c77"
+      "planHash": "59640693f779f17447beb399f917a12684e052240e8ed6850c080530696ee183"
     }
   ],
   "idlePollIntervalMs": 3000,

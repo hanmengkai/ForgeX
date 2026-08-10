@@ -6,6 +6,7 @@ export * from "./journal.js";
 export * from "./model.js";
 export * from "./runtime.js";
 export * from "./runner-config.js";
+export * from "./runner-admin.js";
 export * from "./runner-loop.js";
 export * from "./signer.js";
 export * from "./verification-engine.js";

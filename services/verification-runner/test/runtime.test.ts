@@ -83,6 +83,51 @@ const passedVerification = {
 };
 
 describe("VerificationRunnerRuntime", () => {
+  it("在一百条待验证任务中跳过无计划项并验证可处理任务", async () => {
+    const { signer } = signerFixture();
+    const unplannedTargets: VerificationRunnerTarget[] = Array.from(
+      { length: 99 },
+      (_, index) => ({
+        ...target,
+        requirementKey: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+        title: `尚未配置验证计划的需求 ${index + 1}`,
+      }),
+    );
+    const controlPlane = {
+      listPending: vi.fn(async () => [...unplannedTargets, target]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
+    };
+    const verifier = {
+      canVerify: vi.fn(
+        async (candidate: VerificationRunnerTarget) =>
+          candidate.requirementKey === target.requirementKey,
+      ),
+      verify: vi.fn(async () => passedVerification),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: runnerScope,
+      controlPlane,
+      verifier,
+      signer,
+      journal: new InMemoryVerificationJournal(),
+      journalIntegrityKey,
+      clock: () => new Date("2026-08-11T03:01:00.000Z"),
+      createEvidenceKey: () => "80000000-0000-4000-8000-000000000008",
+    });
+
+    await expect(runtime.runOnce()).resolves.toEqual({
+      kind: "submitted",
+      title: target.title,
+    });
+    expect(controlPlane.listPending).toHaveBeenCalledWith(100);
+    expect(verifier.canVerify).toHaveBeenNthCalledWith(1, unplannedTargets[0]);
+    expect(verifier.canVerify).toHaveBeenNthCalledWith(100, target);
+    expect(verifier.verify).toHaveBeenCalledOnce();
+    expect(verifier.verify).toHaveBeenCalledWith(target);
+  });
+
   it("先持久化并上传不可变 Preview，再签名并提交证据", async () => {
     const order: string[] = [];
     const { signer: actualSigner, authority } = signerFixture();

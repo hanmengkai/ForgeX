@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "runnerName": "独立验证一号",
+  "controlPlaneUrl": "https://forgex.example.com",
+  "scope": {
+    "tenantKey": "10000000-0000-4000-8000-000000000001",
+    "projectKey": "20000000-0000-4000-8000-000000000002",
+    "repositoryKey": "30000000-0000-4000-8000-000000000003"
+  },
+  "repositoryRoot": "/srv/forgex-runner/repositories/project.git",
+  "workspaceRoot": "/var/lib/forgex-runner/workspaces",
+  "gitCommandPath": "/usr/bin/git",
+  "dockerCommandPath": "/usr/bin/docker",
+  "containerUser": "1000:1000",
+  "idlePollIntervalMs": 3000,
+  "requestTimeoutMs": 5000
+}

@@ -76,12 +76,11 @@ export const assertTrustedPathAncestors = async (options: {
   }
 };
 
-export const assertTrustedExecutable = async (options: {
+export const hashTrustedExecutable = async (options: {
   commandPath: string;
-  expectedSha256: string;
   description: string;
   assertWindowsTrustedPath?: WindowsTrustedPathCheck;
-}): Promise<void> => {
+}): Promise<string> => {
   const resolved = path.resolve(options.commandPath);
   const [metadata, resolvedRealPath] = await Promise.all([
     lstat(resolved),
@@ -118,16 +117,16 @@ export const assertTrustedExecutable = async (options: {
         : constants.O_RDONLY | constants.O_NOFOLLOW,
     );
     const openedMetadata = await handle.stat();
+    const digest = createHash("sha256")
+      .update(await handle.readFile())
+      .digest("hex");
     if (
       !openedMetadata.isFile() ||
       openedMetadata.dev !== metadata.dev ||
       openedMetadata.ino !== metadata.ino ||
-      openedMetadata.size !== metadata.size ||
-      createHash("sha256")
-        .update(await handle.readFile())
-        .digest("hex") !== options.expectedSha256
+      openedMetadata.size !== metadata.size
     ) {
-      throw new Error(`${options.description}摘要与受信配置不一致`);
+      throw new Error(`${options.description}在校验期间发生替换`);
     }
     const [after, afterRealPath] = await Promise.all([
       lstat(resolved),
@@ -140,7 +139,20 @@ export const assertTrustedExecutable = async (options: {
     ) {
       throw new Error(`${options.description}在校验期间发生替换`);
     }
+    return digest;
   } finally {
     await handle?.close();
+  }
+};
+
+export const assertTrustedExecutable = async (options: {
+  commandPath: string;
+  expectedSha256: string;
+  description: string;
+  assertWindowsTrustedPath?: WindowsTrustedPathCheck;
+}): Promise<void> => {
+  const digest = await hashTrustedExecutable(options);
+  if (digest !== options.expectedSha256) {
+    throw new Error(`${options.description}摘要与受信配置不一致`);
   }
 };

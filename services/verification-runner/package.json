@@ -5,7 +5,9 @@
   "type": "module",
   "exports": "./src/index.ts",
   "scripts": {
+    "admin": "node dist/runner-admin-main.js",
     "build": "tsc -b",
+    "build:verifier": "docker build --tag forgex/repository-integrity:local ./verifier-image",
     "start": "node dist/main.js"
   },
   "dependencies": {

@@ -77,6 +77,7 @@ export const VerificationResultSchema = z
 export type VerificationResult = z.infer<typeof VerificationResultSchema>;
 
 export interface VerificationEngine {
+  canVerify?(target: VerificationRunnerTarget): Promise<boolean>;
   verify(target: VerificationRunnerTarget): Promise<VerificationResult>;
 }
 

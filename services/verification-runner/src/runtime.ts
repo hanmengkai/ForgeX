@@ -30,7 +30,7 @@ import type { RunnerEvidenceSigner } from "./signer.js";
 const MAX_PREVIEW_BYTES = 5 * 1024 * 1024;
 
 export interface VerificationRunnerControlPlane {
-  listPending(): Promise<VerificationRunnerTarget[]>;
+  listPending(limit?: number): Promise<VerificationRunnerTarget[]>;
   publishPreview(
     target: VerificationRunnerTarget,
     content: Uint8Array,
@@ -123,10 +123,23 @@ export class VerificationRunnerRuntime {
       return this.#resume(pending);
     }
 
-    const targets = await this.#controlPlane.listPending();
+    const targets = await this.#controlPlane.listPending(100);
     if (targets.length === 0) return { kind: "idle" };
-    const target = VerificationRunnerTargetSchema.parse(targets[0]);
-    this.#assertTargetScope(target);
+    const parsedTargets = targets.map((candidate) =>
+      VerificationRunnerTargetSchema.parse(candidate),
+    );
+    parsedTargets.forEach((candidate) => this.#assertTargetScope(candidate));
+    let target: VerificationRunnerTarget | undefined;
+    for (const candidate of parsedTargets) {
+      if (
+        !this.#verifier.canVerify ||
+        (await this.#verifier.canVerify(candidate))
+      ) {
+        target = candidate;
+        break;
+      }
+    }
+    if (!target) return { kind: "idle" };
     const verification = VerificationResultSchema.parse(
       await this.#verifier.verify(target),
     );
@@ -214,7 +227,7 @@ export class VerificationRunnerRuntime {
       await this.#journal.clear(entry.integrityTag);
       return { kind: "submitted" as const, title: entry.target.title };
     }
-    const targets = await this.#controlPlane.listPending();
+    const targets = await this.#controlPlane.listPending(100);
     const current = targets.find(
       (target) =>
         target.requirementKey === entry.target.requirementKey &&

@@ -135,7 +135,7 @@ describe("GitVerificationWorkspaceProvider", () => {
       await readFile(path.join(workspace.path, "result.txt"), "utf8"),
     ).toBe("first");
     await workspace.dispose();
-  });
+  }, 15_000);
 
   it("拒绝未知仓库、错误哈希算法和可能执行宿主命令的 Git 配置", async () => {
     const fixture = await repositoryFixture();

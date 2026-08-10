@@ -65,6 +65,27 @@ const anchorFor = (trustedPlan: VerificationSuitePlan) => ({
 });
 
 describe("FixedSuiteVerificationEngine", () => {
+  it("允许用本机内容寻址 image ID 固定离线验证镜像", () => {
+    const candidate = plan([
+      {
+        suiteKey: "offline-integrity",
+        name: "离线仓库完整性",
+        criterionKeys: target.acceptanceCriteria.map(
+          (criterion) => criterion.criterionKey,
+        ),
+        execution: {
+          image: `sha256:${"f".repeat(64)}`,
+          command: ["/forgex-verifier/node-quality"],
+          timeoutMs: 120_000,
+        },
+      },
+    ]);
+
+    expect(
+      VerificationSuitePlanSchema.parse(candidate).suites[0]!.execution.image,
+    ).toBe(`sha256:${"f".repeat(64)}`);
+  });
+
   it("验证计划摘要绑定实际容器镜像、命令和超时", () => {
     expect(
       VerificationSuitePlanSchema.safeParse({

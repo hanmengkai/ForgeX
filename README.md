@@ -51,11 +51,50 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml up --build
 
 Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须在 Web 前增加 TLS，并把示例标识、摘要和数据库密码全部替换。
 
-独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 `sha256` 摘要，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。先复制 [Runner 配置示例](services/verification-runner/runner.config.example.json)，为每个已确认交付版本配置完整计划和对应 `planHash`，预拉取不可变镜像，并让 Runner 使用无特权 Docker/容器运行身份。配置、会话、私钥、完整性密钥和 journal 父目录必须只允许 Runner 控制器身份访问。启动命令：
+独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 registry digest 或本机 `sha256:<image-id>` 固定，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。
+
+仓库随附一个真正可构建的最小独立验证镜像。它只读取只读候选工作树，检查锁文件、严格 TypeScript 基线、文件数量与大小、符号链接和敏感文件，不调用候选自己的 `npm scripts`。先构建镜像并记录内容寻址 ID：
+
+镜像的 Node.js 基座同时固定了版本标签和 OCI manifest digest；更新基座时必须显式审查并同步包装测试，不能只改为另一个可漂移标签。
+
+```bash
+npm run --workspace @forgex/verification-runner build:verifier
+docker image inspect forgex/repository-integrity:local --format '{{.Id}}'
+```
+
+这个镜像证明的是“候选仓库完整性”，不能自动证明任意业务验收条件。部署者只能把它映射到它实际覆盖的条件；业务行为必须由同样固化在受信镜像中的项目专用测试驱动验证，不能改回执行候选仓库的 `npm test`。
+
+首次部署不再手工制作密钥、令牌摘要和 `planHash`。在 Runner 控制器身份的私有目录中复制并填写 [bootstrap 输入示例](services/verification-runner/runner.bootstrap.example.json)。Linux 的 `containerUser` 必须填写 Runner 控制器真实的非 root `id -u:id -g`，使容器只能读取该身份创建的只读工作树；不要照抄与宿主文件所有者不一致的 UID/GID。然后构建并运行管理命令：
 
 ```bash
 npm run --workspace @forgex/verification-runner build
-FORGEX_RUNNER_CONFIG=/absolute/path/runner.config.json npm run --workspace @forgex/verification-runner start
+npm run --workspace @forgex/verification-runner admin -- bootstrap \
+  --input /private/runner/runner.bootstrap.input.json \
+  --output /private/runner
+```
+
+命令会原子生成会话、Ed25519 私钥、journal 完整性密钥、`runner.bootstrap.json` 和不含明文会话的 `control-plane.runner.json`。把后一个文件中的 `runnerSessions` 与 `trustedRunners` 条目合并进控制面的 `control-plane.json`，重新计算 `FORGEX_CONTROL_PLANE_CONFIG_SHA256` 并重启控制面。私钥和原始会话不得复制进控制面配置。
+
+有交付候选后，用已授权的 Runner 会话读取实时 target：
+
+```bash
+npm run --workspace @forgex/verification-runner admin -- targets \
+  --bootstrap /private/runner/runner.bootstrap.json
+```
+
+复制 [计划示例](services/verification-runner/runner.plan.example.json)，把其中的 requirement、revision、commit、criterion keys 和上一步得到的 target 精确对应，并把 `image` 换成实际 registry digest 或本机 image ID。计划文件也必须放在私有目录。下面的命令会再次向控制面读取当前 target；任务、提交或验收条件已经变化时会拒绝写配置，匹配时才计算完整 `planHash`：
+
+```bash
+npm run --workspace @forgex/verification-runner admin -- plan \
+  --bootstrap /private/runner/runner.bootstrap.json \
+  --plan /private/runner/runner.plan.json \
+  --output /private/runner/runner.config.json
+```
+
+最后使用生成的配置启动。配置、会话、私钥、完整性密钥、计划和 journal 父目录必须只允许 Runner 控制器身份访问；Docker 应使用无特权运行身份，验证镜像必须预先拉取或构建，因为 Runner 固定使用 `--pull never`：
+
+```bash
+FORGEX_RUNNER_CONFIG=/private/runner/runner.config.json npm run --workspace @forgex/verification-runner start
 ```
 
 客户设备 Worker 使用本机 Codex 登录，不把 Codex 凭据上传控制面。每个 Codex 账户应使用独立受限操作系统账号或容器和该隔离身份独占的空 `codexHomePath`，先把 Codex CLI 配置为系统 keyring 凭据存储并完成登录；该目录不得出现 `auth.json`、个人 `config.toml`、第三方 MCP、Skills、Hooks 或插件，隔离系统镜像也不得预装额外 Codex 配置。仓库随设备包交付 `forgex-codex-isolation-launcher`（构建产物为 `dist/isolation-launcher-main.js`），它在同一次 `--forgex-codex-run` 中先验证身份和文件边界，再调用固定版本的官方 `@openai/codex-sdk`；同控制器身份运行会直接失败。每次任务都把仓库标记为不可信，使仓库内 `.codex/config.toml` 不能扩展工具面。模型侧关闭通用 Shell、统一执行、图片读取、浏览器、桌面操作、应用、插件、记忆、Hooks、工作区依赖、网络和 Web 搜索，只保留内置 `apply_patch` 与 ForgeX 自带的只读工作树 MCP；启动前会读取真实 Codex CLI feature inventory，任何未分类的默认启用能力都会失败关闭，并用同一组运行参数读取真实 MCP inventory，要求唯一启用的服务及其命令、参数和工具白名单都与 ForgeX 可信清单完全一致。该 MCP 只提供有界的列目录、读普通业务文本和字面量搜索，不执行命令、不读取 `.git`、凭据文件、符号链接或工作树外路径。生产需用 root/管理员持有且其他用户不可写的 OS 包装器，在独立账号或容器内调用该 launcher。复制 [设备配置示例](services/device-worker/worker.config.example.json)，填入包装器路径与真实 SHA-256，再替换设备连接信息、项目与仓库标识以及本机绝对路径，然后执行：

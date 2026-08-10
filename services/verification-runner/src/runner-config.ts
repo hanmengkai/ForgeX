@@ -219,6 +219,11 @@ export class StaticVerificationSuitePlanProvider implements VerificationSuitePla
     }
   }
 
+  async canHandle(targetInput: VerificationRunnerTarget): Promise<boolean> {
+    const target = VerificationRunnerTargetSchema.parse(targetInput);
+    return this.#plans.has(targetIdentity(target));
+  }
+
   async planFor(
     targetInput: VerificationRunnerTarget,
   ): Promise<VerificationSuitePlan> {

@@ -66,7 +66,7 @@ const containerImage = z
   .min(20)
   .max(300)
   .regex(
-    /^[a-z0-9]+(?:[._:-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[a-f0-9]{64}$/u,
+    /^(?:sha256:[a-f0-9]{64}|[a-z0-9]+(?:[._:-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[a-f0-9]{64})$/u,
     "验证镜像必须使用不可变的 sha256 摘要",
   );
 
@@ -180,6 +180,7 @@ export const verificationSuitePlanHash = (
     .digest("hex");
 
 export interface VerificationSuitePlanProvider {
+  canHandle?(target: VerificationRunnerTarget): Promise<boolean>;
   planFor(target: VerificationRunnerTarget): Promise<VerificationSuitePlan>;
 }
 
@@ -189,6 +190,33 @@ export interface VerificationSandbox {
     plan: VerificationSuitePlan;
   }): Promise<z.input<typeof sandboxResultSchema>>;
 }
+
+export const assertVerificationSuitePlanTarget = (
+  targetInput: VerificationRunnerTarget,
+  planInput: VerificationSuitePlan,
+): void => {
+  const target = VerificationRunnerTargetSchema.parse(targetInput);
+  const plan = VerificationSuitePlanSchema.parse(planInput);
+  if (
+    plan.requirementKey !== target.requirementKey ||
+    plan.repositoryKey !== target.repositoryKey ||
+    plan.requirementRevision !== target.requirementRevision ||
+    plan.gitHashAlgorithm !== target.gitHashAlgorithm ||
+    plan.commitSha !== target.commitSha
+  ) {
+    throw new Error("验证套件计划没有绑定当前权威提交");
+  }
+  const expected = new Set(
+    target.acceptanceCriteria.map((criterion) => criterion.criterionKey),
+  );
+  const covered = new Set(plan.suites.flatMap((suite) => suite.criterionKeys));
+  if (
+    covered.size !== expected.size ||
+    [...covered].some((criterionKey) => !expected.has(criterionKey))
+  ) {
+    throw new Error("验证套件计划没有逐项绑定全部验收条件");
+  }
+};
 
 const escapeHtml = (value: string): string =>
   value
@@ -264,6 +292,13 @@ export class FixedSuiteVerificationEngine implements VerificationEngine {
     }
   }
 
+  async canVerify(targetInput: VerificationRunnerTarget): Promise<boolean> {
+    const target = VerificationRunnerTargetSchema.parse(targetInput);
+    return this.#planProvider.canHandle
+      ? this.#planProvider.canHandle(target)
+      : true;
+  }
+
   async verify(
     targetInput: VerificationRunnerTarget,
   ): Promise<VerificationResult> {
@@ -276,7 +311,7 @@ export class FixedSuiteVerificationEngine implements VerificationEngine {
     const plan = VerificationSuitePlanSchema.parse(
       await this.#planProvider.planFor(target),
     );
-    this.#assertPlan(target, plan);
+    assertVerificationSuitePlanTarget(target, plan);
     const planHash = verificationSuitePlanHash(plan);
     if (this.#trustedPlanHashes.get(this.#planIdentity(plan)) !== planHash) {
       throw new Error("验证套件计划没有匹配可信的不可变版本锚");
@@ -336,33 +371,6 @@ export class FixedSuiteVerificationEngine implements VerificationEngine {
       };
     } finally {
       await workspace.dispose();
-    }
-  }
-
-  #assertPlan(
-    target: VerificationRunnerTarget,
-    plan: VerificationSuitePlan,
-  ): void {
-    if (
-      plan.requirementKey !== target.requirementKey ||
-      plan.repositoryKey !== target.repositoryKey ||
-      plan.requirementRevision !== target.requirementRevision ||
-      plan.gitHashAlgorithm !== target.gitHashAlgorithm ||
-      plan.commitSha !== target.commitSha
-    ) {
-      throw new Error("验证套件计划没有绑定当前权威提交");
-    }
-    const expected = new Set(
-      target.acceptanceCriteria.map((criterion) => criterion.criterionKey),
-    );
-    const covered = new Set(
-      plan.suites.flatMap((suite) => suite.criterionKeys),
-    );
-    if (
-      covered.size !== expected.size ||
-      [...covered].some((criterionKey) => !expected.has(criterionKey))
-    ) {
-      throw new Error("验证套件计划没有逐项绑定全部验收条件");
     }
   }
 

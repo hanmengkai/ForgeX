@@ -208,6 +208,10 @@ describe("Verification Runner config", () => {
 
   it("静态计划提供者只返回与权威任务完全相同的不可变计划", async () => {
     const provider = new StaticVerificationSuitePlanProvider([plan]);
+    await expect(provider.canHandle(target)).resolves.toBe(true);
+    await expect(
+      provider.canHandle({ ...target, commitSha: "b".repeat(40) }),
+    ).resolves.toBe(false);
     await expect(provider.planFor(target)).resolves.toEqual(plan);
     await expect(
       provider.planFor({ ...target, commitSha: "b".repeat(40) }),
