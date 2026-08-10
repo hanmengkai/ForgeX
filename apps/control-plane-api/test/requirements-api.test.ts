@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   WORKER_MCP_SUCCEEDED_SUMMARY,
+  WORKER_MCP_UNKNOWN_SUMMARY,
   WORKER_REQUIREMENT_COMPLETION_SUMMARY,
 } from "@forgex/contracts";
 
@@ -718,6 +719,60 @@ describe("需求 API", () => {
         summary: WORKER_MCP_SUCCEEDED_SUMMARY,
       },
     });
+    const uncertain = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp-invocations",
+      headers: { authorization: "Bearer developer-session" },
+      payload: {
+        schemaVersion: 1,
+        requestKey: randomUUID(),
+        serverKey,
+        toolKey,
+        arguments: { branchName: "feature/unknown" },
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: `${uncertain.headers.location}/approve`,
+      headers: { authorization: "Bearer product-session" },
+    });
+    const uncertainPoll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders,
+      payload: {},
+    });
+    const uncertainAssignment = uncertainPoll.json().data.assignment;
+    const unknown = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/mcp-complete",
+      headers: workerHeaders,
+      payload: {
+        schemaVersion: 1,
+        assignmentKey: uncertainAssignment.assignmentKey,
+        fencingToken: uncertainAssignment.fencingToken,
+        projectKey: uncertainAssignment.projectKey,
+        invocationKey: uncertainAssignment.invocationKey,
+        outcome: "unknown",
+        summary: WORKER_MCP_UNKNOWN_SUMMARY,
+      },
+    });
+    expect(unknown.statusCode, unknown.body).toBe(200);
+    expect(
+      (await mcpInvocationRepository.list(tenantKey, projectKey)).find(
+        (item) => item.invocationKey === uncertainAssignment.invocationKey,
+      ),
+    ).toMatchObject({ status: "outcome_unknown" });
+    await expect(
+      mcpInvocationRepository.listAudit(tenantKey, projectKey),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "outcome_unknown",
+          assignmentKey: uncertainAssignment.assignmentKey,
+        }),
+      ]),
+    );
     const cancellable = await app.inject({
       method: "POST",
       url: "/api/v1/mcp-invocations",
