@@ -2,7 +2,7 @@
 
 ForgeX 是一个开源的 AI 软件交付控制面。它把需求澄清、方案、开发、验证、Preview 和人工审批组织成可追踪的交付流程，并能够调度多台分别登录 Codex 的客户设备并行处理需求。
 
-> 当前状态：基础架构建设中，尚未发布可用于生产的版本。
+> 当前状态：`0.1.0` 预发布版。仓库提供完整的本地部署、持久化控制面、Web、设备 Worker 与独立验证 Runner；公开上线前仍需由部署者接入组织身份源、TLS、备份和监控。
 
 ## 为谁设计
 
@@ -30,6 +30,25 @@ npm test
 npm run typecheck
 npm run --workspace @forgex/web-console dev
 ```
+
+数据库迁移由带校验和账本和 PostgreSQL advisory lock 的统一命令执行，不要再逐个手工运行 SQL：
+
+```bash
+FORGEX_DATABASE_URL=postgresql://forgex:password@localhost:5432/forgex npm run db:migrate
+```
+
+## Docker Compose 本地部署
+
+1. 复制 `deploy/.env.example` 为 `deploy/.env`，生成随机数据库密码。
+2. 复制 `deploy/config/control-plane.example.json` 为 `deploy/config/control-plane.json`。
+3. 生成至少 24 字符的随机访问令牌，只把它的 SHA-256 写入 `tokenSha256`；令牌明文只交给对应用户，不得提交 Git。
+4. 从仓库根目录启动：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/compose.yaml up --build
+```
+
+Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须在 Web 前增加 TLS，并把示例标识、摘要和数据库密码全部替换。
 
 独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 `sha256` 摘要，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。先复制 [Runner 配置示例](services/verification-runner/runner.config.example.json)，为每个已确认交付版本配置完整计划和对应 `planHash`，预拉取不可变镜像，并让 Runner 使用无特权 Docker/容器运行身份。配置、会话、私钥、完整性密钥和 journal 父目录必须只允许 Runner 控制器身份访问。启动命令：
 

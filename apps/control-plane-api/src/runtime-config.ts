@@ -60,9 +60,7 @@ export const ControlPlaneRuntimeConfigSchema = z
     repositoryKey: internalKey,
     sessions: z
       .array(
-        z
-          .object({ tokenSha256: sha256, principal: principalSchema })
-          .strict(),
+        z.object({ tokenSha256: sha256, principal: principalSchema }).strict(),
       )
       .min(1)
       .max(500),
@@ -220,9 +218,7 @@ export class HashedSessionAuthenticator implements SessionAuthenticator {
   }
 }
 
-export class HashedRunnerSessionAuthenticator
-  implements RunnerSessionAuthenticator
-{
+export class HashedRunnerSessionAuthenticator implements RunnerSessionAuthenticator {
   readonly #sessions: Map<
     string,
     { tokenSha256: string; runner: AuthenticatedRunner }

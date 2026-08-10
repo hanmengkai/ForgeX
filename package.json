@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
+    "build:all": "npm run build && npm run build --workspace @forgex/web-console",
     "db:migrate": "npm run build -w @forgex/postgres && npm run migrate -w @forgex/postgres",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

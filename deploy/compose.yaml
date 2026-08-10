@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${FORGEX_POSTGRES_DB:-forgex}
+      POSTGRES_USER: ${FORGEX_POSTGRES_USER:-forgex}
+      POSTGRES_PASSWORD: ${FORGEX_POSTGRES_PASSWORD:?请设置 FORGEX_POSTGRES_PASSWORD}
+    volumes:
+      - forgex-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: control-plane
+    environment:
+      FORGEX_DATABASE_URL: postgresql://${FORGEX_POSTGRES_USER:-forgex}:${FORGEX_POSTGRES_PASSWORD}@postgres:5432/${FORGEX_POSTGRES_DB:-forgex}
+    command: ["npm", "run", "migrate", "--workspace", "@forgex/postgres"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  control-plane:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: control-plane
+    restart: unless-stopped
+    environment:
+      FORGEX_DATABASE_URL: postgresql://${FORGEX_POSTGRES_USER:-forgex}:${FORGEX_POSTGRES_PASSWORD}@postgres:5432/${FORGEX_POSTGRES_DB:-forgex}
+      FORGEX_CONTROL_PLANE_CONFIG: /run/forgex/control-plane.json
+    volumes:
+      - ./config/control-plane.json:/run/forgex/control-plane.json:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web-console/Dockerfile
+      args:
+        VITE_FORGEX_PROJECT_NAME: ${VITE_FORGEX_PROJECT_NAME:-我的项目}
+    restart: unless-stopped
+    ports:
+      - "${FORGEX_HTTP_PORT:-8080}:8080"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:8080/healthz",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  forgex-postgres:

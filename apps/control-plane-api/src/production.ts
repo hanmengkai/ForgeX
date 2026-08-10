@@ -1,7 +1,10 @@
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
 
 import { EvidenceAuthority } from "@forgex/domain";
-import { McpHealthAuthority, SkillEvaluationAuthority } from "@forgex/extensions";
+import {
+  McpHealthAuthority,
+  SkillEvaluationAuthority,
+} from "@forgex/extensions";
 import {
   PostgresExtensionCatalogRepository,
   PostgresKnowledgeBaseRepository,

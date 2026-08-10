@@ -10,3 +10,4 @@ coverage/
 *.log
 .idea/
 .vscode/
+deploy/config/control-plane.json

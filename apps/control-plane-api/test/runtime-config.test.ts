@@ -93,8 +93,12 @@ describe("Control Plane 运行配置", () => {
     await expect(
       runners.authenticate(`Runner ${runnerToken}`),
     ).resolves.toEqual({ tenantKey, runnerKey, keyId });
-    await expect(people.authenticate(`Bearer ${runnerToken}`)).resolves.toBeNull();
-    await expect(runners.authenticate(`Runner ${peopleToken}`)).resolves.toBeNull();
+    await expect(
+      people.authenticate(`Bearer ${runnerToken}`),
+    ).resolves.toBeNull();
+    await expect(
+      runners.authenticate(`Runner ${peopleToken}`),
+    ).resolves.toBeNull();
   });
 
   it("拒绝重复令牌摘要、明文令牌和不完整的部署范围", () => {

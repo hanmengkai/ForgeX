@@ -67,7 +67,9 @@ if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
       process.once("SIGTERM", shutdown);
     })
     .catch(() => {
-      console.error("ForgeX Control Plane 启动失败，请检查运行配置与数据库状态");
+      console.error(
+        "ForgeX Control Plane 启动失败，请检查运行配置与数据库状态",
+      );
       process.exitCode = 1;
     });
 }

@@ -1,0 +1,13 @@
+.git
+.github
+.tmp-*
+**/node_modules
+**/dist
+**/dist-types
+**/*.tsbuildinfo
+coverage
+.env
+.env.*
+!.env.example
+deploy/config/control-plane.json
+*.log

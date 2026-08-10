@@ -15,10 +15,7 @@ class FakeClient implements PostgresClient {
     readonly applied: Array<{ version: string; checksum: string }> = [],
   ) {}
 
-  async query(
-    text: string,
-    values?: unknown[],
-  ): Promise<PostgresQueryResult> {
+  async query(text: string, values?: unknown[]): Promise<PostgresQueryResult> {
     this.queries.push({ text, ...(values ? { values } : {}) });
     if (text.includes("SELECT version, checksum")) {
       return { rows: this.applied.map((row) => ({ ...row })) };
@@ -45,15 +42,14 @@ describe("PostgreSQL migration runner", () => {
       migration("0002", "requirements", "CREATE TABLE requirements(id uuid);"),
     ];
 
-    await runPostgresMigrations(
-      { connect: async () => client },
-      migrations,
-    );
+    await runPostgresMigrations({ connect: async () => client }, migrations);
 
     expect(client.queries.map((query) => query.text)).toEqual([
       "BEGIN",
       expect.stringContaining("pg_advisory_xact_lock"),
-      expect.stringContaining("CREATE TABLE IF NOT EXISTS forgex_schema_migrations"),
+      expect.stringContaining(
+        "CREATE TABLE IF NOT EXISTS forgex_schema_migrations",
+      ),
       expect.stringContaining("SELECT version, checksum"),
       migrations[0]!.sql,
       expect.stringContaining("INSERT INTO forgex_schema_migrations"),
@@ -79,7 +75,9 @@ describe("PostgreSQL migration runner", () => {
 
     const exact = new FakeClient([{ version: "0001", checksum }]);
     await runPostgresMigrations({ connect: async () => exact }, [original]);
-    expect(exact.queries.map((query) => query.text)).not.toContain(original.sql);
+    expect(exact.queries.map((query) => query.text)).not.toContain(
+      original.sql,
+    );
 
     const changed = new FakeClient([{ version: "0001", checksum }]);
     await expect(
