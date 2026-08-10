@@ -101,6 +101,10 @@ const validRequirement = {
 
 const createTestApp = (
   mcpHealthAuthority = new McpHealthAuthority({ verifiers: [] }),
+  runtime: {
+    readiness?: () => Promise<void>;
+    serviceVersion?: string;
+  } = {},
 ) => {
   const repository = new InMemoryRequirementRepository();
   const extensionCatalogRepository = new InMemoryExtensionCatalogRepository();
@@ -147,6 +151,7 @@ const createTestApp = (
     projectKey,
     repositoryKey: projectKey,
     clock: () => new Date("2026-08-10T03:00:00.000Z"),
+    ...runtime,
   });
   return {
     app,
@@ -165,6 +170,37 @@ const createTestApp = (
 };
 
 describe("需求 API", () => {
+  it("提供无需登录的存活与数据库就绪探针且不泄露失败细节", async () => {
+    const readiness = vi
+      .fn<() => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("postgres password leaked"));
+    const { app } = createTestApp(undefined, {
+      readiness,
+      serviceVersion: "0.1.0-test",
+    });
+
+    const live = await app.inject({ method: "GET", url: "/health/live" });
+    expect(live.statusCode).toBe(200);
+    expect(live.json()).toEqual({
+      status: "ok",
+      service: "forgex-control-plane",
+      version: "0.1.0-test",
+    });
+
+    const ready = await app.inject({ method: "GET", url: "/health/ready" });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toEqual({ status: "ready" });
+    const unavailable = await app.inject({
+      method: "GET",
+      url: "/health/ready",
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toEqual({ status: "not_ready" });
+    expect(unavailable.body).not.toContain("password");
+    await app.close();
+  });
+
   it("扩展目录不会把人工知识元数据冒充成可信业务资料", async () => {
     const { app, extensionCatalogRepository } = createTestApp();
     await extensionCatalogRepository.publish({
