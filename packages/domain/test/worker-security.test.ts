@@ -76,6 +76,29 @@ describe("Worker 会话隔离", () => {
     ).not.toThrow();
   });
 
+  it("同一短期接入授权并发重试返回同一代会话而不轮换", () => {
+    const registry = createRegistry();
+    const enrollment = {
+      enrollmentKey: "e".repeat(64),
+      sessionKey: "s".repeat(43),
+    };
+    const first = registry.register(
+      registration(1),
+      new Date("2026-08-10T00:00:00Z"),
+      enrollment,
+    );
+    const retry = registry.register(
+      registration(1),
+      new Date("2026-08-10T00:00:01Z"),
+      enrollment,
+    );
+
+    expect(retry).toEqual(first);
+    expect(
+      WorkerRegistry.fromSnapshot(registry.toSnapshot()).toSnapshot(),
+    ).toEqual(registry.toSnapshot());
+  });
+
   it("复制时间输入，外部修改不能让离线设备伪装在线", () => {
     const registry = createRegistry({ offlineAfterMs: 1_000 });
     const connectedAt = new Date("2026-08-10T00:00:00Z");

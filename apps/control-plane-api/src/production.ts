@@ -24,6 +24,7 @@ import {
 
 import { buildControlPlaneApi } from "./index.js";
 import { PostgresBrowserSessionManager } from "./postgres-browser-session.js";
+import { PostgresWorkerEnrollmentManager } from "./postgres-worker-enrollment.js";
 import {
   HashedRunnerSessionAuthenticator,
   HashedSessionAuthenticator,
@@ -59,6 +60,11 @@ export const createProductionControlPlane = (
   return buildControlPlaneApi({
     authenticator: new HashedSessionAuthenticator(options.config.sessions),
     browserSessionManager: new PostgresBrowserSessionManager(options.pool, {
+      projectKey: options.config.projectKey,
+      repositoryKey: options.config.repositoryKey,
+      authRealmRevision: options.authRealmRevision,
+    }),
+    workerEnrollmentManager: new PostgresWorkerEnrollmentManager(options.pool, {
       projectKey: options.config.projectKey,
       repositoryKey: options.config.repositoryKey,
       authRealmRevision: options.authRealmRevision,

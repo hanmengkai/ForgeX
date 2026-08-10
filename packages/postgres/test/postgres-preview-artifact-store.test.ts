@@ -111,9 +111,14 @@ describe("PostgresPreviewArtifactStore", () => {
       "0011_delivery_runs.sql",
       "0012_runner_verification.sql",
       "0013_verification_failures.sql",
+      "0014_browser_sessions.sql",
+      "0015_worker_enrollments.sql",
     ];
 
-    const positions = migrations.map((name) => readme.indexOf(name));
+    const sequenceStart = readme.indexOf("当前完整顺序为");
+    const positions = migrations.map((name) =>
+      readme.indexOf(name, sequenceStart),
+    );
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual(
       [...positions].sort((left, right) => left - right),

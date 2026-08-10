@@ -64,6 +64,7 @@ const createClient = (): ForgeXClient => ({
     workers: [],
     capacity: { connectedAccounts: 0, maxAccounts: 5, availableSlots: 5 },
   }),
+  connectWorker: vi.fn(),
   listExtensions: vi.fn().mockResolvedValue({
     businessKnowledge: [],
     teamCapabilities: [],

@@ -23,6 +23,7 @@ import {
   VerificationCoordinatorService,
   SkillRegistryApplicationService,
   WorkerFleetService,
+  canConnectWorker,
   canPerformRequirementAction,
   requirementCompletionDigest,
   type AuthenticatedPrincipal,
@@ -47,10 +48,10 @@ import {
   RequirementSpecSchema,
   StartDeliveryCommandSchema,
   WorkerConnectionCredentialSchema,
+  WorkerEnrollmentExchangeSchema,
   WorkerLeaseCommandSchema,
   WorkerMcpCompletionSchema,
   WorkerRequirementCompletionSchema,
-  WorkerRegistrationSchema,
   SignedEvidenceSchema,
   type WorkerConnectionCredentialPayload,
   type McpInvocationRequestPayload,
@@ -68,6 +69,10 @@ import {
   InMemoryBrowserSessionManager,
   type BrowserSessionManager,
 } from "./browser-session.js";
+import {
+  InMemoryWorkerEnrollmentManager,
+  type WorkerEnrollmentManager,
+} from "./worker-enrollment.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -100,6 +105,7 @@ export interface ControlPlaneApiOptions {
   sessionCookieSecure?: boolean;
   sessionCookieMaxAgeSeconds?: number;
   browserSessionManager?: BrowserSessionManager;
+  workerEnrollmentManager?: WorkerEnrollmentManager;
   clock?: () => Date;
   logger?: FastifyServerOptions["logger"];
 }
@@ -546,6 +552,11 @@ export const buildControlPlaneApi = (
     new InMemoryBrowserSessionManager({
       ...(options.clock ? { clock: options.clock } : {}),
     });
+  const workerEnrollments =
+    options.workerEnrollmentManager ??
+    new InMemoryWorkerEnrollmentManager({
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
 
   const authenticate = async (
     authorization: string | undefined,
@@ -723,7 +734,8 @@ export const buildControlPlaneApi = (
       path === "/api/v1/mcp-invocations" ||
       path.startsWith("/api/v1/mcp-invocations/") ||
       path === "/api/v1/workers" ||
-      path.startsWith("/api/v1/workers/")
+      path.startsWith("/api/v1/workers/") ||
+      path === "/api/v1/worker-enrollments"
     ) {
       const credential = requestSessionCredential(request);
       request.principal = await authenticateRequest(request);
@@ -778,7 +790,10 @@ export const buildControlPlaneApi = (
     return request.runnerConnection;
   };
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
+    if (request.url.startsWith("/api/v1/worker-enrollments")) {
+      reply.header("Cache-Control", "no-store").header("Pragma", "no-cache");
+    }
     if (error instanceof ApplicationError) {
       return reply.status(error.statusCode).send({
         error: {
@@ -1557,20 +1572,97 @@ export const buildControlPlaneApi = (
     },
   );
 
-  app.post("/api/v1/workers", async (request, reply) => {
+  app.post("/api/v1/worker-enrollments", async (request, reply) => {
     const principal = principalFrom(request);
-    const registration = WorkerRegistrationSchema.safeParse(request.body);
-    if (!registration.success) {
+    if (!canConnectWorker(principal)) {
+      throw new ApplicationError(
+        403,
+        "worker_management_denied",
+        "只有管理员可以签发设备接入码",
+      );
+    }
+    const command = z
+      .object({
+        schemaVersion: z.literal(1),
+        deviceName: z.string().trim().min(2).max(100),
+        accountName: z.string().trim().min(2).max(100),
+      })
+      .strict()
+      .safeParse(request.body);
+    if (!command.success) {
       throw new ApplicationError(
         422,
         "validation_error",
-        "设备连接信息需要调整",
-        validationDetails(registration.error),
+        "设备接入信息需要调整",
+        validationDetails(command.error),
       );
     }
+    const enrollment = await workerEnrollments.issue(
+      principal,
+      command.data.deviceName,
+      command.data.accountName,
+      10 * 60,
+    );
     return reply
+      .header("Cache-Control", "no-store")
+      .header("Pragma", "no-cache")
       .status(201)
-      .send({ data: await workers.connect(principal, registration.data) });
+      .send({
+        data: {
+          schemaVersion: 1,
+          enrollmentToken: enrollment.token,
+          expiresAt: enrollment.expiresAt,
+          exchangeUrl: "/api/v1/worker-enrollments/exchange",
+        },
+      });
+  });
+
+  app.post("/api/v1/worker-enrollments/exchange", async (request, reply) => {
+    const exchange = WorkerEnrollmentExchangeSchema.safeParse(request.body);
+    if (!exchange.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "设备接入请求格式不正确",
+        validationDetails(exchange.error),
+      );
+    }
+    const grant = await workerEnrollments.authorize(
+      exchange.data.enrollmentToken,
+      exchange.data.accountFingerprint,
+    );
+    if (!grant) {
+      throw new ApplicationError(
+        401,
+        "invalid_worker_enrollment",
+        "设备接入码无效、已过期或已经使用",
+      );
+    }
+    const connected = await workers.connect(
+      grant.principal,
+      {
+        schemaVersion: 1,
+        deviceName: grant.deviceName,
+        accountName: grant.accountName,
+        accountFingerprint: exchange.data.accountFingerprint,
+        capabilities: exchange.data.capabilities,
+      },
+      {
+        enrollmentKey: createHash("sha256")
+          .update("forgex-worker-enrollment:v1\0", "utf8")
+          .update(exchange.data.enrollmentToken, "utf8")
+          .digest("hex"),
+        sessionKey: createHash("sha256")
+          .update("forgex-worker-session:v1\0", "utf8")
+          .update(exchange.data.enrollmentToken, "utf8")
+          .digest("base64url"),
+      },
+    );
+    return reply
+      .header("Cache-Control", "no-store")
+      .header("Pragma", "no-cache")
+      .status(201)
+      .send({ data: connected });
   });
 
   app.get("/api/v1/workers", async (request, reply) => {
@@ -1579,6 +1671,11 @@ export const buildControlPlaneApi = (
     return reply.send({
       data: overview.workers,
       meta: overview.capacity,
+      links: {
+        actions: canConnectWorker(principal)
+          ? { connect: "/api/v1/worker-enrollments" }
+          : {},
+      },
     });
   });
 

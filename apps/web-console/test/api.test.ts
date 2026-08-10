@@ -499,6 +499,60 @@ describe("createHttpForgeXClient", () => {
     await expect(client.listWorkers()).rejects.toThrow("设备列表格式不正确");
   });
 
+  it("只按服务端授权入口创建设备连接并返回一次性配置", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [],
+            meta: {
+              connectedAccounts: 0,
+              maxAccounts: 5,
+              availableSlots: 5,
+            },
+            links: {
+              actions: { connect: "/api/v1/worker-enrollments" },
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              schemaVersion: 1,
+              enrollmentToken: "a".repeat(43),
+              expiresAt: "2026-08-11T06:00:00.000Z",
+              exchangeUrl: "/api/v1/worker-enrollments/exchange",
+            },
+          }),
+          { status: 201 },
+        ),
+      );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(client.listWorkers()).resolves.toMatchObject({
+      connectAction: "/api/v1/worker-enrollments",
+    });
+    await expect(
+      client.connectWorker("/api/v1/worker-enrollments", {
+        deviceName: "研发电脑 1",
+        accountName: "Codex 账户 1",
+      }),
+    ).resolves.toMatchObject({
+      enrollmentToken: "a".repeat(43),
+    });
+    const request = fetcher.mock.calls[1];
+    expect(request?.[0]).toBe("/api/v1/worker-enrollments");
+    expect(request?.[1]?.method).toBe("POST");
+    const body = JSON.parse(String(request?.[1]?.body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body).not.toHaveProperty("accountFingerprint");
+  });
+
   it("严格校验操作确认列表并只执行与当前操作精确绑定的确认入口", async () => {
     const self = "/api/v1/mcp-invocations/33333333-3333-4333-8333-333333333333";
     const valid = {

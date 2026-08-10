@@ -48,6 +48,7 @@ export interface WorkerNodeSnapshot extends WorkerRegistration {
   generation: number;
   lastHeartbeatAtMs: number;
   activeAssignmentKey: string | null;
+  enrollmentKey?: string;
 }
 
 type WorkerNode = WorkerNodeSnapshot;
@@ -133,9 +134,23 @@ export class WorkerRegistry {
     return worker.accountFingerprint;
   }
 
-  register(registration: WorkerRegistration, now: Date): WorkerSession {
+  register(
+    registration: WorkerRegistration,
+    now: Date,
+    enrollment?: { enrollmentKey: string; sessionKey: string },
+  ): WorkerSession {
     const normalized = this.#normalizeRegistration(registration);
     const timestamp = toTimestamp(now, "设备连接时间");
+    if (
+      enrollment &&
+      (!fingerprintPattern.test(enrollment.enrollmentKey) ||
+        !/^[A-Za-z0-9_-]{43}$/u.test(enrollment.sessionKey))
+    ) {
+      throw new WorkerDomainError(
+        "invalid_registration",
+        "设备接入幂等信息格式不正确",
+      );
+    }
     const existing = [...this.#workers.values()].find(
       (item) => item.accountFingerprint === normalized.accountFingerprint,
     );
@@ -145,9 +160,18 @@ export class WorkerRegistry {
       existing.accountName = normalized.accountName;
       existing.capabilities = normalized.capabilities;
       existing.lastHeartbeatAtMs = timestamp;
+      if (
+        enrollment &&
+        existing.enrollmentKey === enrollment.enrollmentKey &&
+        existing.sessionKeyDigest === digestSessionKey(enrollment.sessionKey)
+      ) {
+        return this.#sessionOf(existing, enrollment.sessionKey);
+      }
       existing.generation += 1;
-      const sessionKey = createSessionKey();
+      const sessionKey = enrollment?.sessionKey ?? createSessionKey();
       existing.sessionKeyDigest = digestSessionKey(sessionKey);
+      if (enrollment) existing.enrollmentKey = enrollment.enrollmentKey;
+      else delete existing.enrollmentKey;
       return this.#sessionOf(existing, sessionKey);
     }
 
@@ -159,7 +183,7 @@ export class WorkerRegistry {
     }
 
     const workerKey = randomUUID();
-    const sessionKey = createSessionKey();
+    const sessionKey = enrollment?.sessionKey ?? createSessionKey();
     const worker: WorkerNode = {
       ...normalized,
       tenantKey: this.#tenantKey,
@@ -168,6 +192,7 @@ export class WorkerRegistry {
       generation: 1,
       lastHeartbeatAtMs: timestamp,
       activeAssignmentKey: null,
+      ...(enrollment ? { enrollmentKey: enrollment.enrollmentKey } : {}),
     };
     this.#workers.set(workerKey, worker);
     return this.#sessionOf(worker, sessionKey);
@@ -292,6 +317,8 @@ export class WorkerRegistry {
         !worker.accountName?.trim() ||
         !fingerprintPattern.test(worker.accountFingerprint) ||
         !fingerprintPattern.test(worker.sessionKeyDigest) ||
+        (worker.enrollmentKey !== undefined &&
+          !fingerprintPattern.test(worker.enrollmentKey)) ||
         !Array.isArray(worker.capabilities) ||
         worker.capabilities.length > 50 ||
         worker.capabilities.some(

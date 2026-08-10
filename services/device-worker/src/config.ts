@@ -237,6 +237,16 @@ export const DeviceWorkerConfigSchema = z
       })
       .strict(),
     completionJournalPath: absolutePath,
+    capabilities: z
+      .array(
+        z
+          .string()
+          .trim()
+          .toLowerCase()
+          .regex(/^[a-z0-9][a-z0-9._-]{0,49}$/u),
+      )
+      .max(50)
+      .default([]),
     projects: z.array(DeviceWorkerProjectSchema).min(1).max(100),
     mcpConnections: z.array(DeviceMcpConnectionSchema).max(50).default([]),
     idlePollIntervalMs: z.number().int().min(500).max(60_000).default(3_000),
@@ -251,6 +261,13 @@ export const DeviceWorkerConfigSchema = z
   .superRefine((config, context) => {
     const keys = new Set<string>();
     const mcpBindingKeys = new Set<string>();
+    if (new Set(config.capabilities).size !== config.capabilities.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["capabilities"],
+        message: "设备能力不能重复",
+      });
+    }
     const journalPath = path.resolve(config.completionJournalPath);
     const codexHomePath = path.resolve(config.codexHomePath);
     const isolationLauncherPath = path.resolve(

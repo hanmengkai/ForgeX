@@ -74,6 +74,19 @@ export interface WorkerFleetOverview {
     maxAccounts: number;
     availableSlots: number;
   };
+  connectAction?: string | undefined;
+}
+
+export interface WorkerConnectInput {
+  deviceName: string;
+  accountName: string;
+}
+
+export interface WorkerEnrollmentSetup {
+  schemaVersion: 1;
+  enrollmentToken: string;
+  expiresAt: string;
+  exchangeUrl: string;
 }
 
 export interface McpInvocationListItem {
@@ -171,6 +184,10 @@ export interface ForgeXClient {
   endSession(): Promise<void>;
   listRequirements(): Promise<RequirementListPage>;
   listWorkers(): Promise<WorkerFleetOverview>;
+  connectWorker(
+    actionUrl: string | undefined,
+    input: WorkerConnectInput,
+  ): Promise<WorkerEnrollmentSetup>;
   listExtensions(): Promise<ExtensionCatalogOverview>;
   listMcpInvocations(): Promise<McpInvocationListItem[]>;
   getKnowledgeBase(selfUrl: string): Promise<KnowledgeBaseDetail>;
@@ -396,6 +413,15 @@ const workerListResponseSchema = z
         availableSlots: z.number().int().min(0).max(5),
       })
       .strict(),
+    links: z
+      .object({
+        actions: z
+          .object({
+            connect: z.literal("/api/v1/worker-enrollments").optional(),
+          })
+          .strict(),
+      })
+      .strict(),
   })
   .strict()
   .superRefine((overview, context) => {
@@ -411,6 +437,19 @@ const workerListResponseSchema = z
       });
     }
   });
+
+const workerEnrollmentResponseSchema = z
+  .object({
+    data: z
+      .object({
+        schemaVersion: z.literal(1),
+        enrollmentToken: z.string().min(32).max(256),
+        expiresAt: z.iso.datetime(),
+        exchangeUrl: z.literal("/api/v1/worker-enrollments/exchange"),
+      })
+      .strict(),
+  })
+  .strict();
 
 const mcpInvocationSelfPattern =
   /^\/api\/v1\/mcp-invocations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -817,7 +856,30 @@ export const createHttpForgeXClient = (
       return {
         workers: parsed.data.data,
         capacity: parsed.data.meta,
+        ...(parsed.data.links.actions.connect
+          ? { connectAction: parsed.data.links.actions.connect }
+          : {}),
       };
+    },
+    connectWorker: async (actionUrl, input) => {
+      if (actionUrl !== "/api/v1/worker-enrollments") {
+        throw new Error("设备连接入口已经失效，请刷新页面后重试");
+      }
+      const response = await request(actionUrl, {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: 1,
+          deviceName: input.deviceName,
+          accountName: input.accountName,
+        }),
+      });
+      const parsed = workerEnrollmentResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("设备接入码响应格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
     },
     listExtensions: async () => {
       const response = await request("/api/v1/extensions");

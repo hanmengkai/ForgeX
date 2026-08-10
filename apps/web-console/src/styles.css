@@ -844,6 +844,46 @@ h1 {
   margin-bottom: 0;
 }
 
+.worker-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.worker-connect-panel,
+.worker-credential-panel {
+  margin-top: 0;
+}
+
+.worker-connect-panel form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+}
+
+.worker-connect-panel .dialog-actions,
+.worker-connect-panel .form-error {
+  grid-column: 1 / -1;
+}
+
+.worker-credential-panel p {
+  max-width: 760px;
+  color: var(--ink-soft);
+}
+
+.worker-credential-panel textarea {
+  width: 100%;
+  padding: 14px;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
 .fleet-capacity {
   display: grid;
   grid-template-columns: 1fr minmax(220px, 0.7fr);
@@ -1545,6 +1585,13 @@ h1 {
   }
 
   .worker-topbar .button {
+    width: 100%;
+  }
+
+  .worker-actions,
+  .worker-connect-panel form {
+    display: grid;
+    grid-template-columns: 1fr;
     width: 100%;
   }
 

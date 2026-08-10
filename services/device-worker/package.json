@@ -5,10 +5,12 @@
   "type": "module",
   "exports": "./src/index.ts",
   "bin": {
-    "forgex-codex-isolation-launcher": "./dist/isolation-launcher-main.js"
+    "forgex-codex-isolation-launcher": "./dist/isolation-launcher-main.js",
+    "forgex-device-worker-enroll": "./dist/enroll-main.js"
   },
   "scripts": {
     "build": "tsc -b",
+    "enroll": "npm run build && node dist/enroll-main.js",
     "start": "node dist/main.js"
   },
   "dependencies": {

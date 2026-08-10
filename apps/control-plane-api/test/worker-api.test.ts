@@ -209,11 +209,27 @@ const connectWorker = async (
   app: ReturnType<typeof buildControlPlaneApi>,
   index: number,
 ) => {
+  const registrationData = registration(index);
+  const enrollment = await app.inject({
+    method: "POST",
+    url: "/api/v1/worker-enrollments",
+    headers: { authorization: "Bearer admin-session" },
+    payload: {
+      schemaVersion: 1,
+      deviceName: registrationData.deviceName,
+      accountName: registrationData.accountName,
+    },
+  });
+  expect(enrollment.statusCode).toBe(201);
   const response = await app.inject({
     method: "POST",
-    url: "/api/v1/workers",
-    headers: { authorization: "Bearer admin-session" },
-    payload: registration(index),
+    url: "/api/v1/worker-enrollments/exchange",
+    payload: {
+      schemaVersion: 1,
+      enrollmentToken: enrollment.json().data.enrollmentToken,
+      accountFingerprint: registrationData.accountFingerprint,
+      capabilities: registrationData.capabilities,
+    },
   });
   expect(response.statusCode).toBe(201);
   return response.json().data.connection as {
@@ -286,11 +302,22 @@ describe("Codex 设备网关 API", () => {
     const { app } = createTestApp();
     const forbidden = await app.inject({
       method: "POST",
-      url: "/api/v1/workers",
+      url: "/api/v1/worker-enrollments",
       headers: { authorization: "Bearer developer-session" },
-      payload: registration(1),
+      payload: {
+        schemaVersion: 1,
+        deviceName: "研发电脑 1",
+        accountName: "Codex 账户 1",
+      },
     });
     expect(forbidden.statusCode).toBe(403);
+    const bypass = await app.inject({
+      method: "POST",
+      url: "/api/v1/workers",
+      headers: { authorization: "Bearer admin-session" },
+      payload: registration(1),
+    });
+    expect(bypass.statusCode).toBe(404);
 
     const connection = await connectWorker(app, 1);
     expect(connection.sessionKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -313,10 +340,134 @@ describe("Codex 设备网关 API", () => {
         maxAccounts: 5,
         availableSlots: 4,
       },
+      links: { actions: {} },
     });
     expect(list.body).not.toContain("accountFingerprint");
     expect(list.body).not.toContain("sessionKey");
     expect(list.body).not.toContain("workerKey");
+
+    const adminList = await app.inject({
+      method: "GET",
+      url: "/api/v1/workers",
+      headers: { authorization: "Bearer admin-session" },
+    });
+    expect(adminList.json().links).toEqual({
+      actions: { connect: "/api/v1/worker-enrollments" },
+    });
+    await app.close();
+  });
+
+  it("管理员签发短期单设备接入码，响应丢失时同一身份获得相同会话", async () => {
+    const { app } = createTestApp();
+    const issued = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-enrollments",
+      headers: { authorization: "Bearer admin-session" },
+      payload: {
+        schemaVersion: 1,
+        deviceName: "研发电脑 1",
+        accountName: "Codex 账户 1",
+      },
+    });
+    expect(issued.statusCode).toBe(201);
+    expect(issued.headers["cache-control"]).toBe("no-store");
+    expect(issued.headers.pragma).toBe("no-cache");
+    const token = issued.json().data.enrollmentToken as string;
+
+    const beforeExchange = await app.inject({
+      method: "GET",
+      url: "/api/v1/workers",
+      headers: { authorization: "Bearer admin-session" },
+    });
+    expect(beforeExchange.json().meta.connectedAccounts).toBe(0);
+
+    const exchange = (fingerprint: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/worker-enrollments/exchange",
+        payload: {
+          schemaVersion: 1,
+          enrollmentToken: token,
+          accountFingerprint: fingerprint,
+          capabilities: ["typescript"],
+        },
+      });
+    const first = await exchange("f".repeat(64));
+    const retry = await exchange("f".repeat(64));
+    const hijack = await exchange("e".repeat(64));
+    expect(first.statusCode).toBe(201);
+    expect(first.headers["cache-control"]).toBe("no-store");
+    expect(first.headers.pragma).toBe("no-cache");
+    expect(retry.statusCode).toBe(201);
+    expect(retry.json().data.connection).toEqual(first.json().data.connection);
+    expect(hijack.statusCode).toBe(401);
+
+    const afterExchange = await app.inject({
+      method: "GET",
+      url: "/api/v1/workers",
+      headers: { authorization: "Bearer admin-session" },
+    });
+    expect(afterExchange.json().meta).toMatchObject({
+      connectedAccounts: 1,
+      availableSlots: 4,
+    });
+    await app.close();
+  });
+
+  it("第二代设备已领取任务后，当前接入码的幂等重试不释放租约", async () => {
+    const { app } = createTestApp();
+    const issue = async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/worker-enrollments",
+        headers: { authorization: "Bearer admin-session" },
+        payload: {
+          schemaVersion: 1,
+          deviceName: "研发电脑 1",
+          accountName: "Codex 账户 1",
+        },
+      });
+      return response.json().data.enrollmentToken as string;
+    };
+    const exchange = (token: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/worker-enrollments/exchange",
+        payload: {
+          schemaVersion: 1,
+          enrollmentToken: token,
+          accountFingerprint: "f".repeat(64),
+          capabilities: ["typescript"],
+        },
+      });
+    await exchange(await issue());
+    const currentToken = await issue();
+    const current = await exchange(currentToken);
+    const connection = current.json().data.connection;
+    expect(connection.generation).toBe(2);
+    const { queued } = await requestConfirmedDelivery(app, "保持当前设备租约", [
+      "typescript",
+    ]);
+    expect(queued.statusCode).toBe(202);
+    const firstPoll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders(connection),
+      payload: {},
+    });
+
+    const retry = await exchange(currentToken);
+    expect(retry.json().data.connection).toEqual(connection);
+    const secondPoll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders(connection),
+      payload: {},
+    });
+    expect(secondPoll.json().data.assignment).toMatchObject({
+      assignmentKey: firstPoll.json().data.assignment.assignmentKey,
+      fencingToken: firstPoll.json().data.assignment.fencingToken,
+    });
     await app.close();
   });
 
@@ -872,11 +1023,25 @@ describe("Codex 设备网关 API", () => {
         await connectWorker(index % 2 === 0 ? secondApp : firstApp, index),
       );
     }
+    const sixthEnrollment = await secondApp.inject({
+      method: "POST",
+      url: "/api/v1/worker-enrollments",
+      headers: { authorization: "Bearer admin-session" },
+      payload: {
+        schemaVersion: 1,
+        deviceName: registration(6).deviceName,
+        accountName: registration(6).accountName,
+      },
+    });
     const rejected = await secondApp.inject({
       method: "POST",
-      url: "/api/v1/workers",
-      headers: { authorization: "Bearer admin-session" },
-      payload: registration(6),
+      url: "/api/v1/worker-enrollments/exchange",
+      payload: {
+        schemaVersion: 1,
+        enrollmentToken: sixthEnrollment.json().data.enrollmentToken,
+        accountFingerprint: registration(6).accountFingerprint,
+        capabilities: registration(6).capabilities,
+      },
     });
     expect(rejected.statusCode).toBe(409);
 

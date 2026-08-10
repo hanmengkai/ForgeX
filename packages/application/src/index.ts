@@ -156,6 +156,7 @@ export {
   type WorkerFleetTransaction,
 } from "./worker-fleet-repository.js";
 export {
+  canConnectWorker,
   WorkerFleetService,
   type McpInvocationDispatch,
   type McpWorkerCompletionResult,

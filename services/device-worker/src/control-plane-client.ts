@@ -129,7 +129,9 @@ type FetchLike = (
 
 const responseLimitBytes = 1_048_576;
 
-const readBoundedResponse = async (response: Response): Promise<string> => {
+export const readBoundedControlPlaneResponse = async (
+  response: Response,
+): Promise<string> => {
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > responseLimitBytes) {
     throw new ControlPlaneClientError(
@@ -326,7 +328,7 @@ export class WorkerControlPlaneClient {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      text = await readBoundedResponse(response);
+      text = await readBoundedControlPlaneResponse(response);
     } catch (error) {
       if (timedOut) {
         throw new ControlPlaneClientError(

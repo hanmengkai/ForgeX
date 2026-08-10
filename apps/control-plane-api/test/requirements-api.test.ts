@@ -635,14 +635,22 @@ describe("需求 API", () => {
         actorName: "产品负责人",
       }),
     ]);
-    const connected = await app.inject({
+    const enrollment = await app.inject({
       method: "POST",
-      url: "/api/v1/workers",
+      url: "/api/v1/worker-enrollments",
       headers: { authorization: "Bearer admin-session" },
       payload: {
         schemaVersion: 1,
         deviceName: "研发电脑 1",
         accountName: "Codex 账户 1",
+      },
+    });
+    const connected = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-enrollments/exchange",
+      payload: {
+        schemaVersion: 1,
+        enrollmentToken: enrollment.json().data.enrollmentToken,
         accountFingerprint: "f".repeat(64),
         capabilities: [manifest.connectionBindingKey],
       },

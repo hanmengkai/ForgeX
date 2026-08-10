@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type {
   ForgeXClient,
+  WorkerEnrollmentSetup,
   WorkerFleetOverview,
   WorkerListItem,
 } from "./api.js";
@@ -20,7 +28,16 @@ export function WorkerCenter({ client }: WorkerCenterProps) {
   const [overview, setOverview] = useState<WorkerFleetOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deviceName, setDeviceName] = useState("");
+  const [accountName, setAccountName] = useState("");
+  const [connectionSetup, setConnectionSetup] =
+    useState<WorkerEnrollmentSetup | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<"command" | "token" | null>(null);
   const generationRef = useRef(0);
+  const savingRef = useRef(false);
 
   const load = useCallback(async () => {
     const generation = ++generationRef.current;
@@ -58,6 +75,55 @@ export function WorkerCenter({ client }: WorkerCenterProps) {
     };
   }, [overview]);
 
+  const enrollmentCommand = useMemo(
+    () =>
+      connectionSetup
+        ? `npm run --workspace @forgex/device-worker enroll -- --control-plane ${window.location.origin}`
+        : "",
+    [connectionSetup],
+  );
+
+  const submitConnection = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (savingRef.current || !overview?.connectAction) return;
+    savingRef.current = true;
+    setSaving(true);
+    setConnectionError(null);
+    try {
+      const result = await client.connectWorker(overview.connectAction, {
+        deviceName: deviceName.trim(),
+        accountName: accountName.trim(),
+      });
+      setConnectionSetup(result);
+      setConnecting(false);
+    } catch (caught) {
+      setConnectionError(
+        caught instanceof Error
+          ? caught.message
+          : "暂时无法生成设备连接配置，请稍后重试",
+      );
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const closeConnectionSetup = () => {
+    setConnectionSetup(null);
+    setDeviceName("");
+    setAccountName("");
+    setCopied(null);
+  };
+
+  const copyValue = async (value: string, kind: "command" | "token") => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(kind);
+    } catch {
+      setConnectionError("浏览器无法自动复制，请手动选择下方配置");
+    }
+  };
+
   return (
     <div className="worker-center">
       <header className="topbar worker-topbar">
@@ -66,14 +132,28 @@ export function WorkerCenter({ client }: WorkerCenterProps) {
           <h1>设备中心</h1>
           <p>每个账户独立登录在客户设备上，平台只调度任务，不接管登录凭据。</p>
         </div>
-        <button
-          className="button secondary"
-          type="button"
-          disabled={loading}
-          onClick={() => void load()}
-        >
-          {loading ? "正在刷新…" : "刷新状态"}
-        </button>
+        <div className="worker-actions">
+          {overview?.connectAction && overview.capacity.availableSlots > 0 ? (
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => {
+                setConnecting((value) => !value);
+                setConnectionError(null);
+              }}
+            >
+              {connecting ? "收起连接表单" : "连接新设备"}
+            </button>
+          ) : null}
+          <button
+            className="button secondary"
+            type="button"
+            disabled={loading}
+            onClick={() => void load()}
+          >
+            {loading ? "正在刷新…" : "刷新状态"}
+          </button>
+        </div>
       </header>
 
       {error ? (
@@ -83,6 +163,119 @@ export function WorkerCenter({ client }: WorkerCenterProps) {
             重新加载
           </button>
         </div>
+      ) : null}
+
+      {connecting ? (
+        <section className="content-section worker-connect-panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">仅管理员可操作</span>
+              <h2>连接一台 Codex 设备</h2>
+              <p>这里只登记设备昵称，不接收 Codex 登录凭据。</p>
+            </div>
+          </div>
+          <form onSubmit={(event) => void submitConnection(event)}>
+            <label className="field" htmlFor="worker-device-name">
+              设备名称
+              <input
+                id="worker-device-name"
+                required
+                minLength={2}
+                maxLength={100}
+                value={deviceName}
+                disabled={saving}
+                placeholder="例如：研发电脑 1"
+                onChange={(event) => setDeviceName(event.target.value)}
+              />
+            </label>
+            <label className="field" htmlFor="worker-account-name">
+              Codex 账户昵称
+              <input
+                id="worker-account-name"
+                required
+                minLength={2}
+                maxLength={100}
+                value={accountName}
+                disabled={saving}
+                placeholder="例如：团队 Codex 账户 1"
+                onChange={(event) => setAccountName(event.target.value)}
+              />
+              <small>用于团队识别，不要填写邮箱、密码或 Token。</small>
+            </label>
+            {connectionError ? (
+              <p className="form-error" role="alert">
+                {connectionError}
+              </p>
+            ) : null}
+            <div className="dialog-actions">
+              <button
+                className="button primary"
+                type="submit"
+                disabled={saving}
+              >
+                {saving ? "正在生成…" : "生成连接配置"}
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : null}
+
+      {connectionSetup ? (
+        <section className="content-section worker-credential-panel">
+          <span className="eyebrow">只显示这一次</span>
+          <h2>设备接入码已生成</h2>
+          <p>
+            先在目标设备设置 <code>FORGEX_WORKER_CONFIG</code>{" "}
+            指向已填写本机路径的配置示例，
+            再从仓库根目录执行下面命令，并按无回显提示粘贴接入码。 CLI
+            会在配置同一私有目录保存稳定身份；接入码不会进入进程参数或 Shell
+            历史，十分钟后失效。
+          </p>
+          <textarea
+            aria-label="一次性设备接入码"
+            readOnly
+            rows={2}
+            value={connectionSetup.enrollmentToken}
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <button
+            className="button secondary compact-copy"
+            type="button"
+            onClick={() =>
+              void copyValue(connectionSetup.enrollmentToken, "token")
+            }
+          >
+            {copied === "token" ? "接入码已复制" : "复制后在 CLI 提示中粘贴"}
+          </button>
+          <textarea
+            aria-label="设备接入命令"
+            readOnly
+            rows={5}
+            value={enrollmentCommand}
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          {connectionError ? (
+            <p className="form-error" role="alert">
+              {connectionError}
+            </p>
+          ) : null}
+          <div className="dialog-actions">
+            <button
+              className="button secondary"
+              type="button"
+              onClick={() => void copyValue(enrollmentCommand, "command")}
+            >
+              {copied === "command" ? "命令已复制" : "复制接入命令"}
+            </button>
+            <button
+              className="button primary"
+              type="button"
+              onClick={closeConnectionSetup}
+            >
+              我已保存，关闭
+            </button>
+          </div>
+        </section>
       ) : null}
 
       {loading && !overview ? (

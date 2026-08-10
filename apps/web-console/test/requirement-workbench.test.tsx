@@ -85,6 +85,7 @@ const createClient = (): ForgeXClient => ({
       availableSlots: 3,
     },
   }),
+  connectWorker: vi.fn(),
   getRequirement: vi.fn().mockResolvedValue({
     ...items[0]!,
     spec: {
@@ -158,6 +159,55 @@ describe("RequirementWorkbench", () => {
     expect(screen.getByText("还有 3 个可用槽位")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/sessionKey|workerKey|指纹/);
     expect(client.listWorkers).toHaveBeenCalledTimes(1);
+  });
+
+  it("管理员可从设备中心生成短期接入命令并在关闭后清除接入码", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.listWorkers).mockResolvedValue({
+      workers: [],
+      capacity: {
+        connectedAccounts: 0,
+        maxAccounts: 5,
+        availableSlots: 5,
+      },
+      connectAction: "/api/v1/worker-enrollments",
+    });
+    vi.mocked(client.connectWorker).mockResolvedValue({
+      schemaVersion: 1,
+      enrollmentToken: "a".repeat(43),
+      expiresAt: "2026-08-11T06:00:00.000Z",
+      exchangeUrl: "/api/v1/worker-enrollments/exchange",
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(screen.getByRole("button", { name: "设备中心" }));
+    await user.click(await screen.findByRole("button", { name: "连接新设备" }));
+    await user.type(screen.getByLabelText("设备名称"), "研发电脑 1");
+    await user.type(screen.getByLabelText(/Codex 账户昵称/u), "Codex 账户 1");
+    await user.click(screen.getByRole("button", { name: "生成连接配置" }));
+
+    expect(client.connectWorker).toHaveBeenCalledWith(
+      "/api/v1/worker-enrollments",
+      {
+        deviceName: "研发电脑 1",
+        accountName: "Codex 账户 1",
+      },
+    );
+    const command = (await screen.findByLabelText(
+      "设备接入命令",
+    )) as HTMLTextAreaElement;
+    expect(command.value).toContain("@forgex/device-worker enroll");
+    expect(command.value).toContain("--control-plane");
+    expect(command.value).not.toContain("<");
+    expect(command.value).not.toContain("a".repeat(43));
+    expect(
+      (screen.getByLabelText("一次性设备接入码") as HTMLTextAreaElement).value,
+    ).toBe("a".repeat(43));
+    await user.click(screen.getByRole("button", { name: "我已保存，关闭" }));
+    expect(screen.queryByLabelText("设备接入命令")).toBeNull();
+    expect(screen.queryByLabelText("一次性设备接入码")).toBeNull();
+    expect(document.body.textContent).not.toContain("aaaaaaaa");
   });
 
   it("扩展中心用业务资料、团队能力和外部工具组织项目能力", async () => {

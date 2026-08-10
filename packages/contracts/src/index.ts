@@ -178,6 +178,32 @@ export const WorkerConnectionCredentialSchema = z
   })
   .strict();
 
+export const WorkerEnrollmentExchangeSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    enrollmentToken: z.string().min(32).max(256),
+    accountFingerprint: z.string().regex(sha256Pattern),
+    capabilities: z
+      .array(
+        z
+          .string()
+          .trim()
+          .toLowerCase()
+          .regex(capabilityPattern, "设备能力格式不正确"),
+      )
+      .max(50),
+  })
+  .strict()
+  .superRefine((exchange, context) => {
+    if (new Set(exchange.capabilities).size !== exchange.capabilities.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["capabilities"],
+        message: "设备能力不能重复",
+      });
+    }
+  });
+
 export const McpInvocationRequestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -375,6 +401,9 @@ export type WorkerRegistrationPayload = z.infer<
 >;
 export type WorkerConnectionCredentialPayload = z.infer<
   typeof WorkerConnectionCredentialSchema
+>;
+export type WorkerEnrollmentExchangePayload = z.infer<
+  typeof WorkerEnrollmentExchangeSchema
 >;
 export type McpInvocationRequestPayload = z.infer<
   typeof McpInvocationRequestSchema

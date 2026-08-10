@@ -9,6 +9,7 @@ import { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 
 import { PostgresBrowserSessionManager } from "../src/postgres-browser-session.js";
+import { PostgresWorkerEnrollmentManager } from "../src/postgres-worker-enrollment.js";
 
 const databaseUrl = process.env.FORGEX_TEST_DATABASE_URL;
 const integrationIt = databaseUrl ? it : it.skip;
@@ -62,6 +63,66 @@ describe("PostgreSQL 浏览器会话集成", () => {
           "SELECT count(*)::text AS count FROM forgex_browser_sessions",
         );
         expect(count.rows[0]?.count).toBe("1");
+      } finally {
+        await pool.end();
+        await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+        await admin.end();
+      }
+    },
+    60_000,
+  );
+});
+
+describe("PostgreSQL 设备接入集成", () => {
+  integrationIt(
+    "短期接入码只绑定首次设备身份且相同身份可幂等重试",
+    async () => {
+      const parsedUrl = new URL(databaseUrl!);
+      if (!parsedUrl.pathname.endsWith("_test")) {
+        throw new Error(
+          "FORGEX_TEST_DATABASE_URL 必须指向名称以 _test 结尾的隔离数据库",
+        );
+      }
+      const schema = `forgex_enrollment_it_${randomUUID().replaceAll("-", "")}`;
+      const admin = new Pool({ connectionString: databaseUrl, max: 1 });
+      await admin.query(`CREATE SCHEMA ${schema}`);
+      const pool = new Pool({
+        connectionString: databaseUrl,
+        options: `-c search_path=${schema}`,
+        max: 2,
+      });
+      try {
+        await runPostgresMigrations(
+          pool,
+          await loadPostgresMigrations(resolve("packages/postgres/migrations")),
+        );
+        const enrollments = new PostgresWorkerEnrollmentManager(pool, {
+          projectKey: "22222222-2222-4222-8222-222222222222",
+          repositoryKey: "33333333-3333-4333-8333-333333333333",
+          authRealmRevision: "a".repeat(64),
+        });
+        const principal = {
+          actorKey: "44444444-4444-4444-8444-444444444444",
+          actorName: "平台管理员",
+          tenantKey: "11111111-1111-4111-8111-111111111111",
+          roles: ["administrator" as const],
+        };
+        const issued = await enrollments.issue(
+          principal,
+          "研发电脑 1",
+          "Codex 账户 1",
+          600,
+        );
+
+        await expect(
+          enrollments.authorize(issued.token, "f".repeat(64)),
+        ).resolves.toMatchObject({ deviceName: "研发电脑 1", principal });
+        await expect(
+          enrollments.authorize(issued.token, "f".repeat(64)),
+        ).resolves.toMatchObject({ accountName: "Codex 账户 1" });
+        await expect(
+          enrollments.authorize(issued.token, "e".repeat(64)),
+        ).resolves.toBeNull();
       } finally {
         await pool.end();
         await admin.query(`DROP SCHEMA ${schema} CASCADE`);

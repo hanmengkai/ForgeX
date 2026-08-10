@@ -105,6 +105,9 @@ const rolesByAction = {
   connect: new Set<PlatformRole>(["administrator"]),
 } satisfies Record<WorkerManagementAction, ReadonlySet<PlatformRole>>;
 
+export const canConnectWorker = (principal: AuthenticatedPrincipal): boolean =>
+  principal.roles.some((role) => rolesByAction.connect.has(role));
+
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -173,6 +176,7 @@ export class WorkerFleetService {
   async connect(
     principal: AuthenticatedPrincipal,
     input: WorkerRegistrationPayload,
+    enrollment?: { enrollmentKey: string; sessionKey: string },
   ): Promise<WorkerConnectionResult> {
     this.#requireAction(principal, "connect");
     const registration = WorkerRegistrationSchema.safeParse(input);
@@ -185,6 +189,13 @@ export class WorkerFleetService {
     }
     return this.#repository.transaction(principal.tenantKey, (transaction) => {
       const fleet = this.#loadFleet(transaction, principal.tenantKey);
+      const previousGeneration = fleet.registry
+        .toSnapshot()
+        .workers.find(
+          (worker) =>
+            worker.accountFingerprint ===
+            registration.data.accountFingerprint.toLowerCase(),
+        )?.generation;
       const session = this.#runDomain(() =>
         fleet.registry.register(
           {
@@ -194,9 +205,13 @@ export class WorkerFleetService {
             capabilities: registration.data.capabilities,
           },
           this.#now(),
+          enrollment,
         ),
       );
-      if (session.generation > 1) {
+      if (
+        previousGeneration !== undefined &&
+        session.generation > previousGeneration
+      ) {
         fleet.queue.abandonWorker(session.workerKey);
       }
       this.#saveFleet(transaction, fleet);
@@ -868,7 +883,7 @@ export class WorkerFleetService {
     principal: AuthenticatedPrincipal,
     action: WorkerManagementAction,
   ): void {
-    if (!principal.roles.some((role) => rolesByAction[action].has(role))) {
+    if (action === "connect" && !canConnectWorker(principal)) {
       throw new ApplicationError(
         403,
         "permission_denied",
