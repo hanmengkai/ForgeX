@@ -25,6 +25,24 @@
       "reasoningEffort": "high"
     }
   ],
+  "mcpConnections": [
+    {
+      "schemaVersion": 1,
+      "connectionBindingKey": "55555555-5555-4555-8555-555555555555",
+      "transport": "stdio",
+      "commandPath": "/opt/forgex/mcp/team-tools",
+      "commandSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "args": [
+        { "kind": "literal", "value": "--profile" },
+        { "kind": "literal", "value": "forgex" }
+      ],
+      "environment": {
+        "MCP_PROFILE": "forgex"
+      },
+      "allowedTools": ["notifications.send"],
+      "timeoutMs": 30000
+    }
+  ],
   "idlePollIntervalMs": 3000,
   "requestTimeoutMs": 5000,
   "renewIntervalMs": 15000,

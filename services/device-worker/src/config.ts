@@ -57,6 +57,29 @@ const mcpConnectionBase = {
   allowedTools: z.array(technicalName).min(1).max(50),
   timeoutMs: z.number().int().min(1_000).max(300_000).default(30_000),
 } as const;
+const mcpLiteralArgument = z
+  .object({
+    kind: z.literal("literal"),
+    value: z
+      .string()
+      .min(1)
+      .max(1_000)
+      .refine(
+        (value) =>
+          /^(?:--?[A-Za-z][A-Za-z0-9-]*|[A-Za-z0-9_][A-Za-z0-9_-]{0,999})$/u.test(
+            value,
+          ),
+        "MCP 普通参数只能使用不解释为文件或代码的受限值",
+      ),
+  })
+  .strict();
+const mcpTrustedFileArgument = z
+  .object({
+    kind: z.literal("trusted_file"),
+    path: absolutePath,
+    sha256: sha256Hash,
+  })
+  .strict();
 
 export const DeviceMcpConnectionSchema = z
   .discriminatedUnion("transport", [
@@ -68,10 +91,10 @@ export const DeviceMcpConnectionSchema = z
         commandSha256: sha256Hash,
         args: z
           .array(
-            z
-              .string()
-              .max(1_000)
-              .refine((value) => !value.includes("\u0000")),
+            z.discriminatedUnion("kind", [
+              mcpLiteralArgument,
+              mcpTrustedFileArgument,
+            ]),
           )
           .max(50)
           .default([]),
@@ -405,12 +428,46 @@ const sameLocalPath = (
     : normalizedLeft === normalizedRight;
 };
 
-const assertTrustedExecutable = async (input: {
+const assertTrustedDirectory = async (input: {
+  target: string;
+  label: string;
+  platform: NodeJS.Platform;
+  windowsPathCheck: (target: string) => Promise<void>;
+}): Promise<Awaited<ReturnType<typeof lstat>>> => {
+  const target = path.resolve(input.target);
+  const metadata = await lstat(target);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    !sameLocalPath(await realpath(target), target, input.platform)
+  ) {
+    throw new Error(`${input.label}必须是不可跳转的本地目录`);
+  }
+  if (input.platform === "win32") {
+    await input.windowsPathCheck(target);
+  } else {
+    const currentUid =
+      typeof process.getuid === "function" ? process.getuid() : -1;
+    if (
+      (Number(metadata.mode) & 0o022) !== 0 ||
+      (typeof metadata.uid === "number" &&
+        ![0, currentUid].includes(metadata.uid))
+    ) {
+      throw new Error(
+        `${input.label}必须由当前用户或 root 持有，且组与其他用户不可写`,
+      );
+    }
+  }
+  return metadata;
+};
+
+const assertTrustedFile = async (input: {
   target: string;
   expectedSha256: string;
   label: string;
   platform: NodeJS.Platform;
   windowsPathCheck: (target: string) => Promise<void>;
+  executable?: boolean;
 }): Promise<void> => {
   const target = path.resolve(input.target);
   const metadata = await lstat(target);
@@ -423,33 +480,33 @@ const assertTrustedExecutable = async (input: {
   ) {
     throw new Error(`${input.label}必须是不可跳转的本地普通文件`);
   }
-  if (input.platform !== "win32" && (Number(metadata.mode) & 0o111) === 0) {
+  if (
+    input.executable === true &&
+    input.platform !== "win32" &&
+    (Number(metadata.mode) & 0o111) === 0
+  ) {
     throw new Error(`${input.label}必须具有可执行权限`);
   }
   const directory = path.dirname(target);
-  const directoryMetadata = await lstat(directory);
-  if (
-    !directoryMetadata.isDirectory() ||
-    directoryMetadata.isSymbolicLink() ||
-    !sameLocalPath(await realpath(directory), directory, input.platform)
-  ) {
-    throw new Error(`${input.label}父目录必须是不可跳转的本地目录`);
-  }
+  await assertTrustedDirectory({
+    target: directory,
+    label: `${input.label}父目录`,
+    platform: input.platform,
+    windowsPathCheck: input.windowsPathCheck,
+  });
   if (input.platform === "win32") {
-    await input.windowsPathCheck(directory);
     await input.windowsPathCheck(target);
   } else {
     const currentUid =
       typeof process.getuid === "function" ? process.getuid() : -1;
-    for (const item of [directoryMetadata, metadata]) {
-      if (
-        (Number(item.mode) & 0o022) !== 0 ||
-        (typeof item.uid === "number" && ![0, currentUid].includes(item.uid))
-      ) {
-        throw new Error(
-          `${input.label}及其父目录必须由当前用户或 root 持有，且组与其他用户不可写`,
-        );
-      }
+    if (
+      (Number(metadata.mode) & 0o022) !== 0 ||
+      (typeof metadata.uid === "number" &&
+        ![0, currentUid].includes(metadata.uid))
+    ) {
+      throw new Error(
+        `${input.label}必须由当前用户或 root 持有，且组与其他用户不可写`,
+      );
     }
   }
   const digest = createHash("sha256")
@@ -457,6 +514,45 @@ const assertTrustedExecutable = async (input: {
     .digest("hex");
   if (digest !== input.expectedSha256) {
     throw new Error(`${input.label}内容与配置的可信摘要不一致`);
+  }
+};
+
+export const assertTrustedStdioMcpConnection = async (
+  connection: Extract<DeviceMcpConnection, { transport: "stdio" }>,
+  options: Pick<
+    DeviceWorkerConfigLoadOptions,
+    "platform" | "assertWindowsTrustedLauncherPath"
+  > = {},
+): Promise<void> => {
+  const platform = options.platform ?? process.platform;
+  const windowsPathCheck =
+    options.assertWindowsTrustedLauncherPath ??
+    assertTrustedWindowsLauncherPath;
+  await assertTrustedFile({
+    target: connection.commandPath,
+    expectedSha256: connection.commandSha256,
+    label: "MCP 启动器",
+    platform,
+    windowsPathCheck,
+    executable: true,
+  });
+  for (const argument of connection.args) {
+    if (argument.kind !== "trusted_file") continue;
+    await assertTrustedFile({
+      target: argument.path,
+      expectedSha256: argument.sha256,
+      label: "MCP 参数文件",
+      platform,
+      windowsPathCheck,
+    });
+  }
+  if (connection.workingDirectory) {
+    await assertTrustedDirectory({
+      target: connection.workingDirectory,
+      label: "MCP 工作目录",
+      platform,
+      windowsPathCheck,
+    });
   }
 };
 
@@ -495,21 +591,19 @@ export const loadDeviceWorkerConfig = async (
   if (!parsed.success) {
     throw new Error("设备 Worker 配置不符合当前版本要求");
   }
-  await assertTrustedExecutable({
+  await assertTrustedFile({
     target: parsed.data.codexIsolation.launcherPath,
     expectedSha256: parsed.data.codexIsolation.launcherSha256,
     label: "Codex 隔离启动器",
     platform,
     windowsPathCheck: windowsLauncherCheck,
+    executable: true,
   });
   for (const connection of parsed.data.mcpConnections) {
     if (connection.transport !== "stdio") continue;
-    await assertTrustedExecutable({
-      target: connection.commandPath,
-      expectedSha256: connection.commandSha256,
-      label: "MCP 启动器",
+    await assertTrustedStdioMcpConnection(connection, {
       platform,
-      windowsPathCheck: windowsLauncherCheck,
+      assertWindowsTrustedLauncherPath: windowsLauncherCheck,
     });
   }
   const journalPath = path.resolve(parsed.data.completionJournalPath);

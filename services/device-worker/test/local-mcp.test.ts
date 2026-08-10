@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { McpWorkerAssignment } from "../src/control-plane-client.js";
+import { assertTrustedStdioMcpConnection } from "../src/config.js";
 import {
   OfficialMcpExecutionAdapter,
   canonicalMcpJsonHash,
@@ -84,7 +84,9 @@ describe("OfficialMcpExecutionAdapter", () => {
       new URL("./mcp-stdio-fixture.mjs", import.meta.url),
     );
     const fixtureContent = await readFile(sourceFixturePath, "utf8");
-    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-mcp-stdio-"));
+    const root = await mkdtemp(
+      path.join(path.dirname(sourceFixturePath), ".tmp-mcp-stdio-"),
+    );
     temporaryRoots.push(root);
     const fixturePath = path.join(root, "mcp-server.mjs");
     await writeFile(fixturePath, fixtureContent, "utf8");
@@ -107,6 +109,11 @@ describe("OfficialMcpExecutionAdapter", () => {
           timeoutMs: 10_000,
         },
       ],
+      verifyStdioConnection: (stdioConnection) =>
+        assertTrustedStdioMcpConnection(stdioConnection, {
+          platform: "win32",
+          assertWindowsTrustedLauncherPath: async () => Promise.resolve(),
+        }),
     });
 
     await expect(
@@ -135,6 +142,7 @@ describe("OfficialMcpExecutionAdapter", () => {
     const adapter = new OfficialMcpExecutionAdapter({
       connections: [connection],
       connect,
+      verifyStdioConnection: async () => Promise.resolve(),
     });
 
     await expect(
@@ -176,6 +184,7 @@ describe("OfficialMcpExecutionAdapter", () => {
     const adapter = new OfficialMcpExecutionAdapter({
       connections: [connection],
       connect,
+      verifyStdioConnection: async () => Promise.resolve(),
     });
 
     await expect(
@@ -199,6 +208,7 @@ describe("OfficialMcpExecutionAdapter", () => {
         callTool: async () => ({ content: [], isError: true }),
         close: async () => Promise.resolve(),
       }),
+      verifyStdioConnection: async () => Promise.resolve(),
     });
 
     await expect(

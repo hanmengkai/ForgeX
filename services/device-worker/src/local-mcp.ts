@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -16,6 +15,7 @@ import {
 import type { McpWorkerAssignment } from "./control-plane-client.js";
 import {
   DeviceMcpConnectionSchema,
+  assertTrustedStdioMcpConnection,
   type DeviceMcpConnection,
 } from "./config.js";
 import type { LocalMcpExecutionAdapter } from "./runtime.js";
@@ -135,33 +135,6 @@ export type LocalMcpConnector = (
   signal: AbortSignal,
 ) => Promise<BoundMcpClient>;
 
-const samePath = (left: string, right: string): boolean =>
-  process.platform === "win32"
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right;
-
-const assertTrustedStdioCommand = async (
-  connection: Extract<DeviceMcpConnection, { transport: "stdio" }>,
-): Promise<void> => {
-  const configured = path.normalize(path.resolve(connection.commandPath));
-  const metadata = await lstat(configured);
-  if (
-    !metadata.isFile() ||
-    metadata.isSymbolicLink() ||
-    metadata.size < 1 ||
-    metadata.size > 128 * 1024 * 1024 ||
-    !samePath(path.normalize(await realpath(configured)), configured)
-  ) {
-    throw new Error("本地 MCP 启动器必须是可信普通文件");
-  }
-  const digest = createHash("sha256")
-    .update(await readFile(configured))
-    .digest("hex");
-  if (digest !== connection.commandSha256) {
-    throw new Error("本地 MCP 启动器与配置摘要不一致");
-  }
-};
-
 const boundedFetch: typeof fetch = async (input, init) => {
   const response = await fetch(input, { ...init, redirect: "error" });
   const declaredLength = Number(response.headers.get("content-length"));
@@ -200,10 +173,11 @@ const transportFor = async (
   connection: DeviceMcpConnection,
 ): Promise<Transport> => {
   if (connection.transport === "stdio") {
-    await assertTrustedStdioCommand(connection);
     return new StdioClientTransport({
       command: connection.commandPath,
-      args: connection.args,
+      args: connection.args.map((argument) =>
+        argument.kind === "literal" ? argument.value : argument.path,
+      ),
       env: {
         ...(process.env.SystemRoot
           ? { SystemRoot: process.env.SystemRoot }
@@ -258,10 +232,12 @@ const connectOfficialMcp: LocalMcpConnector = async (connection, signal) => {
 export class OfficialMcpExecutionAdapter implements LocalMcpExecutionAdapter {
   readonly #connections: Map<string, DeviceMcpConnection>;
   readonly #connect: LocalMcpConnector;
+  readonly #verifyStdioConnection: typeof assertTrustedStdioMcpConnection;
 
   constructor(options: {
     connections: DeviceMcpConnection[];
     connect?: LocalMcpConnector;
+    verifyStdioConnection?: typeof assertTrustedStdioMcpConnection;
   }) {
     const connections = z
       .array(DeviceMcpConnectionSchema)
@@ -277,6 +253,8 @@ export class OfficialMcpExecutionAdapter implements LocalMcpExecutionAdapter {
       throw new Error("本地 MCP 连接绑定不能重复");
     }
     this.#connect = options.connect ?? connectOfficialMcp;
+    this.#verifyStdioConnection =
+      options.verifyStdioConnection ?? assertTrustedStdioMcpConnection;
   }
 
   async execute(input: {
@@ -304,6 +282,9 @@ export class OfficialMcpExecutionAdapter implements LocalMcpExecutionAdapter {
       ) !== input.assignment.execution.argumentsHash
     ) {
       throw new Error("本地 MCP 参数与可信摘要不一致");
+    }
+    if (connection.transport === "stdio") {
+      await this.#verifyStdioConnection(connection);
     }
 
     const signal = input.signal ?? new AbortController().signal;
