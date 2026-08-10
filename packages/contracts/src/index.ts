@@ -2,25 +2,31 @@ import { z } from "zod";
 
 const internalCodePattern = /^(?:REQ|BUG|TASK|FEAT|STORY)[-_]?\d+$/i;
 
-const readableText = (fieldName: string, minimumLength = 2) =>
+export const REQUIREMENT_REQUEST_BODY_LIMIT_BYTES = 1_048_576;
+
+const readableText = (
+  fieldName: string,
+  minimumLength = 2,
+  maximumLength = 2_000,
+) =>
   z
     .string()
     .trim()
     .min(minimumLength, `${fieldName}需要使用可理解的业务语言`)
-    .max(2_000, `${fieldName}内容过长`);
+    .max(maximumLength, `${fieldName}内容过长`);
 
 export const UserStorySchema = z
   .object({
-    role: readableText("使用角色"),
-    need: readableText("用户需要"),
-    value: readableText("业务价值"),
+    role: readableText("使用角色", 2, 100),
+    need: readableText("用户需要", 2, 400),
+    value: readableText("业务价值", 2, 400),
   })
   .strict();
 
 export const AcceptanceCriterionSchema = z
   .object({
-    title: readableText("验收条件标题"),
-    description: readableText("验收条件说明", 4),
+    title: readableText("验收条件标题", 2, 150),
+    description: readableText("验收条件说明", 4, 800),
     priority: z.enum(["must", "should", "could"]),
   })
   .strict();
@@ -28,17 +34,17 @@ export const AcceptanceCriterionSchema = z
 export const RequirementSpecSchema = z
   .object({
     schemaVersion: z.literal(1),
-    title: readableText("需求标题").refine(
+    title: readableText("需求标题", 2, 150).refine(
       (title) => !internalCodePattern.test(title),
       "需求标题不能只有内部编码",
     ),
-    goal: readableText("需求目标", 4),
-    userStories: z.array(UserStorySchema).max(100),
+    goal: readableText("需求目标", 4, 1_500),
+    userStories: z.array(UserStorySchema).max(30),
     acceptanceCriteria: z
       .array(AcceptanceCriterionSchema)
       .min(1, "至少需要一个可验证的验收条件")
-      .max(500, "验收条件数量不能超过 500 条"),
-    openQuestions: z.array(readableText("待澄清问题")).max(100),
+      .max(80, "验收条件数量不能超过 80 条"),
+    openQuestions: z.array(readableText("待澄清问题", 2, 400)).max(30),
   })
   .strict();
 

@@ -10,6 +10,13 @@ import { VerifiedEvidenceReceipt } from "./evidence.js";
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export class RequirementStateConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RequirementStateConflictError";
+  }
+}
+
 type RequirementStatus =
   | "draft"
   | "awaitingConfirmation"
@@ -103,6 +110,8 @@ export interface RequirementPeopleView {
   acceptanceProgress: string;
 }
 
+export type RequirementAllowedAction = "submitForConfirmation" | "confirm";
+
 export class RequirementWorkflow {
   readonly #key: string;
   readonly #tenantKey: string;
@@ -119,6 +128,7 @@ export class RequirementWorkflow {
   private constructor(
     initialRevision: RequirementRevision,
     options: RequirementWorkflowOptions,
+    requirementKey: string = randomUUID(),
   ) {
     if (
       !internalKeyPattern.test(options.tenantKey.trim()) ||
@@ -126,7 +136,7 @@ export class RequirementWorkflow {
     ) {
       throw new Error("需求必须绑定租户和项目范围");
     }
-    this.#key = randomUUID();
+    this.#key = requirementKey;
     this.#tenantKey = options.tenantKey.trim().toLowerCase();
     this.#projectKey = options.projectKey.trim().toLowerCase();
     this.#clock = options.clock ?? (() => new Date());
@@ -158,14 +168,14 @@ export class RequirementWorkflow {
 
   submitForConfirmation(): void {
     if (this.#status !== "draft" && this.#status !== "needsReconfirmation") {
-      throw new Error("当前状态不能重复提交确认");
+      throw new RequirementStateConflictError("当前状态不能重复提交确认");
     }
     this.#status = "awaitingConfirmation";
   }
 
   confirm(input: { actor: ApprovalActor }): void {
     if (this.#status !== "awaitingConfirmation") {
-      throw new Error("请先提交需求确认");
+      throw new RequirementStateConflictError("请先提交需求确认");
     }
     const actor = RequirementWorkflow.#validateActor(input.actor, "确认人");
     const recordedAt = this.#nowIso("确认时间");
@@ -362,6 +372,32 @@ export class RequirementWorkflow {
     };
   }
 
+  listAllowedActions(): RequirementAllowedAction[] {
+    switch (this.#status) {
+      case "draft":
+      case "needsReconfirmation":
+        return ["submitForConfirmation"];
+      case "awaitingConfirmation":
+        return ["confirm"];
+      default:
+        return [];
+    }
+  }
+
+  assertPersistenceIdentity(identity: {
+    tenantKey: string;
+    projectKey: string;
+    requirementKey: string;
+  }): void {
+    if (
+      identity.tenantKey.trim().toLowerCase() !== this.#tenantKey ||
+      identity.projectKey.trim().toLowerCase() !== this.#projectKey ||
+      identity.requirementKey.trim().toLowerCase() !== this.#key
+    ) {
+      throw new Error("需求聚合身份与持久化范围不一致");
+    }
+  }
+
   get internalKey(): string {
     return this.#key;
   }
@@ -372,6 +408,42 @@ export class RequirementWorkflow {
         ? { ...record, evidence: { ...record.evidence } }
         : { ...record },
     );
+  }
+
+  copyForTransaction(): RequirementWorkflow {
+    const firstRevision = this.#revisions[0];
+    if (!firstRevision) {
+      throw new Error("需求缺少版本信息");
+    }
+    const copy = new RequirementWorkflow(
+      RequirementWorkflow.#copyRevision(firstRevision),
+      {
+        tenantKey: this.#tenantKey,
+        projectKey: this.#projectKey,
+        clock: this.#clock,
+      },
+      this.#key,
+    );
+    copy.#revisions.splice(
+      0,
+      1,
+      ...this.#revisions.map(RequirementWorkflow.#copyRevision),
+    );
+    copy.#approvalRecords.push(
+      ...this.#approvalRecords.map((record) =>
+        record.action === "验收结果"
+          ? { ...record, evidence: { ...record.evidence } }
+          : { ...record },
+      ),
+    );
+    copy.#status = this.#status;
+    copy.#confirmedVersion = this.#confirmedVersion;
+    copy.#deliveryCandidate = this.#deliveryCandidate
+      ? Object.freeze({ ...this.#deliveryCandidate })
+      : null;
+    copy.#deliveryCandidateRecordedAtMs = this.#deliveryCandidateRecordedAtMs;
+    copy.#evidence = this.#evidence;
+    return copy;
   }
 
   get #current(): RequirementRevision {
@@ -442,6 +514,15 @@ export class RequirementWorkflow {
       criterionKey: randomUUID(),
       title: title.trim(),
     }));
+  }
+
+  static #copyRevision(revision: RequirementRevision): RequirementRevision {
+    return {
+      ...revision,
+      acceptanceCriteria: revision.acceptanceCriteria.map((criterion) => ({
+        ...criterion,
+      })),
+    };
   }
 
   static #validateActor(actor: ApprovalActor, roleName: string): ApprovalActor {

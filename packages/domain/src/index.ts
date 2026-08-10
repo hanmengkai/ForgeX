@@ -1,9 +1,13 @@
-export { RequirementWorkflow } from "./requirement-workflow.js";
+export {
+  RequirementStateConflictError,
+  RequirementWorkflow,
+} from "./requirement-workflow.js";
 export type {
   ApprovalActor,
   ApprovalRecord,
   DeliveryCandidate,
   RequirementPeopleView,
+  RequirementAllowedAction,
   RequirementRevisionInput,
   RequirementWorkflowOptions,
   VerificationTarget,

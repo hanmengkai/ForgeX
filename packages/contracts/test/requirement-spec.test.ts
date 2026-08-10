@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { RequirementSpecSchema } from "../src/index.js";
+import {
+  REQUIREMENT_REQUEST_BODY_LIMIT_BYTES,
+  RequirementSpecSchema,
+} from "../src/index.js";
 
 describe("RequirementSpec", () => {
   it("接受面向业务人员的需求说明", () => {
@@ -58,5 +61,32 @@ describe("RequirementSpec", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("schema 允许的最大正文仍小于 HTTP 请求硬上限", () => {
+    const escapedCharacter = "\u0001";
+    const input = {
+      schemaVersion: 1,
+      title: `需求${escapedCharacter.repeat(148)}`,
+      goal: escapedCharacter.repeat(1_500),
+      userStories: Array.from({ length: 30 }, () => ({
+        role: escapedCharacter.repeat(100),
+        need: escapedCharacter.repeat(400),
+        value: escapedCharacter.repeat(400),
+      })),
+      acceptanceCriteria: Array.from({ length: 80 }, () => ({
+        title: escapedCharacter.repeat(150),
+        description: escapedCharacter.repeat(800),
+        priority: "must" as const,
+      })),
+      openQuestions: Array.from({ length: 30 }, () =>
+        escapedCharacter.repeat(400),
+      ),
+    };
+
+    expect(RequirementSpecSchema.safeParse(input).success).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(input))).toBeLessThanOrEqual(
+      REQUIREMENT_REQUEST_BODY_LIMIT_BYTES,
+    );
   });
 });
