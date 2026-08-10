@@ -35,9 +35,10 @@ const target: VerificationRunnerTarget = {
   previewArtifact: null,
 };
 
-const plan = (
-  suites: VerificationSuitePlan["suites"],
-): VerificationSuitePlan => ({
+type SuiteInput = Omit<VerificationSuitePlan["suites"][number], "execution"> &
+  Partial<Pick<VerificationSuitePlan["suites"][number], "execution">>;
+
+const plan = (suites: SuiteInput[]): VerificationSuitePlan => ({
   schemaVersion: 1,
   planKey: "project-node-v1",
   planVersion: 1,
@@ -46,7 +47,14 @@ const plan = (
   requirementRevision: target.requirementRevision,
   gitHashAlgorithm: target.gitHashAlgorithm,
   commitSha: target.commitSha,
-  suites,
+  suites: suites.map((suite) => ({
+    ...suite,
+    execution: suite.execution ?? {
+      image: `registry.example.test/forgex/node@sha256:${"a".repeat(64)}`,
+      command: ["/forgex-verifier/node-quality"],
+      timeoutMs: 120_000,
+    },
+  })),
 });
 
 const anchorFor = (trustedPlan: VerificationSuitePlan) => ({
@@ -58,6 +66,23 @@ const anchorFor = (trustedPlan: VerificationSuitePlan) => ({
 
 describe("FixedSuiteVerificationEngine", () => {
   it("验证计划摘要绑定实际容器镜像、命令和超时", () => {
+    expect(
+      VerificationSuitePlanSchema.safeParse({
+        ...plan([]),
+        suites: [
+          {
+            suiteKey: "candidate-script",
+            name: "候选仓库自带脚本",
+            criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
+            execution: {
+              image: `registry.example.test/forgex/node@sha256:${"a".repeat(64)}`,
+              command: ["npm", "test"],
+              timeoutMs: 120_000,
+            },
+          },
+        ],
+      }).success,
+    ).toBe(false);
     const candidate = {
       ...plan([]),
       suites: [
@@ -69,7 +94,7 @@ describe("FixedSuiteVerificationEngine", () => {
           ),
           execution: {
             image: `registry.example.test/forgex/node@sha256:${"a".repeat(64)}`,
-            command: ["npm", "test", "--", "--runInBand"],
+            command: ["/forgex-verifier/node-quality", "--runInBand"],
             timeoutMs: 120_000,
           },
         },
@@ -84,7 +109,7 @@ describe("FixedSuiteVerificationEngine", () => {
         ...suite,
         execution: {
           ...suite.execution,
-          command: ["npm", "run", "fake-pass"],
+          command: ["/forgex-verifier/node-quality", "--fake-pass"],
         },
       })),
     });

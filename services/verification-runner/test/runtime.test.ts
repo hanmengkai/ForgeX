@@ -235,6 +235,7 @@ describe("VerificationRunnerRuntime", () => {
       listPending: vi.fn(async () => [target]),
       publishPreview: vi.fn(async () => Promise.resolve()),
       submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const verifier = {
       verify: vi.fn(async () => ({
@@ -263,6 +264,16 @@ describe("VerificationRunnerRuntime", () => {
     });
     expect(controlPlane.publishPreview).not.toHaveBeenCalled();
     expect(controlPlane.submitEvidence).not.toHaveBeenCalled();
+    expect(controlPlane.reportFailure).toHaveBeenCalledWith(
+      target,
+      expect.arrayContaining([
+        expect.objectContaining({
+          criterionKey,
+          status: "failed",
+          testRunKey: "suite-failed",
+        }),
+      ]),
+    );
     await expect(journal.load()).resolves.toBeNull();
   });
 
