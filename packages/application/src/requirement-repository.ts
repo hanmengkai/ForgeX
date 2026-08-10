@@ -1,4 +1,5 @@
 import {
+  EvidenceCheckSchema,
   WORKER_REQUIREMENT_COMPLETION_SUMMARY,
   type RequirementSpec,
 } from "@forgex/contracts";
@@ -18,6 +19,7 @@ export type RequirementAuditAction =
   | "delivery.dispatched"
   | "delivery.completed"
   | "verification.preview_recorded"
+  | "verification.failed"
   | "verification.completed";
 
 export interface DeliveryDispatchRecord {
@@ -122,6 +124,45 @@ export type VerificationEvidenceRecord = z.infer<
   typeof VerificationEvidenceRecordSchema
 >;
 
+export const VerificationFailureRecordSchema = z
+  .object({
+    tenantKey: deliveryInternalKey,
+    projectKey: deliveryInternalKey,
+    repositoryKey: deliveryInternalKey,
+    requirementKey: deliveryInternalKey,
+    requirementRevision: z.number().int().positive().max(10_000),
+    failureDigest: z.string().regex(sha256Pattern),
+    runnerKey: deliveryInternalKey,
+    keyId: deliveryInternalKey,
+    verificationCompletedAt: z.iso.datetime(),
+    checks: z.array(EvidenceCheckSchema).min(1).max(80),
+    recordedAt: z.iso.datetime(),
+  })
+  .strict()
+  .superRefine((record, context) => {
+    if (record.checks.every((check) => check.status === "passed")) {
+      context.addIssue({
+        code: "custom",
+        path: ["checks"],
+        message: "失败验证记录必须至少包含一项未通过结果",
+      });
+    }
+    if (
+      new Set(record.checks.map((check) => check.criterionKey)).size !==
+      record.checks.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["checks"],
+        message: "失败验证记录不能重复验收条件",
+      });
+    }
+  });
+
+export type VerificationFailureRecord = z.infer<
+  typeof VerificationFailureRecordSchema
+>;
+
 export interface RequirementAuditEvent {
   eventKey: string;
   tenantKey: string;
@@ -183,6 +224,11 @@ export interface RequirementTransaction {
     completedAt: string,
   ): Promise<boolean>;
   appendVerificationEvidence(record: VerificationEvidenceRecord): void;
+  findVerificationFailure(
+    requirementKey: string,
+    requirementRevision: number,
+  ): Promise<VerificationFailureRecord | null>;
+  saveVerificationFailure(record: VerificationFailureRecord): void;
 }
 
 export interface RequirementRepository {

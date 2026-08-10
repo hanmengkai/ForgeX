@@ -10,8 +10,10 @@ import type {
 import {
   DeliveryRunResultSchema,
   VerificationEvidenceRecordSchema,
+  VerificationFailureRecordSchema,
   type DeliveryRunResult,
   type VerificationEvidenceRecord,
+  type VerificationFailureRecord,
 } from "./requirement-repository.js";
 
 const scopedKey = (
@@ -38,6 +40,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     string,
     VerificationEvidenceRecord
   >();
+  readonly #verificationFailures = new Map<string, VerificationFailureRecord>();
   readonly #scopeTails = new Map<string, Promise<void>>();
   #nextPosition = 0;
 
@@ -67,6 +70,10 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     const pendingVerificationEvidence = new Map<
       string,
       VerificationEvidenceRecord
+    >();
+    const pendingVerificationFailures = new Map<
+      string,
+      VerificationFailureRecord
     >();
     const transaction: RequirementTransaction = {
       find: async (requirementKey) => {
@@ -299,6 +306,41 @@ export class InMemoryRequirementRepository implements RequirementRepository {
         }
         pendingVerificationEvidence.set(key, structuredClone(parsed));
       },
+      findVerificationFailure: async (requirementKey, requirementRevision) => {
+        const key = deliveryRunKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          requirementKey.toLowerCase(),
+          requirementRevision,
+        );
+        const record =
+          pendingVerificationFailures.get(key) ??
+          this.#verificationFailures.get(key);
+        return record ? structuredClone(record) : null;
+      },
+      saveVerificationFailure: (record) => {
+        const parsed = VerificationFailureRecordSchema.parse(record);
+        if (
+          parsed.tenantKey !== normalizedTenantKey ||
+          parsed.projectKey !== normalizedProjectKey
+        ) {
+          throw new Error("事务不能写入其他范围的验证失败记录");
+        }
+        const key = deliveryRunKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          parsed.requirementKey,
+          parsed.requirementRevision,
+        );
+        const existing =
+          pendingVerificationFailures.get(key) ??
+          this.#verificationFailures.get(key);
+        if (existing) {
+          if (JSON.stringify(existing) === JSON.stringify(parsed)) return;
+          throw new Error("同一交付版本不能覆盖已经记录的验证失败结果");
+        }
+        pendingVerificationFailures.set(key, structuredClone(parsed));
+      },
     };
 
     try {
@@ -319,6 +361,9 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       }
       for (const [key, evidence] of pendingVerificationEvidence) {
         this.#verificationEvidence.set(key, structuredClone(evidence));
+      }
+      for (const [key, failure] of pendingVerificationFailures) {
+        this.#verificationFailures.set(key, structuredClone(failure));
       }
       return result;
     } finally {
@@ -470,7 +515,17 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           scopedKey(tenant, project, run.requirementKey),
         );
         const snapshot = record?.workflow.toSnapshot();
-        return snapshot?.status === "inDelivery" && snapshot.evidence === null;
+        const failureKey = deliveryRunKey(
+          tenant,
+          project,
+          run.requirementKey,
+          run.requirementRevision,
+        );
+        return (
+          snapshot?.status === "inDelivery" &&
+          snapshot.evidence === null &&
+          !this.#verificationFailures.has(failureKey)
+        );
       })
       .sort(
         (left, right) =>

@@ -11,6 +11,7 @@ import {
 import {
   DeliveryRunResultSchema,
   VerificationEvidenceRecordSchema,
+  VerificationFailureRecordSchema,
   type DeliveryDispatchRecord,
   type DeliveryRunResult,
   type RequirementAuditAction,
@@ -21,6 +22,7 @@ import {
   type RequirementRepository,
   type RequirementTransaction,
   type VerificationEvidenceRecord,
+  type VerificationFailureRecord,
 } from "@forgex/application";
 
 import type {
@@ -39,6 +41,7 @@ const auditActions = new Set<RequirementAuditAction>([
   "delivery.dispatched",
   "delivery.completed",
   "verification.preview_recorded",
+  "verification.failed",
   "verification.completed",
 ]);
 
@@ -112,6 +115,10 @@ export class PostgresRequirementRepository implements RequirementRepository {
       const pendingVerificationEvidence = new Map<
         string,
         VerificationEvidenceRecord
+      >();
+      const pendingVerificationFailures = new Map<
+        string,
+        VerificationFailureRecord
       >();
       const transaction: RequirementTransaction = {
         find: async (requirementKey) => {
@@ -290,6 +297,47 @@ export class PostgresRequirementRepository implements RequirementRepository {
             structuredClone(parsed),
           );
         },
+        findVerificationFailure: async (
+          requirementKey,
+          requirementRevision,
+        ) => {
+          const requirement = parseInternalKey(requirementKey, "需求标识");
+          const key = `${requirement}:${requirementRevision}`;
+          const pending = pendingVerificationFailures.get(key);
+          if (pending) return structuredClone(pending);
+          const result = await client.query(
+            "SELECT repository_key, failure_digest, runner_key, key_id, verification_completed_at, checks, recorded_at FROM forgex_verification_failures WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            [tenant, project, requirement, requirementRevision],
+          );
+          const row = result.rows[0];
+          if (!isRecord(row)) return null;
+          return VerificationFailureRecordSchema.parse({
+            tenantKey: tenant,
+            projectKey: project,
+            repositoryKey: String(row.repository_key),
+            requirementKey: requirement,
+            requirementRevision,
+            failureDigest: row.failure_digest,
+            runnerKey: String(row.runner_key),
+            keyId: String(row.key_id),
+            verificationCompletedAt: parseIsoDate(
+              row.verification_completed_at,
+              "独立验证失败完成时间",
+            ),
+            checks: row.checks,
+            recordedAt: parseIsoDate(row.recorded_at, "验证失败记录时间"),
+          });
+        },
+        saveVerificationFailure: (failure) => {
+          const parsed = VerificationFailureRecordSchema.parse(failure);
+          if (parsed.tenantKey !== tenant || parsed.projectKey !== project) {
+            throw new Error("事务不能写入其他范围的验证失败记录");
+          }
+          pendingVerificationFailures.set(
+            `${parsed.requirementKey}:${parsed.requirementRevision}`,
+            structuredClone(parsed),
+          );
+        },
       };
 
       const result = await operation(transaction);
@@ -394,6 +442,51 @@ export class PostgresRequirementRepository implements RequirementRepository {
               evidence.recordedAt
           ) {
             throw new Error("同一验证证据标识已经绑定其他需求或内容");
+          }
+        }
+      }
+      for (const failure of pendingVerificationFailures.values()) {
+        const inserted = await client.query(
+          "INSERT INTO forgex_verification_failures (tenant_key, project_key, repository_key, requirement_key, requirement_revision, failure_digest, runner_key, key_id, verification_completed_at, checks, recorded_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11) ON CONFLICT (tenant_key, project_key, requirement_key, requirement_revision) DO NOTHING RETURNING requirement_key",
+          [
+            tenant,
+            project,
+            failure.repositoryKey,
+            failure.requirementKey,
+            failure.requirementRevision,
+            failure.failureDigest,
+            failure.runnerKey,
+            failure.keyId,
+            failure.verificationCompletedAt,
+            JSON.stringify(failure.checks),
+            failure.recordedAt,
+          ],
+        );
+        if (inserted.rows.length === 0) {
+          const existing = await client.query(
+            "SELECT repository_key, failure_digest, runner_key, key_id, verification_completed_at, checks FROM forgex_verification_failures WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            [
+              tenant,
+              project,
+              failure.requirementKey,
+              failure.requirementRevision,
+            ],
+          );
+          const row = existing.rows[0];
+          if (
+            !isRecord(row) ||
+            String(row.repository_key).toLowerCase() !==
+              failure.repositoryKey ||
+            row.failure_digest !== failure.failureDigest ||
+            String(row.runner_key).toLowerCase() !== failure.runnerKey ||
+            String(row.key_id).toLowerCase() !== failure.keyId ||
+            parseIsoDate(
+              row.verification_completed_at,
+              "独立验证失败完成时间",
+            ) !== failure.verificationCompletedAt ||
+            JSON.stringify(row.checks) !== JSON.stringify(failure.checks)
+          ) {
+            throw new Error("同一交付版本已经记录不同的验证失败结果");
           }
         }
       }
@@ -597,7 +690,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
     }
     return this.#withClient(async (client) => {
       const result = await client.query(
-        "SELECT run.repository_key, run.requirement_key, run.requirement_revision, run.assignment_key, run.fencing_token, run.git_hash_algorithm, run.base_commit, run.commit_sha, run.branch_name, run.summary, run.status, run.submitted_at, run.completed_at FROM forgex_delivery_runs AS run INNER JOIN forgex_requirements AS requirement ON requirement.tenant_key = run.tenant_key AND requirement.project_key = run.project_key AND requirement.requirement_key = run.requirement_key WHERE run.tenant_key = $1 AND run.project_key = $2 AND run.repository_key = $3 AND run.status = 'completed' AND requirement.workflow ->> 'status' = 'inDelivery' AND requirement.workflow -> 'evidence' = 'null'::jsonb ORDER BY run.completed_at ASC, run.requirement_key ASC LIMIT $4",
+        "SELECT run.repository_key, run.requirement_key, run.requirement_revision, run.assignment_key, run.fencing_token, run.git_hash_algorithm, run.base_commit, run.commit_sha, run.branch_name, run.summary, run.status, run.submitted_at, run.completed_at FROM forgex_delivery_runs AS run INNER JOIN forgex_requirements AS requirement ON requirement.tenant_key = run.tenant_key AND requirement.project_key = run.project_key AND requirement.requirement_key = run.requirement_key WHERE run.tenant_key = $1 AND run.project_key = $2 AND run.repository_key = $3 AND run.status = 'completed' AND requirement.workflow ->> 'status' = 'inDelivery' AND requirement.workflow -> 'evidence' = 'null'::jsonb AND NOT EXISTS (SELECT 1 FROM forgex_verification_failures AS failure WHERE failure.tenant_key = run.tenant_key AND failure.project_key = run.project_key AND failure.requirement_key = run.requirement_key AND failure.requirement_revision = run.requirement_revision) ORDER BY run.completed_at ASC, run.requirement_key ASC LIMIT $4",
         [tenant, project, repository, limit],
       );
       return result.rows.map((row) =>

@@ -1,14 +1,14 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import { z } from "zod";
 
 import { WorkerConnectionCredentialSchema } from "@forgex/contracts";
-
-const execFileAsync = promisify(execFile);
+import {
+  assertPrivateWindowsPath,
+  assertTrustedWindowsPath,
+} from "./windows-path-security.js";
 
 const internalKey = z
   .string()
@@ -335,64 +335,6 @@ export const DeviceWorkerConfigSchema = z
 export type DeviceWorkerConfig = z.infer<typeof DeviceWorkerConfigSchema>;
 export type DeviceWorkerProject = z.infer<typeof DeviceWorkerProjectSchema>;
 
-const assertPrivateWindowsPath = async (target: string): Promise<void> => {
-  const script = String.raw`
-$acl = Get-Acl -LiteralPath $args[0]
-$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$owner = ([System.Security.Principal.NTAccount]$acl.Owner).Translate([System.Security.Principal.SecurityIdentifier]).Value
-if ($owner -ne $current) { exit 3 }
-$allowed = @($current, 'S-1-5-18', 'S-1-5-32-544')
-foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
-  if ($rule.AccessControlType -eq 'Allow' -and $allowed -notcontains $rule.IdentityReference.Value) {
-    $readMask = [System.Security.AccessControl.FileSystemRights]::ReadData -bor [System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [System.Security.AccessControl.FileSystemRights]::FullControl
-    if (($rule.FileSystemRights -band $readMask) -ne 0) { exit 4 }
-  }
-}
-exit 0
-`;
-  try {
-    await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script, target],
-      { windowsHide: true, timeout: 10_000 },
-    );
-  } catch {
-    throw new Error(
-      "设备配置与专用 Codex 目录必须仅允许当前 Windows 用户、SYSTEM 和管理员读取",
-    );
-  }
-};
-
-const assertTrustedWindowsLauncherPath = async (
-  target: string,
-): Promise<void> => {
-  const script = String.raw`
-$acl = Get-Acl -LiteralPath $args[0]
-$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$owner = ([System.Security.Principal.NTAccount]$acl.Owner).Translate([System.Security.Principal.SecurityIdentifier]).Value
-$allowed = @($current, 'S-1-5-18', 'S-1-5-32-544')
-if ($allowed -notcontains $owner) { exit 3 }
-$writeMask = [System.Security.AccessControl.FileSystemRights]::WriteData -bor [System.Security.AccessControl.FileSystemRights]::CreateFiles -bor [System.Security.AccessControl.FileSystemRights]::AppendData -bor [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership -bor [System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::FullControl
-foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
-  if ($rule.AccessControlType -eq 'Allow' -and $allowed -notcontains $rule.IdentityReference.Value) {
-    if (($rule.FileSystemRights -band $writeMask) -ne 0) { exit 4 }
-  }
-}
-exit 0
-`;
-  try {
-    await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script, target],
-      { windowsHide: true, timeout: 10_000 },
-    );
-  } catch {
-    throw new Error(
-      "Codex 隔离启动器及其父目录必须由当前用户、SYSTEM 或管理员持有，且其他用户不可写",
-    );
-  }
-};
-
 export interface DeviceWorkerConfigLoadOptions {
   platform?: NodeJS.Platform;
   assertWindowsPrivatePath?: (target: string) => Promise<void>;
@@ -526,8 +468,7 @@ export const assertTrustedStdioMcpConnection = async (
 ): Promise<void> => {
   const platform = options.platform ?? process.platform;
   const windowsPathCheck =
-    options.assertWindowsTrustedLauncherPath ??
-    assertTrustedWindowsLauncherPath;
+    options.assertWindowsTrustedLauncherPath ?? assertTrustedWindowsPath;
   await assertTrustedFile({
     target: connection.commandPath,
     expectedSha256: connection.commandSha256,
@@ -564,8 +505,7 @@ export const loadDeviceWorkerConfig = async (
   const windowsPathCheck =
     options.assertWindowsPrivatePath ?? assertPrivateWindowsPath;
   const windowsLauncherCheck =
-    options.assertWindowsTrustedLauncherPath ??
-    assertTrustedWindowsLauncherPath;
+    options.assertWindowsTrustedLauncherPath ?? assertTrustedWindowsPath;
   const resolved = path.resolve(filePath);
   const metadata = await lstat(resolved);
   if (!metadata.isFile() || metadata.isSymbolicLink()) {

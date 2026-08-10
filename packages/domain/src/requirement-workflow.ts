@@ -79,17 +79,7 @@ export type ApprovalRecord =
   | (ApprovalRecordBase & { action: "确认需求" })
   | (ApprovalRecordBase & {
       action: "验收结果";
-      evidence: {
-        evidenceKey: string;
-        repositoryKey: string;
-        gitHashAlgorithm: "sha1" | "sha256";
-        commitSha: string;
-        artifactHashAlgorithm: "sha256";
-        artifactHash: string;
-        runnerKey: string;
-        keyId: string;
-        producedAt: string;
-      };
+      evidence: RequirementEvidenceSnapshot;
     });
 
 export interface RequirementEvidenceSnapshot {
@@ -436,6 +426,37 @@ export class RequirementWorkflow {
     this.#status = "awaitingAcceptance";
   }
 
+  recordVerificationFailure(): void {
+    if (
+      this.#status !== "inDelivery" &&
+      this.#status !== "awaitingAcceptance" &&
+      this.#status !== "completed"
+    ) {
+      throw new RequirementStateConflictError(
+        "当前需求版本已经不能记录独立验证失败结果",
+      );
+    }
+    const failedRevision = this.#current;
+    this.#revisions.push({
+      version: failedRevision.version + 1,
+      title: failedRevision.title,
+      summary: failedRevision.summary,
+      acceptanceCriteria: failedRevision.acceptanceCriteria.map(
+        (criterion) => ({
+          ...criterion,
+        }),
+      ),
+      changedBy: "独立验证失败",
+      specHash: failedRevision.specHash,
+    });
+    this.#confirmedVersion = null;
+    this.#deliveryCandidate = null;
+    this.#deliveryCandidateRecordedAtMs = null;
+    this.#evidence = null;
+    this.#verifiedEvidenceReceipt = null;
+    this.#status = "needsReconfirmation";
+  }
+
   accept(input: { actor: ApprovalActor }): void {
     if (this.#status !== "awaitingAcceptance") {
       throw new RequirementStateConflictError("请先完成独立验证并提交产品验收");
@@ -462,17 +483,7 @@ export class RequirementWorkflow {
       requirementKey: this.#key,
       revision: this.#current.version,
       recordedAt,
-      evidence: {
-        evidenceKey: evidence.evidenceKey,
-        repositoryKey: evidence.repositoryKey,
-        gitHashAlgorithm: evidence.gitHashAlgorithm,
-        commitSha: evidence.commitSha,
-        artifactHashAlgorithm: evidence.artifactHashAlgorithm,
-        artifactHash: evidence.artifactHash,
-        runnerKey: evidence.runnerKey,
-        keyId: evidence.keyId,
-        producedAt: evidence.producedAt,
-      },
+      evidence: RequirementWorkflow.#copyEvidence(evidence),
     });
     this.#status = "completed";
   }
@@ -673,11 +684,7 @@ export class RequirementWorkflow {
       ...this.#revisions.map(RequirementWorkflow.#copyRevision),
     );
     copy.#approvalRecords.push(
-      ...this.#approvalRecords.map((record) =>
-        record.action === "验收结果"
-          ? { ...record, evidence: { ...record.evidence } }
-          : { ...record },
-      ),
+      ...this.#approvalRecords.map(RequirementWorkflow.#copyApprovalRecord),
     );
     copy.#status = this.#status;
     copy.#confirmedVersion = this.#confirmedVersion;
@@ -793,7 +800,10 @@ export class RequirementWorkflow {
 
   static #copyApprovalRecord(record: ApprovalRecord): ApprovalRecord {
     return record.action === "验收结果"
-      ? { ...record, evidence: { ...record.evidence } }
+      ? {
+          ...record,
+          evidence: RequirementWorkflow.#copyEvidence(record.evidence),
+        }
       : { ...record };
   }
 
@@ -826,6 +836,59 @@ export class RequirementWorkflow {
       artifactHash: evidence.artifactHash,
       checks: evidence.checks.map((check) => ({ ...check })),
     };
+  }
+
+  static #verifyPersistedEvidenceSnapshot(
+    evidence: Readonly<RequirementEvidenceSnapshot>,
+    evidenceAuthority: EvidenceAuthority | undefined,
+  ): {
+    evidence: RequirementEvidenceSnapshot;
+    receipt: VerifiedEvidenceReceipt;
+  } {
+    if (!evidenceAuthority) {
+      throw new Error("恢复验证证据需要受信任的 EvidenceAuthority");
+    }
+    let receipt: VerifiedEvidenceReceipt;
+    try {
+      receipt = evidenceAuthority.verifyPersisted({
+        payload: RequirementWorkflow.#evidencePayload(evidence),
+        signature: evidence.signature,
+      });
+    } catch (error) {
+      throw new Error("需求工作流快照包含无法验真的验证证据", {
+        cause: error,
+      });
+    }
+    const verifiedEvidence: RequirementEvidenceSnapshot = {
+      evidenceKey: receipt.evidenceKey,
+      tenantKey: receipt.tenantKey,
+      projectKey: receipt.projectKey,
+      repositoryKey: receipt.repositoryKey,
+      requirementKey: receipt.requirementKey,
+      requirementRevision: receipt.requirementRevision,
+      gitHashAlgorithm: receipt.gitHashAlgorithm,
+      commitSha: receipt.commitSha,
+      runnerKey: receipt.runnerKey,
+      keyId: receipt.keyId,
+      runnerName: receipt.runnerName,
+      producedAt: receipt.producedAt,
+      artifactHashAlgorithm: receipt.artifactHashAlgorithm,
+      artifactHash: receipt.artifactHash,
+      checks: receipt.checks.map((check) => ({ ...check })),
+      signature: receipt.signature,
+    };
+    if (
+      evidence.runnerName !== receipt.runnerName ||
+      EvidenceAuthority.canonicalPayload(
+        RequirementWorkflow.#evidencePayload(evidence),
+      ) !==
+        EvidenceAuthority.canonicalPayload(
+          RequirementWorkflow.#evidencePayload(verifiedEvidence),
+        )
+    ) {
+      throw new Error("需求工作流快照包含被篡改的验证证据投影");
+    }
+    return { evidence: verifiedEvidence, receipt };
   }
 
   static #validateSnapshot(
@@ -955,36 +1018,11 @@ export class RequirementWorkflow {
     }
     let evidence: RequirementEvidenceSnapshot | null = null;
     if (snapshot.evidence) {
-      if (!evidenceAuthority) {
-        throw new Error("恢复验证证据需要受信任的 EvidenceAuthority");
-      }
-      let verifiedEvidence: VerifiedEvidenceReceipt;
-      try {
-        verifiedEvidence = evidenceAuthority.verifyPersisted({
-          payload: {
-            schemaVersion: 1,
-            evidenceKey: snapshot.evidence.evidenceKey,
-            tenantKey: snapshot.evidence.tenantKey,
-            projectKey: snapshot.evidence.projectKey,
-            repositoryKey: snapshot.evidence.repositoryKey,
-            requirementKey: snapshot.evidence.requirementKey,
-            requirementRevision: snapshot.evidence.requirementRevision,
-            gitHashAlgorithm: snapshot.evidence.gitHashAlgorithm,
-            commitSha: snapshot.evidence.commitSha,
-            runnerKey: snapshot.evidence.runnerKey,
-            keyId: snapshot.evidence.keyId,
-            producedAt: snapshot.evidence.producedAt,
-            artifactHashAlgorithm: snapshot.evidence.artifactHashAlgorithm,
-            artifactHash: snapshot.evidence.artifactHash,
-            checks: snapshot.evidence.checks,
-          },
-          signature: snapshot.evidence.signature,
-        });
-      } catch (error) {
-        throw new Error("需求工作流快照包含无法验真的验证证据", {
-          cause: error,
-        });
-      }
+      const verifiedEvidence =
+        RequirementWorkflow.#verifyPersistedEvidenceSnapshot(
+          snapshot.evidence,
+          evidenceAuthority,
+        ).evidence;
       if (
         verifiedEvidence.tenantKey !== snapshot.tenantKey ||
         verifiedEvidence.projectKey !== snapshot.projectKey ||
@@ -993,24 +1031,7 @@ export class RequirementWorkflow {
       ) {
         throw new Error("需求工作流快照包含无效验证证据");
       }
-      evidence = {
-        evidenceKey: verifiedEvidence.evidenceKey,
-        tenantKey: verifiedEvidence.tenantKey,
-        projectKey: verifiedEvidence.projectKey,
-        repositoryKey: verifiedEvidence.repositoryKey,
-        requirementKey: verifiedEvidence.requirementKey,
-        requirementRevision: verifiedEvidence.requirementRevision,
-        gitHashAlgorithm: verifiedEvidence.gitHashAlgorithm,
-        commitSha: verifiedEvidence.commitSha,
-        runnerKey: verifiedEvidence.runnerKey,
-        keyId: verifiedEvidence.keyId,
-        runnerName: verifiedEvidence.runnerName,
-        producedAt: verifiedEvidence.producedAt,
-        artifactHashAlgorithm: verifiedEvidence.artifactHashAlgorithm,
-        artifactHash: verifiedEvidence.artifactHash,
-        checks: verifiedEvidence.checks.map((check) => ({ ...check })),
-        signature: verifiedEvidence.signature,
-      };
+      evidence = verifiedEvidence;
     }
     const currentCriteria = new Set(
       revisions
@@ -1037,24 +1058,63 @@ export class RequirementWorkflow {
         evidenceCriteria.size === currentCriteria.size &&
         [...currentCriteria].every((key) => evidenceCriteria.has(key)));
     const acceptanceApprovals = approvalRecords.filter(
-      (record) => record.action === "验收结果",
+      (record): record is Extract<ApprovalRecord, { action: "验收结果" }> =>
+        record.action === "验收结果",
+    );
+    const acceptanceRevisions = new Set<number>();
+    for (const record of acceptanceApprovals) {
+      if (
+        acceptanceRevisions.has(record.revision) ||
+        !confirmedRevisions.has(record.revision)
+      ) {
+        throw new Error("需求工作流快照的验收记录无效");
+      }
+      acceptanceRevisions.add(record.revision);
+      const historicalEvidence =
+        RequirementWorkflow.#verifyPersistedEvidenceSnapshot(
+          record.evidence,
+          evidenceAuthority,
+        ).evidence;
+      const revisionCriteria = new Set(
+        revisions[record.revision - 1]!.acceptanceCriteria.map(
+          (criterion) => criterion.criterionKey,
+        ),
+      );
+      const checkedCriteria = new Set(
+        historicalEvidence.checks.map((check) => check.criterionKey),
+      );
+      if (
+        historicalEvidence.tenantKey !== snapshot.tenantKey ||
+        historicalEvidence.projectKey !== snapshot.projectKey ||
+        historicalEvidence.requirementKey !== snapshot.requirementKey ||
+        historicalEvidence.requirementRevision !== record.revision ||
+        Date.parse(record.recordedAt) <
+          Date.parse(historicalEvidence.producedAt) ||
+        historicalEvidence.checks.some((check) => check.status !== "passed") ||
+        checkedCriteria.size !== historicalEvidence.checks.length ||
+        checkedCriteria.size !== revisionCriteria.size ||
+        [...revisionCriteria].some((key) => !checkedCriteria.has(key))
+      ) {
+        throw new Error("需求工作流快照的验收证据与版本不一致");
+      }
+    }
+    const currentAcceptanceApprovals = acceptanceApprovals.filter(
+      (record): record is Extract<ApprovalRecord, { action: "验收结果" }> =>
+        record.revision === currentRevision,
     );
     const acceptanceMatchesEvidence =
       evidence !== null &&
-      acceptanceApprovals.every(
+      currentAcceptanceApprovals.every(
         (record) =>
           record.revision === currentRevision &&
           record.revision === evidence.requirementRevision &&
-          record.evidence.evidenceKey === evidence.evidenceKey &&
-          record.evidence.repositoryKey === evidence.repositoryKey &&
-          record.evidence.gitHashAlgorithm === evidence.gitHashAlgorithm &&
-          record.evidence.commitSha === evidence.commitSha &&
-          record.evidence.artifactHashAlgorithm ===
-            evidence.artifactHashAlgorithm &&
-          record.evidence.artifactHash === evidence.artifactHash &&
-          record.evidence.runnerKey === evidence.runnerKey &&
-          record.evidence.keyId === evidence.keyId &&
-          record.evidence.producedAt === evidence.producedAt,
+          record.evidence.signature === evidence.signature &&
+          EvidenceAuthority.canonicalPayload(
+            RequirementWorkflow.#evidencePayload(record.evidence),
+          ) ===
+            EvidenceAuthority.canonicalPayload(
+              RequirementWorkflow.#evidencePayload(evidence),
+            ),
       );
     if (
       ((snapshot.status === "awaitingAcceptance" ||
@@ -1070,8 +1130,10 @@ export class RequirementWorkflow {
         snapshot.status === "needsReconfirmation") &&
         deliveryCandidate !== null) ||
       (snapshot.status === "completed" &&
-        (acceptanceApprovals.length !== 1 || !acceptanceMatchesEvidence)) ||
-      (snapshot.status !== "completed" && acceptanceApprovals.length !== 0)
+        (currentAcceptanceApprovals.length !== 1 ||
+          !acceptanceMatchesEvidence)) ||
+      (snapshot.status !== "completed" &&
+        currentAcceptanceApprovals.length !== 0)
     ) {
       throw new Error("需求工作流快照的状态与交付资料不一致");
     }

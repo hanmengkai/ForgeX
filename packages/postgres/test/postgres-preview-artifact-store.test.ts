@@ -102,6 +102,15 @@ describe("PostgresPreviewArtifactStore", () => {
       "0002_requirement_control_plane.sql",
       "0003_requirement_acceptance_audit.sql",
       "0004_preview_artifacts.sql",
+      "0005_extension_catalog.sql",
+      "0006_skill_registry.sql",
+      "0007_mcp_registry.sql",
+      "0008_mcp_invocations.sql",
+      "0009_worker_work_kinds.sql",
+      "0010_knowledge_bases.sql",
+      "0011_delivery_runs.sql",
+      "0012_runner_verification.sql",
+      "0013_verification_failures.sql",
     ];
 
     const positions = migrations.map((name) => readme.indexOf(name));

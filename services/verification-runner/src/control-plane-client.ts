@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { SignedEvidenceSchema, type SignedEvidence } from "@forgex/contracts";
+import {
+  EvidenceCheckSchema,
+  SignedEvidenceSchema,
+  type EvidenceCheck,
+  type SignedEvidence,
+} from "@forgex/contracts";
 
 import {
   VerificationRunnerTargetSchema,
@@ -12,7 +17,7 @@ type FetchLike = (
   init?: RequestInit,
 ) => Promise<Response>;
 
-const controlPlaneOriginSchema = z
+export const RunnerControlPlaneOriginSchema = z
   .url()
   .transform((value) => new URL(value))
   .refine(
@@ -29,7 +34,7 @@ const controlPlaneOriginSchema = z
   )
   .transform((url) => url.origin);
 
-const sessionKeySchema = z
+export const RunnerSessionKeySchema = z
   .string()
   .min(16)
   .max(256)
@@ -73,6 +78,17 @@ const evidenceResponseSchema = z
             total: z.number().int().min(0),
           })
           .strict(),
+      })
+      .strict(),
+  })
+  .strict();
+
+const failureResponseSchema = z
+  .object({
+    data: z
+      .object({
+        status: z.literal("verification_failed_recorded"),
+        requirementRevision: z.number().int().positive().max(10_000),
       })
       .strict(),
   })
@@ -148,8 +164,8 @@ export class RunnerControlPlaneClient {
     requestTimeoutMs?: number;
     fetch?: FetchLike;
   }) {
-    this.#baseUrl = controlPlaneOriginSchema.parse(options.baseUrl);
-    this.#sessionKey = sessionKeySchema.parse(options.sessionKey);
+    this.#baseUrl = RunnerControlPlaneOriginSchema.parse(options.baseUrl);
+    this.#sessionKey = RunnerSessionKeySchema.parse(options.sessionKey);
     this.#requestTimeoutMs = z
       .number()
       .int()
@@ -208,6 +224,41 @@ export class RunnerControlPlaneClient {
       { method: "POST", body: JSON.stringify(evidence) },
       evidenceResponseSchema,
     );
+  }
+
+  async reportFailure(
+    targetInput: VerificationRunnerTarget,
+    checksInput: EvidenceCheck[],
+    verificationCompletedAt: string,
+  ): Promise<void> {
+    const target = VerificationRunnerTargetSchema.parse(targetInput);
+    const checks = z
+      .array(EvidenceCheckSchema)
+      .min(1)
+      .max(80)
+      .parse(checksInput);
+    const completedAt = z.iso.datetime().parse(verificationCompletedAt);
+    const response = await this.#request(
+      `/api/v1/runner/verification-targets/${target.requirementKey}/failure`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: 1,
+          requirementKey: target.requirementKey,
+          requirementRevision: target.requirementRevision,
+          verificationCompletedAt: completedAt,
+          checks,
+        }),
+      },
+      failureResponseSchema,
+    );
+    if (response.data.requirementRevision !== target.requirementRevision) {
+      throw new RunnerControlPlaneClientError(
+        502,
+        "invalid_response",
+        "控制面返回了不一致的需求版本",
+      );
+    }
   }
 
   async #request<T>(

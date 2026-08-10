@@ -60,6 +60,46 @@ const sandboxResultSchema = z
     });
   });
 
+const containerImage = z
+  .string()
+  .trim()
+  .min(20)
+  .max(300)
+  .regex(
+    /^[a-z0-9]+(?:[._:-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[a-f0-9]{64}$/u,
+    "验证镜像必须使用不可变的 sha256 摘要",
+  );
+
+const containerArgument = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine(
+    (value) => !/[\u0000\r\n]/u.test(value),
+    "验证命令参数不能包含换行或空字符",
+  );
+
+const suiteExecutionSchema = z
+  .object({
+    image: containerImage,
+    command: z
+      .array(containerArgument)
+      .min(1)
+      .max(50)
+      .refine(
+        ([executable]) =>
+          executable !== undefined &&
+          /^\/forgex-verifier\/[a-z0-9][a-z0-9._-]{0,79}$/u.test(executable),
+        "验证命令必须使用可信镜像内固定的 ForgeX 验证驱动",
+      ),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1_000)
+      .max(30 * 60_000),
+  })
+  .strict();
+
 const suitePlanSchema = z
   .object({
     suiteKey: technicalKey,
@@ -74,6 +114,7 @@ const suitePlanSchema = z
         "验证套件名称包含不可见控制字符",
       ),
     criterionKeys: z.array(z.string().uuid()).min(1).max(80),
+    execution: suiteExecutionSchema,
   })
   .strict()
   .superRefine((suite, context) => {

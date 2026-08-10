@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { SignedEvidenceSchema, type SignedEvidence } from "@forgex/contracts";
+import {
+  EvidenceCheckSchema,
+  SignedEvidenceSchema,
+  type EvidenceCheck,
+  type SignedEvidence,
+} from "@forgex/contracts";
 import {
   EvidenceAuthority,
   type AuthorizedRunnerIdentity,
@@ -54,6 +59,20 @@ export type RunnerPreviewArtifactCommand = z.infer<
   typeof RunnerPreviewArtifactCommandSchema
 >;
 
+export const RunnerVerificationFailureCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    requirementKey: internalKey,
+    requirementRevision: z.number().int().positive().max(10_000),
+    verificationCompletedAt: z.iso.datetime(),
+    checks: z.array(EvidenceCheckSchema).min(1).max(80),
+  })
+  .strict();
+
+export type RunnerVerificationFailureCommand = z.infer<
+  typeof RunnerVerificationFailureCommandSchema
+>;
+
 export interface VerificationTargetForRunner {
   requirementKey: string;
   requirementRevision: number;
@@ -81,6 +100,7 @@ export interface VerificationCoordinatorServiceOptions {
   projectKey: string;
   repositoryKey: string;
   clock?: () => Date;
+  maxVerificationFailureAgeMs?: number;
 }
 
 const sameCandidate = (
@@ -138,6 +158,23 @@ const sameSignedEvidence = (
   );
 };
 
+const verificationFailureDigest = (input: {
+  tenantKey: string;
+  projectKey: string;
+  repositoryKey: string;
+  requirementKey: string;
+  requirementRevision: number;
+  gitHashAlgorithm: "sha1" | "sha256";
+  commitSha: string;
+  runnerKey: string;
+  keyId: string;
+  verificationCompletedAt: string;
+  checks: EvidenceCheck[];
+}): string =>
+  createHash("sha256")
+    .update(JSON.stringify({ schemaVersion: 1, ...input }), "utf8")
+    .digest("hex");
+
 export class VerificationCoordinatorService {
   readonly #requirementRepository: RequirementRepository;
   readonly #previewArtifactStore: PreviewArtifactStore;
@@ -145,6 +182,7 @@ export class VerificationCoordinatorService {
   readonly #projectKey: string;
   readonly #repositoryKey: string;
   readonly #clock: () => Date;
+  readonly #maxVerificationFailureAgeMs: number;
 
   constructor(options: VerificationCoordinatorServiceOptions) {
     this.#requirementRepository = options.requirementRepository;
@@ -153,6 +191,12 @@ export class VerificationCoordinatorService {
     this.#projectKey = internalKey.parse(options.projectKey);
     this.#repositoryKey = internalKey.parse(options.repositoryKey);
     this.#clock = options.clock ?? (() => new Date());
+    this.#maxVerificationFailureAgeMs = z
+      .number()
+      .int()
+      .min(1_000)
+      .max(24 * 60 * 60_000)
+      .parse(options.maxVerificationFailureAgeMs ?? 10 * 60_000);
   }
 
   async listPending(
@@ -193,7 +237,7 @@ export class VerificationCoordinatorService {
     commandInput: RunnerPreviewArtifactCommand,
   ): Promise<{ status: "preview_recorded"; requirementRevision: number }> {
     const connection = this.#parseRunner(runnerInput);
-    const runner = this.#authorize(connection);
+    this.#authorizeHistorical(connection);
     const command = RunnerPreviewArtifactCommandSchema.safeParse(commandInput);
     if (!command.success) {
       throw new ApplicationError(
@@ -225,6 +269,27 @@ export class VerificationCoordinatorService {
         "当前交付已经绑定另一份效果制品，请重新安排交付版本",
       );
     }
+    if (preflight.previewArtifact) {
+      const stored = await this.#previewArtifactStore.get({
+        tenantKey: connection.tenantKey,
+        projectKey: this.#projectKey,
+        requirementKey: command.data.requirementKey,
+        requirementRevision: command.data.requirementRevision,
+        artifactHashAlgorithm: command.data.artifactHashAlgorithm,
+        artifactHash: command.data.artifactHash,
+      });
+      if (
+        stored &&
+        Buffer.from(stored.content).equals(Buffer.from(command.data.content))
+      ) {
+        this.#authorizeHistorical(connection);
+        return {
+          status: "preview_recorded",
+          requirementRevision: command.data.requirementRevision,
+        };
+      }
+    }
+    const runner = this.#authorize(connection);
     await this.#putArtifact(connection.tenantKey, command.data);
 
     await this.#requirementRepository.transaction(
@@ -378,6 +443,17 @@ export class VerificationCoordinatorService {
           receipt.requirementKey,
           receipt.requirementRevision,
         );
+        const failure = await transaction.findVerificationFailure(
+          receipt.requirementKey,
+          receipt.requirementRevision,
+        );
+        if (failure) {
+          throw new ApplicationError(
+            409,
+            "verification_failure_recorded",
+            "当前交付版本已经记录独立验证失败，不能再提交通过证据",
+          );
+        }
         await this.#loadTarget(transaction, run, record);
         if (
           run!.repositoryKey !== receipt.repositoryKey ||
@@ -431,6 +507,160 @@ export class VerificationCoordinatorService {
     );
   }
 
+  async reportFailure(
+    runnerInput: AuthenticatedRunner,
+    commandInput: RunnerVerificationFailureCommand,
+  ): Promise<{
+    status: "verification_failed_recorded";
+    requirementRevision: number;
+  }> {
+    const connection = this.#parseRunner(runnerInput);
+    this.#authorizeHistorical(connection);
+    const command =
+      RunnerVerificationFailureCommandSchema.safeParse(commandInput);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "invalid_verification_failure",
+        "验证失败结果格式不正确",
+      );
+    }
+    return this.#requirementRepository.transaction(
+      connection.tenantKey,
+      this.#projectKey,
+      async (transaction) => {
+        const run = await transaction.findDeliveryRunResult(
+          command.data.requirementKey,
+          command.data.requirementRevision,
+        );
+        const checks = command.data.checks
+          .map((check) => ({ ...check }))
+          .sort((left, right) =>
+            left.criterionKey < right.criterionKey ? -1 : 1,
+          );
+        const existing = await transaction.findVerificationFailure(
+          command.data.requirementKey,
+          command.data.requirementRevision,
+        );
+        if (existing) {
+          if (
+            !run ||
+            run.status !== "completed" ||
+            run.tenantKey !== connection.tenantKey ||
+            run.projectKey !== this.#projectKey ||
+            run.repositoryKey !== this.#repositoryKey
+          ) {
+            throw new ApplicationError(
+              409,
+              "verification_failure_conflict",
+              "历史验证失败记录没有绑定当前权威交付",
+            );
+          }
+          const failureDigest = verificationFailureDigest({
+            tenantKey: connection.tenantKey,
+            projectKey: this.#projectKey,
+            repositoryKey: run.repositoryKey,
+            requirementKey: run.requirementKey,
+            requirementRevision: run.requirementRevision,
+            gitHashAlgorithm: run.gitHashAlgorithm,
+            commitSha: run.commitSha,
+            runnerKey: connection.runnerKey,
+            keyId: connection.keyId,
+            verificationCompletedAt: command.data.verificationCompletedAt,
+            checks,
+          });
+          if (
+            existing.failureDigest !== failureDigest ||
+            existing.runnerKey !== connection.runnerKey ||
+            existing.keyId !== connection.keyId
+          ) {
+            throw new ApplicationError(
+              409,
+              "verification_failure_conflict",
+              "当前交付版本已经记录另一份验证失败结果",
+            );
+          }
+          this.#authorizeHistorical(connection);
+          return {
+            status: "verification_failed_recorded" as const,
+            requirementRevision: command.data.requirementRevision,
+          };
+        }
+        const target = await this.#loadTarget(transaction, run, undefined, {
+          allowAwaitingAcceptance: true,
+          allowCompleted: true,
+        });
+        this.#assertFailureChecks(target, checks);
+        const now = this.#clock();
+        const nowMs = now.getTime();
+        const completedAtMs = Date.parse(command.data.verificationCompletedAt);
+        if (
+          !Number.isFinite(nowMs) ||
+          completedAtMs > nowMs + 5 * 60_000 ||
+          nowMs - completedAtMs > this.#maxVerificationFailureAgeMs
+        ) {
+          throw new ApplicationError(
+            409,
+            "verification_failure_stale",
+            "验证失败结果已经超过可信恢复窗口，请重新执行独立验证",
+          );
+        }
+        const failureDigest = verificationFailureDigest({
+          tenantKey: connection.tenantKey,
+          projectKey: this.#projectKey,
+          repositoryKey: target.repositoryKey,
+          requirementKey: target.requirementKey,
+          requirementRevision: target.requirementRevision,
+          gitHashAlgorithm: target.gitHashAlgorithm,
+          commitSha: target.commitSha,
+          runnerKey: connection.runnerKey,
+          keyId: connection.keyId,
+          verificationCompletedAt: command.data.verificationCompletedAt,
+          checks,
+        });
+        const runner = this.#authorize(connection);
+        const recordedAt = new Date(nowMs).toISOString();
+        transaction.saveVerificationFailure({
+          tenantKey: connection.tenantKey,
+          projectKey: this.#projectKey,
+          repositoryKey: target.repositoryKey,
+          requirementKey: target.requirementKey,
+          requirementRevision: target.requirementRevision,
+          failureDigest,
+          runnerKey: runner.runnerKey,
+          keyId: runner.keyId,
+          verificationCompletedAt: command.data.verificationCompletedAt,
+          checks,
+          recordedAt,
+        });
+        const record = await transaction.find(target.requirementKey);
+        if (!record) {
+          throw new ApplicationError(
+            404,
+            "requirement_not_found",
+            "没有找到这项待验证需求",
+          );
+        }
+        record.workflow.recordVerificationFailure();
+        transaction.save(record);
+        transaction.appendAudit({
+          eventKey: randomUUID(),
+          tenantKey: connection.tenantKey,
+          projectKey: this.#projectKey,
+          requirementKey: target.requirementKey,
+          action: "verification.failed",
+          actorKey: runner.runnerKey,
+          actorName: runner.runnerName,
+          recordedAt,
+        });
+        return {
+          status: "verification_failed_recorded" as const,
+          requirementRevision: target.requirementRevision,
+        };
+      },
+    );
+  }
+
   #parseRunner(runnerInput: AuthenticatedRunner): AuthenticatedRunner {
     const runner = AuthenticatedRunnerSchema.safeParse(runnerInput);
     if (!runner.success) {
@@ -466,6 +696,28 @@ export class VerificationCoordinatorService {
     }
   }
 
+  #authorizeHistorical(
+    runnerInput: AuthenticatedRunner,
+  ): AuthorizedRunnerIdentity {
+    const runner = this.#parseRunner(runnerInput);
+    try {
+      return this.#evidenceAuthority.authorizeRunnerForHistoricalRecord(
+        { runnerKey: runner.runnerKey, keyId: runner.keyId },
+        {
+          tenantKey: runner.tenantKey,
+          projectKey: this.#projectKey,
+          repositoryKey: this.#repositoryKey,
+        },
+      );
+    } catch {
+      throw new ApplicationError(
+        403,
+        "runner_scope_denied",
+        "当前 Runner 无权恢复这个项目或代码仓库的历史结果",
+      );
+    }
+  }
+
   async #putArtifact(
     tenantKey: string,
     command: RunnerPreviewArtifactCommand,
@@ -493,6 +745,10 @@ export class VerificationCoordinatorService {
     transaction: RequirementTransaction,
     run: DeliveryRunResult | null,
     loadedRecord?: RequirementRecord | null,
+    options: {
+      allowAwaitingAcceptance?: boolean;
+      allowCompleted?: boolean;
+    } = {},
   ): Promise<VerificationTargetForRunner> {
     const record =
       loadedRecord ?? (run ? await transaction.find(run.requirementKey) : null);
@@ -507,7 +763,15 @@ export class VerificationCoordinatorService {
       run.repositoryKey !== this.#repositoryKey ||
       record.requirementKey !== run.requirementKey ||
       record.workflow.currentRevision !== run.requirementRevision ||
-      record.workflow.toSnapshot().status !== "inDelivery"
+      (record.workflow.toSnapshot().status !== "inDelivery" &&
+        !(
+          options.allowAwaitingAcceptance === true &&
+          record.workflow.toSnapshot().status === "awaitingAcceptance"
+        ) &&
+        !(
+          options.allowCompleted === true &&
+          record.workflow.toSnapshot().status === "completed"
+        ))
     ) {
       throw new ApplicationError(
         409,
@@ -569,6 +833,28 @@ export class VerificationCoordinatorService {
       view: record.workflow.toPeopleView(),
       allowedActions: record.workflow.listAllowedActions(),
     };
+  }
+
+  #assertFailureChecks(
+    target: VerificationTargetForRunner,
+    checks: EvidenceCheck[],
+  ): void {
+    const expected = new Set(
+      target.acceptanceCriteria.map((criterion) => criterion.criterionKey),
+    );
+    const actual = new Set(checks.map((check) => check.criterionKey));
+    if (
+      expected.size !== checks.length ||
+      actual.size !== checks.length ||
+      [...expected].some((criterionKey) => !actual.has(criterionKey)) ||
+      checks.every((check) => check.status === "passed")
+    ) {
+      throw new ApplicationError(
+        422,
+        "invalid_verification_failure",
+        "验证失败结果必须逐项覆盖当前验收条件，并至少包含一项未通过",
+      );
+    }
   }
 
   #nowIso(): string {

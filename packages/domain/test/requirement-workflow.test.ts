@@ -426,6 +426,78 @@ describe("RequirementWorkflow", () => {
     ).toThrow("需求工作流快照");
   });
 
+  it("独立验证失败后仍可验真并恢复旧版本的验收历史", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+    requirement.accept({ actor });
+
+    requirement.recordVerificationFailure();
+    const snapshot = requirement.toSnapshot();
+    const restored = RequirementWorkflow.fromSnapshot(snapshot, {
+      evidenceAuthority,
+    });
+
+    expect(restored.toPeopleView()).toMatchObject({
+      version: "第 2 版",
+      status: "内容已更新，等待重新确认",
+    });
+    expect(restored.listApprovalRecords()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "验收结果",
+          revision: 1,
+          evidence: expect.objectContaining({
+            requirementRevision: 1,
+            signature: expect.any(String),
+            checks: expect.arrayContaining([
+              expect.objectContaining({ status: "passed" }),
+            ]),
+          }),
+        }),
+      ]),
+    );
+    expect(restored.listAllowedActions()).toEqual(["submitForConfirmation"]);
+    restored.submitForConfirmation();
+    restored.confirm({ actor });
+    restored.startDelivery();
+    expect(restored.toSnapshot()).toMatchObject({
+      status: "inDelivery",
+      confirmedVersion: 2,
+    });
+  });
+
+  it("恢复失败后的需求时拒绝伪造旧版本验收证据", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+    requirement.accept({ actor });
+    requirement.recordVerificationFailure();
+    const snapshot = requirement.toSnapshot();
+
+    expect(() =>
+      RequirementWorkflow.fromSnapshot(
+        {
+          ...snapshot,
+          approvalRecords: snapshot.approvalRecords.map((record) =>
+            record.action === "验收结果"
+              ? {
+                  ...record,
+                  evidence: {
+                    ...record.evidence,
+                    signature: Buffer.from("伪造签名").toString("base64"),
+                  },
+                }
+              : record,
+          ),
+        },
+        { evidenceAuthority },
+      ),
+    ).toThrow("需求工作流快照");
+  });
+
   it("退役密钥不能签发新证据但仍可恢复已完成的历史需求", () => {
     const requirement = createRequirement();
     confirmRequirement(requirement);

@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "controlPlaneUrl": "https://forgex.example.com",
+  "sessionKeyPath": "/var/lib/forgex-runner/secrets/session.key",
+  "privateKeyPath": "/var/lib/forgex-runner/secrets/evidence-ed25519.pem",
+  "journalIntegrityKeyPath": "/var/lib/forgex-runner/secrets/journal-integrity.key",
+  "journalPath": "/var/lib/forgex-runner/state/verification-journal.json",
+  "scope": {
+    "tenantKey": "10000000-0000-4000-8000-000000000001",
+    "projectKey": "20000000-0000-4000-8000-000000000002",
+    "repositoryKey": "30000000-0000-4000-8000-000000000003",
+    "runnerKey": "40000000-0000-4000-8000-000000000004",
+    "keyId": "50000000-0000-4000-8000-000000000005"
+  },
+  "repositoryRoot": "/srv/forgex-runner/repositories/project.git",
+  "workspaceRoot": "/var/lib/forgex-runner/workspaces",
+  "gitCommandPath": "/usr/bin/git",
+  "gitCommandSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "dockerCommandPath": "/usr/bin/docker",
+  "dockerCommandSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "containerUser": "65532:65532",
+  "plans": [
+    {
+      "schemaVersion": 1,
+      "planKey": "node-quality",
+      "planVersion": 1,
+      "repositoryKey": "30000000-0000-4000-8000-000000000003",
+      "requirementKey": "60000000-0000-4000-8000-000000000006",
+      "requirementRevision": 1,
+      "gitHashAlgorithm": "sha1",
+      "commitSha": "cccccccccccccccccccccccccccccccccccccccc",
+      "suites": [
+        {
+          "suiteKey": "quality",
+          "name": "项目测试与构建",
+          "criterionKeys": ["70000000-0000-4000-8000-000000000007"],
+          "execution": {
+            "image": "registry.example.com/forgex/node@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "command": ["/forgex-verifier/node-quality"],
+            "timeoutMs": 600000
+          }
+        }
+      ]
+    }
+  ],
+  "trustedPlanAnchors": [
+    {
+      "repositoryKey": "30000000-0000-4000-8000-000000000003",
+      "planKey": "node-quality",
+      "planVersion": 1,
+      "planHash": "61690b0ca172892f000009b20701ff0d8be2c2f8bfddf09fbf2da774e0098c77"
+    }
+  ],
+  "idlePollIntervalMs": 3000,
+  "requestTimeoutMs": 5000
+}

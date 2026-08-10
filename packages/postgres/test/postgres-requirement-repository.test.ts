@@ -486,6 +486,25 @@ describe("PostgresRequirementRepository", () => {
     expect(migration).toContain("'verification.completed'");
   });
 
+  it("独立验证失败迁移绑定交付版本、审计动作和失败终态", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0013_verification_failures.sql", import.meta.url),
+      "utf8",
+    );
+
+    expect(migration).toContain(
+      "CREATE TABLE IF NOT EXISTS forgex_verification_failures",
+    );
+    expect(migration).toContain(
+      "verification_completed_at timestamptz NOT NULL",
+    );
+    expect(migration).toContain(
+      "PRIMARY KEY (\n    tenant_key,\n    project_key,\n    requirement_key,\n    requirement_revision",
+    );
+    expect(migration).toContain("REFERENCES forgex_delivery_runs");
+    expect(migration).toContain("'verification.failed'");
+  });
+
   it("在需求事务内持久化证据防重放记录", async () => {
     const evidenceKey = "77777777-7777-4777-8777-777777777777";
     const database = fakeDatabase({
@@ -573,6 +592,9 @@ describe("PostgresRequirementRepository", () => {
     );
     expect(query?.text).toContain("run.status = 'completed'");
     expect(query?.text).toContain("workflow ->> 'status' = 'inDelivery'");
+    expect(query?.text).toContain(
+      "NOT EXISTS (SELECT 1 FROM forgex_verification_failures",
+    );
     expect(query?.values).toEqual([tenantKey, projectKey, projectKey, 20]);
   });
 

@@ -208,12 +208,27 @@ export class EvidenceAuthority {
     identity: { runnerKey: string; keyId: string },
     scope: RunnerScope,
   ): AuthorizedRunnerIdentity {
+    return this.#authorizeRunner(identity, scope, true);
+  }
+
+  authorizeRunnerForHistoricalRecord(
+    identity: { runnerKey: string; keyId: string },
+    scope: RunnerScope,
+  ): AuthorizedRunnerIdentity {
+    return this.#authorizeRunner(identity, scope, false);
+  }
+
+  #authorizeRunner(
+    identity: { runnerKey: string; keyId: string },
+    scope: RunnerScope,
+    requireActiveKey: boolean,
+  ): AuthorizedRunnerIdentity {
     const runnerKey = identity.runnerKey.trim().toLowerCase();
     const keyId = identity.keyId.trim().toLowerCase();
     const runner = this.#trustedRunners.get(
       EvidenceAuthority.#runnerLookupKey(runnerKey, keyId),
     );
-    if (!runner || !runner.acceptNewEvidence) {
+    if (!runner || (requireActiveKey && !runner.acceptNewEvidence)) {
       throw new Error("Runner 身份或签名密钥不受信任");
     }
     const normalizedScope = {

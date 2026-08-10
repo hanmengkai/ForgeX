@@ -5,7 +5,7 @@ import {
   sign as signPayload,
 } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RequirementSpecSchema, type EvidencePayload } from "@forgex/contracts";
 import { EvidenceAuthority, RequirementWorkflow } from "@forgex/domain";
@@ -121,7 +121,330 @@ const arrangeCompletedDelivery = async (
   return { workflow, run };
 };
 
+const preparePassedEvidence = async (input: {
+  service: VerificationCoordinatorService;
+  workflow: RequirementWorkflow;
+  run: DeliveryRunResult;
+  producedAt: string;
+}) => {
+  const content = new TextEncoder().encode(
+    "<!doctype html><html><body>独立验证制品</body></html>",
+  );
+  const artifactHash = createHash("sha256").update(content).digest("hex");
+  await input.service.publishPreviewArtifact(runner, {
+    schemaVersion: 1,
+    requirementKey: input.run.requirementKey,
+    requirementRevision: input.run.requirementRevision,
+    artifactHashAlgorithm: "sha256",
+    artifactHash,
+    content,
+  });
+  const criterionKey =
+    input.workflow.toSnapshot().revisions[0]!.acceptanceCriteria[0]!
+      .criterionKey;
+  const checks = [
+    {
+      criterionKey,
+      status: "passed" as const,
+      testRunKey: "trusted-plan-v1-suite-pass",
+    },
+  ];
+  return {
+    signed: signEvidence({
+      schemaVersion: 1,
+      evidenceKey: randomUUID(),
+      tenantKey,
+      projectKey,
+      repositoryKey,
+      requirementKey: input.run.requirementKey,
+      requirementRevision: input.run.requirementRevision,
+      gitHashAlgorithm: input.run.gitHashAlgorithm,
+      commitSha: input.run.commitSha,
+      runnerKey,
+      keyId,
+      producedAt: input.producedAt,
+      artifactHashAlgorithm: "sha256",
+      artifactHash,
+      checks,
+    }),
+    failureCommand: {
+      schemaVersion: 1 as const,
+      requirementKey: input.run.requirementKey,
+      requirementRevision: input.run.requirementRevision,
+      verificationCompletedAt: input.producedAt,
+      checks: checks.map((check) => ({ ...check, status: "failed" as const })),
+    },
+  };
+};
+
 describe("VerificationCoordinatorService", () => {
+  it("同租户其他项目的 Runner 在读取任何资源前统一拒绝", async () => {
+    const clock = () => new Date("2026-08-11T03:00:00.000Z");
+    const repository = new InMemoryRequirementRepository();
+    const transaction = vi.spyOn(repository, "transaction");
+    const otherProjectAuthority = new EvidenceAuthority({
+      runners: [
+        {
+          runnerKey,
+          keyId,
+          runnerName: "其他项目 Runner",
+          publicKeyBase64: keys.publicKey
+            .export({ format: "der", type: "spki" })
+            .toString("base64"),
+          scopes: [
+            {
+              tenantKey,
+              projectKey: "99999999-9999-4999-8999-999999999999",
+              repositoryKey,
+            },
+          ],
+        },
+      ],
+      clock,
+    });
+    const service = new VerificationCoordinatorService({
+      requirementRepository: repository,
+      previewArtifactStore: new InMemoryPreviewArtifactStore(),
+      evidenceAuthority: otherProjectAuthority,
+      projectKey,
+      repositoryKey,
+      clock,
+    });
+
+    await expect(
+      service.publishPreviewArtifact(runner, {} as never),
+    ).rejects.toMatchObject({ statusCode: 403, code: "runner_scope_denied" });
+    await expect(
+      service.reportFailure(runner, {
+        schemaVersion: 1,
+        requirementKey: "88888888-8888-4888-8888-888888888888",
+        requirementRevision: 1,
+        verificationCompletedAt: clock().toISOString(),
+        checks: [
+          {
+            criterionKey: "77777777-7777-4777-8777-777777777777",
+            status: "failed",
+            testRunKey: "other-project-probe",
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ statusCode: 403, code: "runner_scope_denied" });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("验证失败与通过证据无论到达顺序都以失败终态收敛", async () => {
+    const clock = () => new Date("2026-08-11T03:00:00.000Z");
+
+    for (const failureFirst of [true, false]) {
+      const repository = new InMemoryRequirementRepository();
+      const { workflow, run } = await arrangeCompletedDelivery(
+        repository,
+        clock,
+      );
+      const service = new VerificationCoordinatorService({
+        requirementRepository: repository,
+        previewArtifactStore: new InMemoryPreviewArtifactStore(),
+        evidenceAuthority: evidenceAuthority(clock),
+        projectKey,
+        repositoryKey,
+        clock,
+      });
+      const { signed, failureCommand } = await preparePassedEvidence({
+        service,
+        workflow,
+        run,
+        producedAt: clock().toISOString(),
+      });
+
+      if (failureFirst) {
+        await service.reportFailure(runner, failureCommand);
+        await expect(
+          service.submitEvidence(runner, signed),
+        ).rejects.toMatchObject({
+          statusCode: 409,
+          code: "verification_failure_recorded",
+        });
+      } else {
+        await service.submitEvidence(runner, signed);
+        await service.reportFailure(runner, failureCommand);
+        await expect(
+          service.submitEvidence(runner, signed),
+        ).rejects.toMatchObject({
+          statusCode: 409,
+          code: "verification_failure_recorded",
+        });
+      }
+
+      const stored = await repository.transaction(
+        tenantKey,
+        projectKey,
+        (transaction) => transaction.find(run.requirementKey),
+      );
+      expect(stored?.workflow.toSnapshot()).toMatchObject({
+        status: "needsReconfirmation",
+        revisions: expect.arrayContaining([
+          expect.objectContaining({ version: 2 }),
+        ]),
+        evidence: null,
+      });
+      await expect(service.listPending(runner)).resolves.toEqual({ items: [] });
+    }
+
+    const repository = new InMemoryRequirementRepository();
+    const { workflow, run } = await arrangeCompletedDelivery(repository, clock);
+    const service = new VerificationCoordinatorService({
+      requirementRepository: repository,
+      previewArtifactStore: new InMemoryPreviewArtifactStore(),
+      evidenceAuthority: evidenceAuthority(clock),
+      projectKey,
+      repositoryKey,
+      clock,
+    });
+    const { signed, failureCommand } = await preparePassedEvidence({
+      service,
+      workflow,
+      run,
+      producedAt: clock().toISOString(),
+    });
+    await service.submitEvidence(runner, signed);
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      const record = await transaction.find(run.requirementKey);
+      record!.workflow.accept({ actor });
+      transaction.save(record!);
+    });
+    await expect(
+      service.reportFailure(runner, failureCommand),
+    ).resolves.toEqual({
+      status: "verification_failed_recorded",
+      requirementRevision: 1,
+    });
+    const invalidated = await repository.transaction(
+      tenantKey,
+      projectKey,
+      (transaction) => transaction.find(run.requirementKey),
+    );
+    expect(invalidated?.workflow.toSnapshot()).toMatchObject({
+      status: "needsReconfirmation",
+      revisions: expect.arrayContaining([
+        expect.objectContaining({ version: 2 }),
+      ]),
+      evidence: null,
+    });
+    expect(() =>
+      RequirementWorkflow.fromSnapshot(invalidated!.workflow.toSnapshot(), {
+        clock,
+        evidenceAuthority: evidenceAuthority(clock),
+      }),
+    ).not.toThrow();
+  });
+
+  it("持久记录失败结果并从待验证队列移除该提交，重复上报保持幂等", async () => {
+    let now = new Date("2026-08-11T03:00:00.000Z");
+    const clock = () => new Date(now.getTime());
+    const repository = new InMemoryRequirementRepository();
+    const { workflow, run } = await arrangeCompletedDelivery(repository, clock);
+    const service = new VerificationCoordinatorService({
+      requirementRepository: repository,
+      previewArtifactStore: new InMemoryPreviewArtifactStore(),
+      evidenceAuthority: evidenceAuthority(clock),
+      projectKey,
+      repositoryKey,
+      clock,
+    });
+    const checks = [
+      {
+        criterionKey:
+          workflow.toSnapshot().revisions[0]!.acceptanceCriteria[0]!
+            .criterionKey,
+        status: "failed" as const,
+        testRunKey: "plan-node-v1-result-failed",
+      },
+    ];
+    const command = {
+      schemaVersion: 1 as const,
+      requirementKey: run.requirementKey,
+      requirementRevision: 1,
+      verificationCompletedAt: now.toISOString(),
+      checks,
+    };
+
+    await expect(service.reportFailure(runner, command)).resolves.toEqual({
+      status: "verification_failed_recorded",
+      requirementRevision: 1,
+    });
+    now = new Date("2026-08-12T03:00:00.000Z");
+    const historicalService = new VerificationCoordinatorService({
+      requirementRepository: repository,
+      previewArtifactStore: new InMemoryPreviewArtifactStore(),
+      evidenceAuthority: evidenceAuthority(clock, false),
+      projectKey,
+      repositoryKey,
+      clock,
+    });
+    await expect(
+      historicalService.reportFailure(runner, command),
+    ).resolves.toEqual({
+      status: "verification_failed_recorded",
+      requirementRevision: 1,
+    });
+    await expect(service.reportFailure(runner, command)).resolves.toEqual({
+      status: "verification_failed_recorded",
+      requirementRevision: 1,
+    });
+    await expect(service.listPending(runner)).resolves.toEqual({ items: [] });
+    expect(await repository.listAuditEvents(tenantKey, projectKey)).toEqual([
+      expect.objectContaining({
+        action: "verification.failed",
+        actorKey: runnerKey,
+        actorName: "独立验证 Runner",
+      }),
+    ]);
+  });
+
+  it("拒绝在恢复窗口外首次上报旧失败且不撤销已经完成的验收", async () => {
+    let now = new Date("2026-08-11T03:00:00.000Z");
+    const clock = () => new Date(now.getTime());
+    const repository = new InMemoryRequirementRepository();
+    const { workflow, run } = await arrangeCompletedDelivery(repository, clock);
+    const service = new VerificationCoordinatorService({
+      requirementRepository: repository,
+      previewArtifactStore: new InMemoryPreviewArtifactStore(),
+      evidenceAuthority: evidenceAuthority(clock),
+      projectKey,
+      repositoryKey,
+      clock,
+    });
+    const { signed, failureCommand } = await preparePassedEvidence({
+      service,
+      workflow,
+      run,
+      producedAt: now.toISOString(),
+    });
+    await service.submitEvidence(runner, signed);
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      const record = await transaction.find(run.requirementKey);
+      record!.workflow.accept({ actor });
+      transaction.save(record!);
+    });
+
+    now = new Date("2026-08-11T03:11:00.001Z");
+    await expect(
+      service.reportFailure(runner, failureCommand),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "verification_failure_stale",
+    });
+    const stored = await repository.transaction(
+      tenantKey,
+      projectKey,
+      (transaction) => transaction.find(run.requirementKey),
+    );
+    expect(stored?.workflow.toSnapshot()).toMatchObject({
+      status: "completed",
+      revisions: [expect.objectContaining({ version: 1 })],
+    });
+  });
+
   it("把已完成提交、不可变 Preview 和 Runner 签名证据推进到产品验收", async () => {
     let now = new Date("2026-08-11T03:00:00.000Z");
     const clock = () => new Date(now.getTime());
@@ -158,6 +481,24 @@ describe("VerificationCoordinatorService", () => {
     const artifactHash = createHash("sha256").update(content).digest("hex");
     await expect(
       service.publishPreviewArtifact(runner, {
+        schemaVersion: 1,
+        requirementKey: run.requirementKey,
+        requirementRevision: 1,
+        artifactHashAlgorithm: "sha256",
+        artifactHash,
+        content,
+      }),
+    ).resolves.toMatchObject({ status: "preview_recorded" });
+    const retiredPreviewService = new VerificationCoordinatorService({
+      requirementRepository: repository,
+      previewArtifactStore,
+      evidenceAuthority: evidenceAuthority(clock, false),
+      projectKey,
+      repositoryKey,
+      clock,
+    });
+    await expect(
+      retiredPreviewService.publishPreviewArtifact(runner, {
         schemaVersion: 1,
         requirementKey: run.requirementKey,
         requirementRevision: 1,

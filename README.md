@@ -31,6 +31,13 @@ npm run typecheck
 npm run --workspace @forgex/web-console dev
 ```
 
+独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 `sha256` 摘要，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。先复制 [Runner 配置示例](services/verification-runner/runner.config.example.json)，为每个已确认交付版本配置完整计划和对应 `planHash`，预拉取不可变镜像，并让 Runner 使用无特权 Docker/容器运行身份。配置、会话、私钥、完整性密钥和 journal 父目录必须只允许 Runner 控制器身份访问。启动命令：
+
+```bash
+npm run --workspace @forgex/verification-runner build
+FORGEX_RUNNER_CONFIG=/absolute/path/runner.config.json npm run --workspace @forgex/verification-runner start
+```
+
 客户设备 Worker 使用本机 Codex 登录，不把 Codex 凭据上传控制面。每个 Codex 账户应使用独立受限操作系统账号或容器和该隔离身份独占的空 `codexHomePath`，先把 Codex CLI 配置为系统 keyring 凭据存储并完成登录；该目录不得出现 `auth.json`、个人 `config.toml`、第三方 MCP、Skills、Hooks 或插件，隔离系统镜像也不得预装额外 Codex 配置。仓库随设备包交付 `forgex-codex-isolation-launcher`（构建产物为 `dist/isolation-launcher-main.js`），它在同一次 `--forgex-codex-run` 中先验证身份和文件边界，再调用固定版本的官方 `@openai/codex-sdk`；同控制器身份运行会直接失败。每次任务都把仓库标记为不可信，使仓库内 `.codex/config.toml` 不能扩展工具面。模型侧关闭通用 Shell、统一执行、图片读取、浏览器、桌面操作、应用、插件、记忆、Hooks、工作区依赖、网络和 Web 搜索，只保留内置 `apply_patch` 与 ForgeX 自带的只读工作树 MCP；启动前会读取真实 Codex CLI feature inventory，任何未分类的默认启用能力都会失败关闭，并用同一组运行参数读取真实 MCP inventory，要求唯一启用的服务及其命令、参数和工具白名单都与 ForgeX 可信清单完全一致。该 MCP 只提供有界的列目录、读普通业务文本和字面量搜索，不执行命令、不读取 `.git`、凭据文件、符号链接或工作树外路径。生产需用 root/管理员持有且其他用户不可写的 OS 包装器，在独立账号或容器内调用该 launcher。复制 [设备配置示例](services/device-worker/worker.config.example.json)，填入包装器路径与真实 SHA-256，再替换设备连接信息、项目与仓库标识以及本机绝对路径，然后执行：
 
 ```bash
@@ -61,5 +68,7 @@ Web Console 默认运行在 `http://localhost:4173`，并把 `/api` 转发到本
 浏览器生产认证由同源认证层签发名为 `forgex_session` 的 HttpOnly Cookie，建议同时启用 `Secure`、`SameSite=Strict` 和 `Path=/`。Control Plane 对 Cookie 会话的写请求额外要求 `X-ForgeX-CSRF: 1`；非浏览器客户端仍可通过现有 `Authorization: Bearer ...` 适配器接入。Cookie 的签发、轮换和注销属于后续身份模块，不由 Web 静态资源处理。
 
 生产接入前，需要按编号依次执行 [Worker 舰队迁移](packages/postgres/migrations/0001_worker_fleet.sql)、[需求控制面迁移](packages/postgres/migrations/0002_requirement_control_plane.sql)、[验收审计迁移](packages/postgres/migrations/0003_requirement_acceptance_audit.sql)、[Preview 制品迁移](packages/postgres/migrations/0004_preview_artifacts.sql)、[扩展目录迁移](packages/postgres/migrations/0005_extension_catalog.sql)、[Skill 注册表迁移](packages/postgres/migrations/0006_skill_registry.sql)、[MCP 注册表迁移](packages/postgres/migrations/0007_mcp_registry.sql)、[MCP 调用迁移](packages/postgres/migrations/0008_mcp_invocations.sql)、[Worker 任务类型迁移](packages/postgres/migrations/0009_worker_work_kinds.sql)、[业务知识库迁移](packages/postgres/migrations/0010_knowledge_bases.sql)、[设备交付结果迁移](packages/postgres/migrations/0011_delivery_runs.sql) 和 [独立验证证据迁移](packages/postgres/migrations/0012_runner_verification.sql)，并向所有 API 副本注入同一数据库上的 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository`、`PostgresPreviewArtifactStore`、`PostgresExtensionCatalogRepository`、`PostgresSkillRegistryRepository`、`PostgresSkillArtifactStore`、`PostgresMcpRegistryRepository`、`PostgresMcpInputSchemaStore`、`PostgresMcpInvocationRepository` 与 `PostgresKnowledgeBaseRepository`。每个 API 项目还必须注入稳定的 `repositoryKey`，设备端相同项目配置必须绑定同一个仓库标识。需求仓储和验证协调服务必须注入同一个保留当前及历史验证公钥的 `EvidenceAuthority`；Skill 与 MCP 注册表同样必须保留历史验证公钥，并把退役密钥设置为仅核验历史记录。当前仍是预发布版本，不应直接用于生产交付。
+
+生产数据库还必须在 `0012_runner_verification.sql` 之后执行 [独立验证失败迁移](packages/postgres/migrations/0013_verification_failures.sql)；该迁移保存不可变交付版本的失败终态，并将 `verification.failed` 纳入审计约束。失败版本不会继续进入验收，必须形成新的交付版本后重新验证。
 
 详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。

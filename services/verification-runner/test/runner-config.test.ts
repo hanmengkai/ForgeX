@@ -1,7 +1,9 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,6 +16,41 @@ import {
 } from "../src/index.js";
 
 const temporaryRoots: string[] = [];
+const execFileAsync = promisify(execFile);
+
+const makeWindowsPrivate = async (target: string): Promise<void> => {
+  if (process.platform !== "win32") return;
+  const systemRoot = process.env.SystemRoot!;
+  const powershellPath = path.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const script = String.raw`
+$acl = Get-Acl -LiteralPath $env:FORGEX_ACL_TEST_TARGET
+$acl.SetAccessRuleProtection($true, $false)
+$inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+$propagation = [System.Security.AccessControl.PropagationFlags]::None
+$allow = [System.Security.AccessControl.AccessControlType]::Allow
+$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$system = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$administrators = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+foreach ($identity in @($current, $system, $administrators)) {
+  $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($identity, 'FullControl', $inheritance, $propagation, $allow))
+}
+Set-Acl -LiteralPath $env:FORGEX_ACL_TEST_TARGET -AclObject $acl
+`;
+  await execFileAsync(
+    powershellPath,
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      env: { SystemRoot: systemRoot, FORGEX_ACL_TEST_TARGET: target },
+      windowsHide: true,
+    },
+  );
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -58,7 +95,7 @@ const plan: VerificationSuitePlan = {
       criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
       execution: {
         image: `registry.example.test/forgex/node@sha256:${"a".repeat(64)}`,
-        command: ["npm", "test"],
+        command: ["/forgex-verifier/node-quality"],
         timeoutMs: 120_000,
       },
     },
@@ -66,10 +103,11 @@ const plan: VerificationSuitePlan = {
 };
 
 const fixture = async () => {
-  const root = path.join(os.tmpdir(), `forgex-runner-config-${randomUUID()}`);
+  const root = path.join(os.homedir(), `.forgex-runner-config-${randomUUID()}`);
   temporaryRoots.push(root);
   await mkdir(root, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") await chmod(root, 0o700);
+  else await makeWindowsPrivate(root);
   const repositoryRoot = path.join(root, "repository");
   const workspaceRoot = path.join(root, "workspaces");
   await mkdir(repositoryRoot);
@@ -115,6 +153,7 @@ const fixture = async () => {
     gitCommandSha256: "b".repeat(64),
     dockerCommandPath: dockerPath,
     dockerCommandSha256: "c".repeat(64),
+    containerUser: "65532:65532",
     plans: [plan],
     trustedPlanAnchors: [
       {
@@ -146,16 +185,15 @@ const fixture = async () => {
 describe("Verification Runner config", () => {
   it("只从受保护文件读取会话、签名私钥和日志完整性密钥", async () => {
     const { configPath } = await fixture();
-    const config = await loadVerificationRunnerConfig(configPath, {
-      assertWindowsPrivatePath: async () => Promise.resolve(),
-    });
+    const config = await loadVerificationRunnerConfig(configPath);
 
     expect(config.sessionKey).toBe("runner_session_key_1234567890");
     expect(config.journalIntegrityKey).toEqual(new Uint8Array(32).fill(0x5a));
     expect(config.privateKey.asymmetricKeyType).toBe("ed25519");
     expect(config.scope.repositoryKey).toBe(target.repositoryKey);
+    expect(config.containerUser).toBe("65532:65532");
     expect(JSON.stringify(config)).not.toContain("PRIVATE KEY");
-  });
+  }, 15_000);
 
   it.runIf(process.platform !== "win32")(
     "拒绝可被其他本机用户读取的 Runner 会话文件",
@@ -174,5 +212,20 @@ describe("Verification Runner config", () => {
     await expect(
       provider.planFor({ ...target, commitSha: "b".repeat(40) }),
     ).rejects.toThrow("验证计划");
+  });
+
+  it("仓库内示例配置的计划摘要可以直接通过完整性核对", async () => {
+    const example = JSON.parse(
+      await readFile(
+        path.resolve("services/verification-runner/runner.config.example.json"),
+        "utf8",
+      ),
+    ) as {
+      plans: VerificationSuitePlan[];
+      trustedPlanAnchors: Array<{ planHash: string }>;
+    };
+    expect(example.trustedPlanAnchors[0]!.planHash).toBe(
+      verificationSuitePlanHash(example.plans[0]!),
+    );
   });
 });

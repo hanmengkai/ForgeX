@@ -7,6 +7,7 @@ import { EvidenceAuthority } from "@forgex/domain";
 import {
   Ed25519RunnerEvidenceSigner,
   InMemoryVerificationJournal,
+  RunnerControlPlaneClientError,
   VerificationRunnerRuntime,
   verificationArtifactEntry,
   type VerificationRunnerTarget,
@@ -96,6 +97,7 @@ describe("VerificationRunnerRuntime", () => {
       saveArtifact: vi.fn(async () => {
         order.push("save_artifact");
       }),
+      saveFailure: vi.fn(async () => Promise.resolve()),
       saveSigned: vi.fn(async () => {
         order.push("save_signed");
       }),
@@ -115,6 +117,7 @@ describe("VerificationRunnerRuntime", () => {
         order.push("submit");
         authority.verify(evidence);
       }),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const verifier = {
       verify: vi.fn(async () => {
@@ -165,6 +168,7 @@ describe("VerificationRunnerRuntime", () => {
         submitted.push(evidence);
         if (submitted.length === 1) throw new Error("response_lost");
       }),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const verifier = { verify: vi.fn(async () => passedVerification) };
     const options = {
@@ -193,6 +197,58 @@ describe("VerificationRunnerRuntime", () => {
     await expect(journal.load()).resolves.toBeNull();
   });
 
+  it("失败终态先于已签名证据落库时会清除旧日志并继续取新任务", async () => {
+    const { signer } = signerFixture();
+    const journal = new InMemoryVerificationJournal();
+    const firstControlPlane = {
+      listPending: vi.fn(async () => [target]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => {
+        throw new Error("response_lost");
+      }),
+      reportFailure: vi.fn(async () => Promise.resolve()),
+    };
+    const verifier = { verify: vi.fn(async () => passedVerification) };
+    const baseOptions = {
+      scope: runnerScope,
+      verifier,
+      signer,
+      journal,
+      journalIntegrityKey,
+      clock: () => new Date("2026-08-11T03:01:00.000Z"),
+      createEvidenceKey: () => "80000000-0000-4000-8000-000000000008",
+    } as const;
+    await expect(
+      new VerificationRunnerRuntime({
+        ...baseOptions,
+        controlPlane: firstControlPlane,
+      }).runOnce(),
+    ).rejects.toThrow("response_lost");
+
+    const resumedControlPlane = {
+      listPending: vi.fn(async () => []),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => {
+        throw new RunnerControlPlaneClientError(
+          409,
+          "verification_failure_recorded",
+          "同一交付版本已经记录独立验证失败",
+        );
+      }),
+      reportFailure: vi.fn(async () => Promise.resolve()),
+    };
+    const resumed = new VerificationRunnerRuntime({
+      ...baseOptions,
+      controlPlane: resumedControlPlane,
+    });
+
+    await expect(resumed.runOnce()).resolves.toEqual({ kind: "idle" });
+    await expect(journal.load()).resolves.toBeNull();
+    await expect(resumed.runOnce()).resolves.toEqual({ kind: "idle" });
+    expect(resumedControlPlane.listPending).toHaveBeenCalledOnce();
+    expect(verifier.verify).toHaveBeenCalledOnce();
+  });
+
   it("Preview 上传失败后从制品日志恢复，不会重新运行验证命令", async () => {
     const { signer } = signerFixture();
     const journal = new InMemoryVerificationJournal();
@@ -203,6 +259,7 @@ describe("VerificationRunnerRuntime", () => {
         .mockRejectedValueOnce(new Error("upload_lost"))
         .mockResolvedValueOnce(undefined),
       submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const verifier = { verify: vi.fn(async () => passedVerification) };
     const options = {
@@ -226,6 +283,57 @@ describe("VerificationRunnerRuntime", () => {
     expect(verifier.verify).toHaveBeenCalledOnce();
     expect(controlPlane.listPending).toHaveBeenCalledTimes(2);
     expect(controlPlane.publishPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("失败终态先于 Preview 恢复完成时会清除旧制品日志", async () => {
+    const { signer } = signerFixture();
+    const journal = new InMemoryVerificationJournal();
+    const firstControlPlane = {
+      listPending: vi.fn(async () => [target]),
+      publishPreview: vi.fn(async () => {
+        throw new Error("upload_lost");
+      }),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
+    };
+    const verifier = { verify: vi.fn(async () => passedVerification) };
+    const baseOptions = {
+      scope: runnerScope,
+      verifier,
+      signer,
+      journal,
+      journalIntegrityKey,
+      clock: () => new Date("2026-08-11T03:01:00.000Z"),
+      createEvidenceKey: () => "80000000-0000-4000-8000-000000000008",
+    } as const;
+    await expect(
+      new VerificationRunnerRuntime({
+        ...baseOptions,
+        controlPlane: firstControlPlane,
+      }).runOnce(),
+    ).rejects.toThrow("upload_lost");
+
+    const resumedControlPlane = {
+      listPending: vi.fn(async () => []),
+      publishPreview: vi.fn(async () => {
+        throw new RunnerControlPlaneClientError(
+          409,
+          "delivery_not_ready_for_verification",
+          "当前交付已经不再等待验证",
+        );
+      }),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
+    };
+
+    await expect(
+      new VerificationRunnerRuntime({
+        ...baseOptions,
+        controlPlane: resumedControlPlane,
+      }).runOnce(),
+    ).resolves.toEqual({ kind: "idle" });
+    await expect(journal.load()).resolves.toBeNull();
+    expect(verifier.verify).toHaveBeenCalledOnce();
   });
 
   it("任一验收条件失败时不上传 Preview，也不提交通过证据", async () => {
@@ -273,8 +381,103 @@ describe("VerificationRunnerRuntime", () => {
           testRunKey: "suite-failed",
         }),
       ]),
+      expect.any(String),
     );
     await expect(journal.load()).resolves.toBeNull();
+  });
+
+  it("失败上报响应丢失后重启只重放失败结果，不会再次运行验证套件", async () => {
+    const { signer } = signerFixture();
+    const journal = new InMemoryVerificationJournal();
+    const failedVerification = {
+      artifact: preview,
+      checks: [
+        {
+          criterionKey,
+          status: "failed" as const,
+          testRunKey: "suite-failed",
+        },
+      ],
+    };
+    const controlPlane = {
+      listPending: vi.fn(async () => [target]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("response_lost"))
+        .mockResolvedValueOnce(undefined),
+    };
+    const verifier = { verify: vi.fn(async () => failedVerification) };
+    const options = {
+      scope: runnerScope,
+      controlPlane,
+      verifier,
+      signer,
+      journal,
+      journalIntegrityKey,
+    } as const;
+
+    await expect(
+      new VerificationRunnerRuntime(options).runOnce(),
+    ).rejects.toThrow("response_lost");
+    await expect(
+      new VerificationRunnerRuntime(options).runOnce(),
+    ).resolves.toEqual({
+      kind: "verification_failed",
+      title: target.title,
+    });
+    expect(verifier.verify).toHaveBeenCalledOnce();
+    expect(controlPlane.listPending).toHaveBeenCalledOnce();
+    expect(controlPlane.reportFailure).toHaveBeenCalledTimes(2);
+    await expect(journal.load()).resolves.toBeNull();
+  });
+
+  it("失败日志超过恢复窗口后会清理并在下一轮重新领取任务", async () => {
+    const { signer } = signerFixture();
+    const journal = new InMemoryVerificationJournal();
+    let now = new Date("2026-08-11T03:00:00.000Z");
+    const controlPlane = {
+      listPending: vi
+        .fn()
+        .mockResolvedValueOnce([target])
+        .mockResolvedValueOnce([]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    };
+    const verifier = {
+      verify: vi.fn(async () => ({
+        artifact: preview,
+        checks: [
+          {
+            criterionKey,
+            status: "failed" as const,
+            testRunKey: "suite-failed",
+          },
+        ],
+      })),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: runnerScope,
+      controlPlane,
+      verifier,
+      signer,
+      journal,
+      journalIntegrityKey,
+      clock: () => new Date(now.getTime()),
+    });
+
+    await expect(runtime.runOnce()).rejects.toThrow("offline");
+    now = new Date("2026-08-11T03:11:00.001Z");
+    await expect(runtime.runOnce()).resolves.toEqual({ kind: "idle" });
+    await expect(journal.load()).resolves.toBeNull();
+    await expect(runtime.runOnce()).resolves.toEqual({ kind: "idle" });
+    expect(controlPlane.listPending).toHaveBeenCalledTimes(2);
+    expect(verifier.verify).toHaveBeenCalledOnce();
+    expect(controlPlane.reportFailure).toHaveBeenCalledOnce();
   });
 
   it("拒绝为缺少本地完整性认证的 artifact_ready 日志签发新鲜证据", async () => {
@@ -296,6 +499,7 @@ describe("VerificationRunnerRuntime", () => {
       listPending: vi.fn(async () => [target]),
       publishPreview: vi.fn(async () => Promise.resolve()),
       submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const runtime = new VerificationRunnerRuntime({
       scope: { tenantKey, projectKey, repositoryKey, runnerKey, keyId },
@@ -305,6 +509,7 @@ describe("VerificationRunnerRuntime", () => {
       journal: {
         load: vi.fn(async () => forgedEntry),
         saveArtifact: vi.fn(),
+        saveFailure: vi.fn(),
         saveSigned: vi.fn(),
         clear: vi.fn(),
       },
@@ -317,7 +522,7 @@ describe("VerificationRunnerRuntime", () => {
     expect(controlPlane.submitEvidence).not.toHaveBeenCalled();
   });
 
-  it("恢复窗过期后拒绝刷新旧验证结果的证据时间", async () => {
+  it("Preview 恢复窗过期后清理旧制品并在下一轮重新取件", async () => {
     const { signer } = signerFixture();
     const entry = verificationArtifactEntry({
       target,
@@ -329,28 +534,29 @@ describe("VerificationRunnerRuntime", () => {
       verificationCompletedAt: "2026-08-11T03:00:00.000Z",
       integrityKey: journalIntegrityKey,
     });
+    const journal = new InMemoryVerificationJournal();
+    await journal.saveArtifact(entry);
     const controlPlane = {
-      listPending: vi.fn(async () => [target]),
+      listPending: vi.fn(async () => []),
       publishPreview: vi.fn(async () => Promise.resolve()),
       submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const runtime = new VerificationRunnerRuntime({
       scope: { tenantKey, projectKey, repositoryKey, runnerKey, keyId },
       controlPlane,
       verifier: { verify: vi.fn() },
       signer,
-      journal: {
-        load: vi.fn(async () => entry),
-        saveArtifact: vi.fn(),
-        saveSigned: vi.fn(),
-        clear: vi.fn(),
-      },
+      journal,
       journalIntegrityKey,
       maxArtifactRecoveryAgeMs: 10 * 60_000,
       clock: () => new Date("2026-08-11T03:11:00.000Z"),
     });
 
-    await expect(runtime.runOnce()).rejects.toThrow("恢复窗口已经过期");
+    await expect(runtime.runOnce()).resolves.toEqual({ kind: "idle" });
+    await expect(journal.load()).resolves.toBeNull();
+    await expect(runtime.runOnce()).resolves.toEqual({ kind: "idle" });
+    expect(controlPlane.listPending).toHaveBeenCalledTimes(2);
     expect(controlPlane.publishPreview).not.toHaveBeenCalled();
     expect(controlPlane.submitEvidence).not.toHaveBeenCalled();
   });
@@ -380,6 +586,7 @@ describe("VerificationRunnerRuntime", () => {
       listPending: vi.fn(async () => [changedTarget]),
       publishPreview: vi.fn(async () => Promise.resolve()),
       submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const runtime = new VerificationRunnerRuntime({
       scope: { tenantKey, projectKey, repositoryKey, runnerKey, keyId },
@@ -389,6 +596,7 @@ describe("VerificationRunnerRuntime", () => {
       journal: {
         load: vi.fn(async () => entry),
         saveArtifact: vi.fn(),
+        saveFailure: vi.fn(),
         saveSigned: vi.fn(),
         clear: vi.fn(),
       },
@@ -416,6 +624,7 @@ describe("VerificationRunnerRuntime", () => {
       listPending: vi.fn(async () => [target]),
       publishPreview: vi.fn(async () => Promise.resolve()),
       submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const runtime = new VerificationRunnerRuntime({
       scope: {
@@ -431,6 +640,7 @@ describe("VerificationRunnerRuntime", () => {
       journal: {
         load: vi.fn(async () => entry),
         saveArtifact: vi.fn(),
+        saveFailure: vi.fn(),
         saveSigned: vi.fn(),
         clear: vi.fn(),
       },
@@ -459,6 +669,7 @@ describe("VerificationRunnerRuntime", () => {
         .mockResolvedValueOnce([]),
       publishPreview: vi.fn(async () => Promise.resolve()),
       submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
     };
     const runtime = new VerificationRunnerRuntime({
       scope: { tenantKey, projectKey, repositoryKey, runnerKey, keyId },

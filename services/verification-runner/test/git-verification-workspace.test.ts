@@ -91,6 +91,7 @@ const providerFor = (fixture: Awaited<ReturnType<typeof repositoryFixture>>) =>
     gitCommandPath,
     gitCommandSha256,
     assertWindowsTrustedPath: async () => Promise.resolve(),
+    assertWindowsPrivatePath: async () => Promise.resolve(),
   });
 
 describe("GitVerificationWorkspaceProvider", () => {
@@ -199,6 +200,77 @@ describe("GitVerificationWorkspaceProvider", () => {
     await expect(access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     await workspace.dispose();
   });
+
+  it("拒绝提交之外的 Git attributes，并覆盖本地 checkout 转换配置", async () => {
+    const fixture = await repositoryFixture();
+    const provider = providerFor(fixture);
+    await writeFile(
+      path.join(fixture.repositoryRoot, ".git", "info", "attributes"),
+      "*.txt ident\n",
+      "utf8",
+    );
+    await expect(
+      provider.prepare({
+        repositoryKey: "30000000-0000-4000-8000-000000000003",
+        gitHashAlgorithm: "sha1",
+        commitSha: fixture.firstCommit,
+      }),
+    ).rejects.toThrow("Git attributes");
+
+    await writeFile(
+      path.join(fixture.repositoryRoot, ".git", "info", "attributes"),
+      "",
+      "utf8",
+    );
+    await git(fixture.repositoryRoot, ["config", "core.autocrlf", "true"]);
+    const workspace = await provider.prepare({
+      repositoryKey: "30000000-0000-4000-8000-000000000003",
+      gitHashAlgorithm: "sha1",
+      commitSha: fixture.firstCommit,
+    });
+    expect(
+      await readFile(path.join(workspace.path, "result.txt"), "utf8"),
+    ).toBe("first");
+    await workspace.dispose();
+  });
+
+  it.runIf(process.platform === "win32")(
+    "将仓库根目录、Git 元数据和 info 目录纳入 Windows 私有写权限边界",
+    async () => {
+      const fixture = await repositoryFixture();
+      const privateChecks: string[] = [];
+      const provider = new GitVerificationWorkspaceProvider({
+        repositories: [
+          {
+            repositoryKey: "30000000-0000-4000-8000-000000000003",
+            repositoryRoot: fixture.repositoryRoot,
+          },
+        ],
+        workspaceRoot: fixture.workspaceRoot,
+        gitCommandPath,
+        gitCommandSha256,
+        assertWindowsTrustedPath: async () => Promise.resolve(),
+        assertWindowsPrivatePath: async (targetPath) => {
+          privateChecks.push(path.resolve(targetPath));
+        },
+      });
+
+      const workspace = await provider.prepare({
+        repositoryKey: "30000000-0000-4000-8000-000000000003",
+        gitHashAlgorithm: "sha1",
+        commitSha: fixture.firstCommit,
+      });
+
+      expect(privateChecks).toEqual(
+        expect.arrayContaining([
+          path.resolve(fixture.repositoryRoot),
+          path.resolve(fixture.repositoryRoot, ".git"),
+          path.resolve(fixture.repositoryRoot, ".git", "info"),
+        ]),
+      );
+      await workspace.dispose();
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "拒绝可被其他本机用户改写的权威仓库元数据",

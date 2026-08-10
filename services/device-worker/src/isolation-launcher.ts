@@ -13,6 +13,7 @@ import {
   currentOsIdentity,
   protectedPathsDigest,
 } from "./codex-isolation.js";
+import { assertPrivateWindowsPath } from "./windows-path-security.js";
 
 const absolutePath = z
   .string()
@@ -363,34 +364,6 @@ export const assertCodexToolSurface = async (
   }
 };
 
-const assertPrivateWindowsDirectory = async (target: string): Promise<void> => {
-  const script = String.raw`
-$acl = Get-Acl -LiteralPath $args[0]
-$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$owner = ([System.Security.Principal.NTAccount]$acl.Owner).Translate([System.Security.Principal.SecurityIdentifier]).Value
-if ($owner -ne $current) { exit 3 }
-$allowed = @($current, 'S-1-5-18', 'S-1-5-32-544')
-foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
-  if ($rule.AccessControlType -eq 'Allow' -and $allowed -notcontains $rule.IdentityReference.Value) {
-    $readMask = [System.Security.AccessControl.FileSystemRights]::ReadData -bor [System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [System.Security.AccessControl.FileSystemRights]::FullControl
-    if (($rule.FileSystemRights -band $readMask) -ne 0) { exit 4 }
-  }
-}
-exit 0
-`;
-  try {
-    await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script, target],
-      { windowsHide: true, timeout: 10_000 },
-    );
-  } catch {
-    throw new Error(
-      "隔离账户的 CODEX_HOME 必须仅允许该账户、SYSTEM 和管理员读取",
-    );
-  }
-};
-
 export const assertLauncherFilesystemBoundary = async (
   request: IsolatedCodexRunRequest,
 ): Promise<void> => {
@@ -447,7 +420,7 @@ export const assertLauncherFilesystemBoundary = async (
     throw new Error("隔离账户的 CODEX_HOME 必须由该账户独占");
   }
   if (process.platform === "win32") {
-    await assertPrivateWindowsDirectory(request.codexHomePath);
+    await assertPrivateWindowsPath(request.codexHomePath);
   }
   for (const entry of forbiddenCodexHomeEntries) {
     try {

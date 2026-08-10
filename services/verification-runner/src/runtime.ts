@@ -10,11 +10,13 @@ import {
   VerificationArtifactJournalEntrySchema,
   assertVerificationJournalIntegrity,
   verificationArtifactEntry,
+  verificationFailureEntry,
   verificationSignedEntry,
   type VerificationArtifactJournalEntry,
   type VerificationJournal,
   type VerificationJournalEntry,
 } from "./journal.js";
+import { RunnerControlPlaneClientError } from "./control-plane-client.js";
 import {
   VerificationResultSchema,
   VerificationRunnerScopeSchema,
@@ -35,6 +37,11 @@ export interface VerificationRunnerControlPlane {
     artifactHash: string,
   ): Promise<void>;
   submitEvidence(evidence: SignedEvidence): Promise<void>;
+  reportFailure(
+    target: VerificationRunnerTarget,
+    checks: EvidenceCheck[],
+    verificationCompletedAt: string,
+  ): Promise<void>;
 }
 
 export interface VerificationRunnerRuntimeOptions {
@@ -125,6 +132,24 @@ export class VerificationRunnerRuntime {
     );
     this.#assertChecks(target, verification.checks);
     if (verification.checks.some((check) => check.status !== "passed")) {
+      const failedEntry = verificationFailureEntry({
+        scope: this.#scope,
+        target,
+        checks: verification.checks,
+        verificationCompletedAt: this.#now().toISOString(),
+        integrityKey: this.#journalIntegrityKey,
+      });
+      await this.#journal.saveFailure(failedEntry);
+      try {
+        await this.#controlPlane.reportFailure(
+          target,
+          verification.checks,
+          failedEntry.verificationCompletedAt,
+        );
+      } catch (error) {
+        if (!this.#isTerminalJournalConflict(error)) throw error;
+      }
+      await this.#journal.clear(failedEntry.integrityTag);
       return { kind: "verification_failed", title: target.title };
     }
     this.#assertArtifact(verification.artifact);
@@ -148,9 +173,44 @@ export class VerificationRunnerRuntime {
 
   async #resume(entry: VerificationJournalEntry) {
     this.#assertTargetScope(entry.target);
+    if (entry.stage === "verification_failed") {
+      this.#assertChecks(entry.target, entry.checks);
+      if (entry.checks.every((check) => check.status === "passed")) {
+        throw new Error("Runner 失败恢复日志没有包含未通过结果");
+      }
+      const recoveryNow = this.#now().getTime();
+      const completedAt = Date.parse(entry.verificationCompletedAt);
+      if (completedAt > recoveryNow) {
+        throw new Error("Runner 失败结果时间晚于当前可信时钟");
+      }
+      if (recoveryNow - completedAt > this.#maxArtifactRecoveryAgeMs) {
+        await this.#journal.clear(entry.integrityTag);
+        return { kind: "idle" as const };
+      }
+      try {
+        await this.#controlPlane.reportFailure(
+          entry.target,
+          entry.checks,
+          entry.verificationCompletedAt,
+        );
+      } catch (error) {
+        if (!this.#isTerminalJournalConflict(error)) throw error;
+      }
+      await this.#journal.clear(entry.integrityTag);
+      return {
+        kind: "verification_failed" as const,
+        title: entry.target.title,
+      };
+    }
     if (entry.stage === "evidence_signed") {
       this.#assertSignedEntry(entry);
-      await this.#controlPlane.submitEvidence(entry.signedEvidence);
+      try {
+        await this.#controlPlane.submitEvidence(entry.signedEvidence);
+      } catch (error) {
+        if (!this.#isTerminalJournalConflict(error)) throw error;
+        await this.#journal.clear(entry.integrityTag);
+        return { kind: "idle" as const };
+      }
       await this.#journal.clear(entry.integrityTag);
       return { kind: "submitted" as const, title: entry.target.title };
     }
@@ -160,12 +220,17 @@ export class VerificationRunnerRuntime {
         target.requirementKey === entry.target.requirementKey &&
         target.requirementRevision === entry.target.requirementRevision,
     );
-    if (!current) {
-      throw new Error("Runner 恢复日志对应的权威验证任务已不存在");
-    }
-    const parsedCurrent = VerificationRunnerTargetSchema.parse(current);
+    const parsedCurrent = current
+      ? VerificationRunnerTargetSchema.parse(current)
+      : entry.target;
     this.#assertRecoveredTarget(entry, parsedCurrent);
-    return this.#resumeArtifact(entry, parsedCurrent);
+    try {
+      return await this.#resumeArtifact(entry, parsedCurrent);
+    } catch (error) {
+      if (!this.#isTerminalJournalConflict(error)) throw error;
+      await this.#journal.clear(entry.integrityTag);
+      return { kind: "idle" as const };
+    }
   }
 
   async #resumeArtifact(
@@ -176,11 +241,12 @@ export class VerificationRunnerRuntime {
     this.#assertRecoveredTarget(entry, authoritativeTarget);
     const recoveryNow = this.#now().getTime();
     const completedAt = Date.parse(entry.verificationCompletedAt);
-    if (
-      completedAt > recoveryNow ||
-      recoveryNow - completedAt > this.#maxArtifactRecoveryAgeMs
-    ) {
-      throw new Error("Runner Preview 恢复窗口已经过期，必须重新执行独立验证");
+    if (completedAt > recoveryNow) {
+      throw new Error("Runner Preview 验证时间晚于当前可信时钟");
+    }
+    if (recoveryNow - completedAt > this.#maxArtifactRecoveryAgeMs) {
+      await this.#journal.clear(entry.integrityTag);
+      return { kind: "idle" as const };
     }
     const artifact = Uint8Array.from(
       Buffer.from(entry.artifactContentBase64, "base64"),
@@ -230,6 +296,20 @@ export class VerificationRunnerRuntime {
     if (target.repositoryKey !== this.#scope.repositoryKey) {
       throw new Error("Runner 任务不属于当前受信代码仓库");
     }
+  }
+
+  #isTerminalJournalConflict(error: unknown): boolean {
+    return (
+      error instanceof RunnerControlPlaneClientError &&
+      [
+        "delivery_not_ready_for_verification",
+        "requirement_not_found",
+        "verification_evidence_stale",
+        "verification_failure_conflict",
+        "verification_failure_recorded",
+        "verification_failure_stale",
+      ].includes(error.code)
+    );
   }
 
   #assertJournalScope(entry: VerificationJournalEntry): void {

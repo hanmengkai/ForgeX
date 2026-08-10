@@ -293,4 +293,44 @@ describe("独立验证 Runner API", () => {
     });
     await app.close();
   });
+
+  it("通过 Runner 专用路由持久上报失败并移出待验证队列", async () => {
+    const { app, workflow, run } = await arrange();
+    const criterionKey =
+      workflow.toSnapshot().revisions[0]!.acceptanceCriteria[0]!.criterionKey;
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/runner/verification-targets/${run.requirementKey}/failure`,
+      headers: { authorization: "Runner runner-session" },
+      payload: {
+        schemaVersion: 1,
+        requirementKey: run.requirementKey,
+        requirementRevision: run.requirementRevision,
+        verificationCompletedAt: "2026-08-11T03:00:00.000Z",
+        checks: [
+          {
+            criterionKey,
+            status: "failed",
+            testRunKey: "trusted-plan-v1-suite-failed",
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: {
+        status: "verification_failed_recorded",
+        requirementRevision: 1,
+      },
+    });
+    const pending = await app.inject({
+      method: "GET",
+      url: "/api/v1/runner/verification-targets?limit=20",
+      headers: { authorization: "Runner runner-session" },
+    });
+    expect(pending.statusCode).toBe(200);
+    expect(pending.json()).toEqual({ data: [], meta: { count: 0 } });
+    await app.close();
+  });
 });

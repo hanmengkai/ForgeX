@@ -118,6 +118,7 @@ export {
 export type {
   DeliveryDispatchRecord,
   DeliveryRunResult,
+  VerificationFailureRecord,
   RequirementAuditAction,
   RequirementAuditEvent,
   RequirementRecord,
@@ -127,13 +128,18 @@ export type {
   RequirementListOptions,
   RequirementListPage,
 } from "./requirement-repository.js";
-export { DeliveryRunResultSchema } from "./requirement-repository.js";
+export {
+  DeliveryRunResultSchema,
+  VerificationFailureRecordSchema,
+} from "./requirement-repository.js";
 export {
   AuthenticatedRunnerSchema,
   RunnerPreviewArtifactCommandSchema,
+  RunnerVerificationFailureCommandSchema,
   VerificationCoordinatorService,
   type AuthenticatedRunner,
   type RunnerPreviewArtifactCommand,
+  type RunnerVerificationFailureCommand,
   type RunnerSessionAuthenticator,
   type VerificationCoordinatorServiceOptions,
   type VerificationTargetForRunner,

@@ -1,9 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open, realpath, rename, unlink } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import {
   SignedEvidenceSchema,
@@ -19,8 +17,7 @@ import {
   type VerificationRunnerTarget,
 } from "./model.js";
 import { VerificationRunnerInstanceLock } from "./instance-lock.js";
-
-const execFileAsync = promisify(execFile);
+import { assertDefaultWindowsPrivatePath } from "./windows-path-security.js";
 
 const artifactEntryBase = {
   schemaVersion: z.literal(1),
@@ -58,9 +55,30 @@ export const VerificationSignedJournalEntrySchema = z
   })
   .strict();
 
+export const VerificationFailureJournalEntrySchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    stage: z.literal("verification_failed"),
+    scope: VerificationRunnerScopeSchema,
+    target: VerificationRunnerTargetSchema,
+    verificationCompletedAt: z.iso.datetime(),
+    checks: z.array(
+      z
+        .object({
+          criterionKey: z.string().uuid(),
+          status: z.enum(["passed", "failed"]),
+          testRunKey: z.string().trim().min(1).max(200),
+        })
+        .strict(),
+    ),
+    integrityTag: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+
 export const VerificationJournalEntrySchema = z.discriminatedUnion("stage", [
   VerificationArtifactJournalEntrySchema,
   VerificationSignedJournalEntrySchema,
+  VerificationFailureJournalEntrySchema,
 ]);
 
 export type VerificationArtifactJournalEntry = z.infer<
@@ -69,6 +87,9 @@ export type VerificationArtifactJournalEntry = z.infer<
 export type VerificationSignedJournalEntry = z.infer<
   typeof VerificationSignedJournalEntrySchema
 >;
+export type VerificationFailureJournalEntry = z.infer<
+  typeof VerificationFailureJournalEntrySchema
+>;
 export type VerificationJournalEntry = z.infer<
   typeof VerificationJournalEntrySchema
 >;
@@ -76,6 +97,7 @@ export type VerificationJournalEntry = z.infer<
 export interface VerificationJournal {
   load(): Promise<VerificationJournalEntry | null>;
   saveArtifact(entry: VerificationArtifactJournalEntry): Promise<void>;
+  saveFailure(entry: VerificationFailureJournalEntry): Promise<void>;
   saveSigned(
     entry: VerificationSignedJournalEntry,
     expectedIntegrityTag: string,
@@ -154,6 +176,14 @@ export class InMemoryVerificationJournal implements VerificationJournal {
     this.#entry = structuredClone(entry);
   }
 
+  async saveFailure(entryInput: VerificationFailureJournalEntry) {
+    const entry = VerificationFailureJournalEntrySchema.parse(entryInput);
+    if (this.#entry && !same(this.#entry, entry)) {
+      throw new Error("Runner 已有另一项待恢复验证，不能覆盖持久日志");
+    }
+    this.#entry = structuredClone(entry);
+  }
+
   async saveSigned(
     entryInput: VerificationSignedJournalEntry,
     expectedIntegrityTag: string,
@@ -193,34 +223,6 @@ const samePath = (left: string, right: string): boolean =>
   process.platform === "win32"
     ? path.normalize(left).toLowerCase() === path.normalize(right).toLowerCase()
     : path.normalize(left) === path.normalize(right);
-
-const assertPrivateWindowsPath = async (target: string): Promise<void> => {
-  const script = String.raw`
-$acl = Get-Acl -LiteralPath $args[0]
-$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$owner = ([System.Security.Principal.NTAccount]$acl.Owner).Translate([System.Security.Principal.SecurityIdentifier]).Value
-if ($owner -ne $current) { exit 3 }
-$allowed = @($current, 'S-1-5-18', 'S-1-5-32-544')
-foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
-  if ($rule.AccessControlType -eq 'Allow' -and $allowed -notcontains $rule.IdentityReference.Value) {
-    $mask = [System.Security.AccessControl.FileSystemRights]::ReadData -bor [System.Security.AccessControl.FileSystemRights]::WriteData -bor [System.Security.AccessControl.FileSystemRights]::CreateFiles -bor [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::FullControl
-    if (($rule.FileSystemRights -band $mask) -ne 0) { exit 4 }
-  }
-}
-exit 0
-`;
-  try {
-    await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script, target],
-      { windowsHide: true, timeout: 10_000 },
-    );
-  } catch {
-    throw new Error(
-      "Runner 验证日志路径必须仅允许当前 Windows 用户、SYSTEM 和管理员访问",
-    );
-  }
-};
 
 const syncParentDirectory = async (target: string): Promise<void> => {
   if (process.platform === "win32") return;
@@ -278,7 +280,7 @@ export class FileVerificationJournal implements VerificationJournal {
     this.#filePath = path.resolve(filePath);
     this.#instanceLock = instanceLock;
     this.#assertWindowsPrivatePath =
-      options.assertWindowsPrivatePath ?? assertPrivateWindowsPath;
+      options.assertWindowsPrivatePath ?? assertDefaultWindowsPrivatePath;
   }
 
   static async open(
@@ -294,7 +296,7 @@ export class FileVerificationJournal implements VerificationJournal {
     const identity =
       process.platform === "win32" ? resolved.toLowerCase() : resolved;
     const windowsPathCheck =
-      options.assertWindowsPrivatePath ?? assertPrivateWindowsPath;
+      options.assertWindowsPrivatePath ?? assertDefaultWindowsPrivatePath;
     await assertPrivateJournalParent(resolved, windowsPathCheck);
     const instanceLock = await VerificationRunnerInstanceLock.acquire(
       identity,
@@ -359,6 +361,16 @@ export class FileVerificationJournal implements VerificationJournal {
   async saveArtifact(entryInput: VerificationArtifactJournalEntry) {
     this.#assertOpen();
     const entry = VerificationArtifactJournalEntrySchema.parse(entryInput);
+    const existing = await this.load();
+    if (existing && !same(existing, entry)) {
+      throw new Error("Runner 已有另一项待恢复验证，不能覆盖持久日志");
+    }
+    if (!existing) await this.#replace(entry);
+  }
+
+  async saveFailure(entryInput: VerificationFailureJournalEntry) {
+    this.#assertOpen();
+    const entry = VerificationFailureJournalEntrySchema.parse(entryInput);
     const existing = await this.load();
     if (existing && !same(existing, entry)) {
       throw new Error("Runner 已有另一项待恢复验证，不能覆盖持久日志");
@@ -472,6 +484,28 @@ export const verificationArtifactEntry = (input: {
     integrityTag: "0".repeat(64),
   });
   return VerificationArtifactJournalEntrySchema.parse({
+    ...unsigned,
+    integrityTag: journalIntegrityTag(unsigned, input.integrityKey),
+  });
+};
+
+export const verificationFailureEntry = (input: {
+  scope: VerificationRunnerScope;
+  target: VerificationRunnerTarget;
+  checks: EvidenceCheck[];
+  verificationCompletedAt: string;
+  integrityKey: Uint8Array;
+}): VerificationFailureJournalEntry => {
+  const unsigned = VerificationFailureJournalEntrySchema.parse({
+    schemaVersion: 1,
+    stage: "verification_failed",
+    scope: input.scope,
+    target: input.target,
+    verificationCompletedAt: input.verificationCompletedAt,
+    checks: input.checks,
+    integrityTag: "0".repeat(64),
+  });
+  return VerificationFailureJournalEntrySchema.parse({
     ...unsigned,
     integrityTag: journalIntegrityTag(unsigned, input.integrityKey),
   });

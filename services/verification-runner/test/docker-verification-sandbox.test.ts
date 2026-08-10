@@ -37,7 +37,7 @@ const plan: VerificationSuitePlan = {
       criterionKeys: ["70000000-0000-4000-8000-000000000007"],
       execution: {
         image: `registry.example.test/forgex/node@sha256:${"a".repeat(64)}`,
-        command: ["npm", "test"],
+        command: ["/forgex-verifier/node-quality", "--unit"],
         timeoutMs: 120_000,
       },
     },
@@ -47,7 +47,7 @@ const plan: VerificationSuitePlan = {
       criterionKeys: ["71000000-0000-4000-8000-000000000007"],
       execution: {
         image: `registry.example.test/forgex/node@sha256:${"a".repeat(64)}`,
-        command: ["npm", "run", "build"],
+        command: ["/forgex-verifier/node-quality", "--build"],
         timeoutMs: 180_000,
       },
     },
@@ -75,18 +75,54 @@ const fixture = async () => {
 };
 
 describe("DockerVerificationSandbox", () => {
-  it("以无网络、非 root、不可变镜像和有界资源逐项运行固定套件", async () => {
-    const { root, dockerPath, dockerSha256 } = await fixture();
-    const workspacePath = path.join(root, "workspace");
-    await mkdir(workspacePath);
-    const runProcess = vi
-      .fn()
-      .mockResolvedValueOnce({ exitCode: 0 })
-      .mockResolvedValueOnce({ exitCode: 1 });
+  it("进入取件循环前清理同一 Runner 上次崩溃遗留的容器", async () => {
+    const { dockerPath, dockerSha256 } = await fixture();
+    let listCount = 0;
+    const runProcess = vi.fn(async (input: { args: string[] }) => {
+      if (input.args[0] === "ps") {
+        listCount += 1;
+        return {
+          exitCode: 0,
+          stdout: listCount === 1 ? `${"a".repeat(64)}\n` : "",
+        };
+      }
+      return { exitCode: 0, stdout: "" };
+    });
     const sandbox = new DockerVerificationSandbox({
       dockerCommandPath: dockerPath,
       dockerCommandSha256: dockerSha256,
       containerUser: "12345:23456",
+      runnerKey: "40000000-0000-4000-8000-000000000004",
+      runProcess,
+      assertWindowsTrustedPath: async () => Promise.resolve(),
+    });
+
+    await sandbox.initialize();
+    expect(runProcess.mock.calls[1]![0]!.args).toEqual([
+      "rm",
+      "--force",
+      "a".repeat(64),
+    ]);
+  });
+
+  it("以无网络、非 root、不可变镜像和有界资源逐项运行固定套件", async () => {
+    const { root, dockerPath, dockerSha256 } = await fixture();
+    const workspacePath = path.join(root, "workspace");
+    await mkdir(workspacePath);
+    let suiteIndex = 0;
+    const runProcess = vi.fn(async (input: { args: string[] }) => {
+      if (input.args[0] === "run") {
+        const exitCode = suiteIndex === 0 ? 0 : 1;
+        suiteIndex += 1;
+        return { exitCode };
+      }
+      return { exitCode: 0, stdout: "" };
+    });
+    const sandbox = new DockerVerificationSandbox({
+      dockerCommandPath: dockerPath,
+      dockerCommandSha256: dockerSha256,
+      containerUser: "12345:23456",
+      runnerKey: "40000000-0000-4000-8000-000000000004",
       runProcess,
       assertWindowsTrustedPath: async () => Promise.resolve(),
     });
@@ -97,8 +133,10 @@ describe("DockerVerificationSandbox", () => {
         { suiteKey: "build", status: "failed" },
       ],
     });
-    expect(runProcess).toHaveBeenCalledTimes(2);
-    const first = runProcess.mock.calls[0]![0] as {
+    expect(runProcess).toHaveBeenCalledTimes(8);
+    const first = runProcess.mock.calls.find(
+      ([input]) => input.args[0] === "run",
+    )![0] as {
       commandPath: string;
       args: string[];
       timeoutMs: number;
@@ -117,8 +155,8 @@ describe("DockerVerificationSandbox", () => {
         "--user",
         "12345:23456",
         plan.suites[0]!.execution.image,
-        "npm",
-        "test",
+        "/forgex-verifier/node-quality",
+        "--unit",
       ]),
     );
     expect(first.args).toContain(
@@ -131,15 +169,15 @@ describe("DockerVerificationSandbox", () => {
     const { root, dockerPath, dockerSha256 } = await fixture();
     const workspacePath = path.join(root, "workspace");
     await mkdir(workspacePath);
-    const runProcess = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("verification_timeout"))
-      .mockResolvedValueOnce({ exitCode: 0 })
-      .mockResolvedValueOnce({ exitCode: 1 });
+    const runProcess = vi.fn(async (input: { args: string[] }) => {
+      if (input.args[0] === "run") throw new Error("verification_timeout");
+      return { exitCode: 0, stdout: "" };
+    });
     const sandbox = new DockerVerificationSandbox({
       dockerCommandPath: dockerPath,
       dockerCommandSha256: dockerSha256,
       containerUser: "12345:23456",
+      runnerKey: "40000000-0000-4000-8000-000000000004",
       runProcess,
       assertWindowsTrustedPath: async () => Promise.resolve(),
     });
@@ -147,19 +185,25 @@ describe("DockerVerificationSandbox", () => {
     await expect(sandbox.run({ workspacePath, plan })).rejects.toThrow(
       "受控容器",
     );
-    const runArgs = runProcess.mock.calls[0]![0]!.args;
+    const runCallIndex = runProcess.mock.calls.findIndex(
+      ([input]) => input.args[0] === "run",
+    );
+    const runArgs = runProcess.mock.calls[runCallIndex]![0]!.args;
     const nameIndex = runArgs.indexOf("--name");
     expect(nameIndex).toBeGreaterThan(0);
     const containerName = runArgs[nameIndex + 1];
     expect(containerName).toMatch(/^forgex-verification-[a-f0-9-]+$/u);
-    expect(runProcess.mock.calls[1]![0]!.args).toEqual([
+    expect(runProcess.mock.calls[runCallIndex + 1]![0]!.args).toEqual([
       "rm",
       "--force",
       containerName,
     ]);
-    expect(runProcess.mock.calls[2]![0]!.args).toEqual([
-      "inspect",
-      containerName,
+    expect(runProcess.mock.calls[runCallIndex + 2]![0]!.args).toEqual([
+      "ps",
+      "--all",
+      "--quiet",
+      "--filter",
+      `name=^/${containerName}$`,
     ]);
   });
 
@@ -167,14 +211,16 @@ describe("DockerVerificationSandbox", () => {
     const { root, dockerPath, dockerSha256 } = await fixture();
     const workspacePath = path.join(root, "workspace");
     await mkdir(workspacePath);
-    const runProcess = vi.fn(async () => ({
-      exitCode: 125,
+    const runProcess = vi.fn(async (input: { args: string[] }) => ({
+      exitCode: input.args[0] === "run" ? 125 : 0,
+      stdout: "",
       stderr: "Authorization: Bearer local-secret-marker",
     }));
     const sandbox = new DockerVerificationSandbox({
       dockerCommandPath: dockerPath,
       dockerCommandSha256: dockerSha256,
       containerUser: "12345:23456",
+      runnerKey: "40000000-0000-4000-8000-000000000004",
       runProcess,
       assertWindowsTrustedPath: async () => Promise.resolve(),
     });
@@ -186,7 +232,47 @@ describe("DockerVerificationSandbox", () => {
     expect((error as Error).message).not.toContain("local-secret-marker");
 
     await writeFile(dockerPath, "replaced docker fixture");
-    await expect(sandbox.run({ workspacePath, plan })).rejects.toThrow("摘要");
-    expect(runProcess).toHaveBeenCalledOnce();
+    await expect(sandbox.run({ workspacePath, plan })).rejects.toThrow(
+      "受控容器",
+    );
+    expect(
+      runProcess.mock.calls.filter(([input]) => input.args[0] === "run"),
+    ).toHaveLength(1);
+  });
+
+  it("清理无法确认后会在下一次执行前重新扫描 Runner 遗留容器", async () => {
+    const { root, dockerPath, dockerSha256 } = await fixture();
+    const workspacePath = path.join(root, "workspace");
+    await mkdir(workspacePath);
+    let cleanupFailed = false;
+    let labelScanCount = 0;
+    const runProcess = vi.fn(async (input: { args: string[] }) => {
+      if (
+        input.args[0] === "ps" &&
+        input.args.some((value) => value.startsWith("label="))
+      ) {
+        labelScanCount += 1;
+        return { exitCode: 0, stdout: "" };
+      }
+      if (input.args[0] === "run") throw new Error("verification_timeout");
+      if (input.args[0] === "rm" && !cleanupFailed) {
+        cleanupFailed = true;
+        return { exitCode: 1, stdout: "" };
+      }
+      return { exitCode: 0, stdout: "" };
+    });
+    const sandbox = new DockerVerificationSandbox({
+      dockerCommandPath: dockerPath,
+      dockerCommandSha256: dockerSha256,
+      containerUser: "12345:23456",
+      runnerKey: "40000000-0000-4000-8000-000000000004",
+      runProcess,
+      assertWindowsTrustedPath: async () => Promise.resolve(),
+    });
+
+    await expect(sandbox.run({ workspacePath, plan })).rejects.toThrow();
+    const scansAfterFirstFailure = labelScanCount;
+    await expect(sandbox.run({ workspacePath, plan })).rejects.toThrow();
+    expect(labelScanCount).toBeGreaterThan(scansAfterFirstFailure);
   });
 });

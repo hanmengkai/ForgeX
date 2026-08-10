@@ -19,6 +19,7 @@ import {
   McpRegistryApplicationService,
   RequirementApplicationService,
   AuthenticatedRunnerSchema,
+  RunnerVerificationFailureCommandSchema,
   VerificationCoordinatorService,
   SkillRegistryApplicationService,
   WorkerFleetService,
@@ -782,6 +783,42 @@ export const buildControlPlaneApi = (
         artifactHash: body.data.artifactHash,
         content,
       });
+      return reply.send({ data: result });
+    },
+  );
+
+  app.post(
+    "/api/v1/runner/verification-targets/:requirementKey/failure",
+    async (request, reply) => {
+      const runner = runnerConnectionFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      const body = RunnerVerificationFailureCommandSchema.safeParse(
+        request.body,
+      );
+      if (
+        !params.success ||
+        !body.success ||
+        params.data.requirementKey !== body.data.requirementKey
+      ) {
+        const details = !params.success
+          ? validationDetails(params.error)
+          : !body.success
+            ? validationDetails(body.error)
+            : [
+                {
+                  field: "requirementKey",
+                  code: "invalid_value" as const,
+                  message: "路径与结果中的需求不一致",
+                },
+              ];
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "验证失败结果需要调整",
+          details,
+        );
+      }
+      const result = await verifications.reportFailure(runner, body.data);
       return reply.send({ data: result });
     },
   );
