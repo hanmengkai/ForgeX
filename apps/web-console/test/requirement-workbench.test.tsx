@@ -71,6 +71,53 @@ const createClient = (): ForgeXClient => ({
   createProjectRepository: vi.fn(),
   updateProjectRepository: vi.fn(),
   deleteProjectRepository: vi.fn(),
+  listRequirementContexts: vi.fn().mockResolvedValue({
+    customers: [
+      {
+        name: "保险客户",
+        projects: [
+          {
+            name: "智能质检",
+            summary: "保险双录质量检查项目",
+            repositories: [
+              {
+                name: "控制面",
+                links: {
+                  actions: {
+                    createRequirement:
+                      "/api/v1/projects/22222222-2222-4222-8222-222222222222/repositories/44444444-4444-4444-8444-444444444444/requirements",
+                  },
+                },
+              },
+            ],
+            links: {
+              requirements:
+                "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements",
+            },
+          },
+          {
+            name: "营销视频",
+            summary: "营销视频生成与管理项目",
+            repositories: [
+              {
+                name: "视频服务",
+                links: {
+                  actions: {
+                    createRequirement:
+                      "/api/v1/projects/55555555-5555-4555-8555-555555555555/repositories/66666666-6666-4666-8666-666666666666/requirements",
+                  },
+                },
+              },
+            ],
+            links: {
+              requirements:
+                "/api/v1/projects/55555555-5555-4555-8555-555555555555/requirements",
+            },
+          },
+        ],
+      },
+    ],
+  }),
   listRequirements: vi.fn().mockResolvedValue({ items, nextCursor: null }),
   listExtensions: vi.fn().mockResolvedValue({
     businessKnowledge: [],
@@ -173,6 +220,56 @@ afterEach(() => {
 });
 
 describe("RequirementWorkbench", () => {
+  it("需求页选择客户项目并把业务上下文映射到地址栏和查询范围", async () => {
+    const client = createClient();
+    render(<RequirementWorkbench client={client} />);
+
+    expect(await screen.findByLabelText("当前客户")).toHaveValue("保险客户");
+    expect(screen.getByLabelText("当前项目")).toHaveValue("智能质检");
+    await waitFor(() =>
+      expect(client.listRequirements).toHaveBeenCalledWith(
+        "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements",
+      ),
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText("当前项目"), "营销视频");
+    expect(window.location.pathname).toBe("/requirements");
+    expect(window.location.search).toBe(
+      "?customer=%E4%BF%9D%E9%99%A9%E5%AE%A2%E6%88%B7&project=%E8%90%A5%E9%94%80%E8%A7%86%E9%A2%91",
+    );
+    await waitFor(() =>
+      expect(client.listRequirements).toHaveBeenLastCalledWith(
+        "/api/v1/projects/55555555-5555-4555-8555-555555555555/requirements",
+      ),
+    );
+  });
+
+  it("新建需求使用当前项目中选择的代码仓库动作链接", async () => {
+    const client = createClient();
+    render(<RequirementWorkbench client={client} />);
+    await screen.findByLabelText("当前项目");
+    await userEvent.click(screen.getByRole("button", { name: "新建需求" }));
+
+    expect(screen.getByLabelText("目标代码仓库")).toHaveValue("控制面");
+    await userEvent.type(screen.getByLabelText("需求名称"), "项目化需求");
+    await userEvent.type(
+      screen.getByLabelText("希望解决什么问题？"),
+      "让需求跟随当前客户项目",
+    );
+    await userEvent.type(
+      screen.getByLabelText("怎么才算完成？"),
+      "需求只出现在当前项目",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "保存并开始整理" }));
+
+    await waitFor(() =>
+      expect(client.createRequirement).toHaveBeenCalledWith(
+        "/api/v1/projects/22222222-2222-4222-8222-222222222222/repositories/44444444-4444-4444-8444-444444444444/requirements",
+        expect.objectContaining({ title: "项目化需求" }),
+      ),
+    );
+  });
+
   it("用业务语言展示需求、进度和下一步，不暴露内部标识", async () => {
     render(<RequirementWorkbench client={createClient()} />);
 

@@ -3,6 +3,79 @@ import { describe, expect, it, vi } from "vitest";
 import { createHttpForgeXClient } from "../src/index.js";
 
 describe("createHttpForgeXClient", () => {
+  it("从服务端动作链接读取需求上下文，并按所选项目和仓库调用需求 API", async () => {
+    const projectRequirements =
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements";
+    const createRequirement =
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/repositories/44444444-4444-4444-8444-444444444444/requirements";
+    const requests: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push([input, init]);
+      if (String(input) === "/api/v1/requirement-contexts") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                name: "保险客户",
+                projects: [
+                  {
+                    name: "智能质检",
+                    summary: "保险双录质量检查项目",
+                    repositories: [
+                      {
+                        name: "控制面",
+                        links: { actions: { createRequirement } },
+                      },
+                    ],
+                    links: { requirements: projectRequirements },
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (String(input) === `${projectRequirements}?limit=100`) {
+        return new Response(JSON.stringify({ data: [], meta: { nextCursor: null } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ data: {} }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const client = createHttpForgeXClient({ fetcher });
+    const contexts = await client.listRequirementContexts();
+    await client.listRequirements(contexts.customers[0]!.projects[0]!.links.requirements);
+    await client.createRequirement(
+      contexts.customers[0]!.projects[0]!.repositories[0]!.links.actions
+        .createRequirement,
+      {
+        schemaVersion: 1,
+        title: "项目化需求",
+        goal: "让需求归属当前客户项目",
+        userStories: [],
+        acceptanceCriteria: [
+          {
+            title: "归属明确",
+            description: "创建请求使用仓库动作链接",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      },
+    );
+
+    expect(requests.map(([input]) => String(input))).toEqual([
+      "/api/v1/requirement-contexts",
+      `${projectRequirements}?limit=100`,
+      createRequirement,
+    ]);
+  });
+
   const requirement = (overrides: Record<string, unknown> = {}) => {
     const suppliedLinks =
       typeof overrides.links === "object" && overrides.links !== null

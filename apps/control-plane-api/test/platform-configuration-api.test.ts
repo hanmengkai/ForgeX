@@ -77,6 +77,178 @@ const createApp = () => {
 };
 
 describe("平台资源配置 API", () => {
+  it("普通成员可选择启用的客户项目仓库，并按项目隔离创建与查询需求", async () => {
+    const app = createApp();
+    const adminHeaders = { authorization: "Bearer admin-session" };
+    const memberHeaders = { authorization: "Bearer member-session" };
+    const customer = await app.inject({
+      method: "POST",
+      url: "/api/v1/platform/customers",
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        name: "保险客户",
+        summary: "承载保险客户的多个交付项目",
+      },
+    });
+    const createProjectUrl = customer.json().data.links.actions.createProject;
+    const firstProject = await app.inject({
+      method: "POST",
+      url: createProjectUrl,
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        name: "智能质检",
+        summary: "保险双录质量检查项目",
+      },
+    });
+    const secondProject = await app.inject({
+      method: "POST",
+      url: createProjectUrl,
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        name: "营销视频",
+        summary: "营销视频生成与管理项目",
+      },
+    });
+    const firstRepository = await app.inject({
+      method: "POST",
+      url: firstProject.json().data.links.actions.createRepository,
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        name: "控制面",
+        gitUrl: "https://gitee.com/example/quality-control.git",
+        localPath: "/data/work/quality-control",
+        defaultBranch: "master",
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: secondProject.json().data.links.actions.createRepository,
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        name: "视频服务",
+        gitUrl: "https://gitee.com/example/video-service.git",
+        localPath: "/data/work/video-service",
+        defaultBranch: "main",
+      },
+    });
+
+    const contexts = await app.inject({
+      method: "GET",
+      url: "/api/v1/requirement-contexts",
+      headers: memberHeaders,
+    });
+    expect(contexts.statusCode).toBe(200);
+    expect(contexts.json()).toMatchObject({
+      data: [
+        {
+          name: "保险客户",
+          projects: [
+            {
+              name: "智能质检",
+              repositories: [
+                {
+                  name: "控制面",
+                  links: {
+                    actions: {
+                      createRequirement: expect.stringMatching(
+                        /^\/api\/v1\/projects\/[0-9a-f-]+\/repositories\/[0-9a-f-]+\/requirements$/u,
+                      ),
+                    },
+                  },
+                },
+              ],
+              links: {
+                requirements: expect.stringMatching(
+                  /^\/api\/v1\/projects\/[0-9a-f-]+\/requirements$/u,
+                ),
+              },
+            },
+            { name: "营销视频" },
+          ],
+        },
+      ],
+    });
+    expect(contexts.body).not.toContain("projectKey");
+    expect(contexts.body).not.toContain("repositoryKey");
+    expect(contexts.body).not.toContain("localPath");
+    expect(contexts.body).not.toContain("gitUrl");
+
+    const quality = contexts.json().data[0].projects[0];
+    const video = contexts.json().data[0].projects[1];
+    const created = await app.inject({
+      method: "POST",
+      url: quality.repositories[0].links.actions.createRequirement,
+      headers: memberHeaders,
+      payload: {
+        schemaVersion: 1,
+        title: "保单质检规则",
+        goal: "让质检人员可以按保险项目管理规则",
+        userStories: [],
+        acceptanceCriteria: [
+          {
+            title: "项目内可见",
+            description: "需求只出现在所属项目列表中",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.headers.location).toMatch(
+      /^\/api\/v1\/projects\/[0-9a-f-]+\/requirements\/[0-9a-f-]+$/u,
+    );
+
+    const qualityRequirements = await app.inject({
+      method: "GET",
+      url: quality.links.requirements,
+      headers: memberHeaders,
+    });
+    const videoRequirements = await app.inject({
+      method: "GET",
+      url: video.links.requirements,
+      headers: memberHeaders,
+    });
+    expect(qualityRequirements.json().data).toHaveLength(1);
+    expect(qualityRequirements.json().data[0].links.self).toBe(
+      created.headers.location,
+    );
+    expect(videoRequirements.json().data).toHaveLength(0);
+
+    const wrongProjectCreateUrl =
+      `${video.links.requirements.replace(/\/requirements$/u, "")}` +
+      `/repositories/${firstRepository.json().data.links.self.split("/").at(-1)}/requirements`;
+    const mismatched = await app.inject({
+      method: "POST",
+      url: wrongProjectCreateUrl,
+      headers: memberHeaders,
+      payload: {
+        schemaVersion: 1,
+        title: "跨项目需求",
+        goal: "验证仓库不能跨项目绑定",
+        userStories: [],
+        acceptanceCriteria: [
+          {
+            title: "拒绝跨项目",
+            description: "服务端校验仓库真实归属",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      },
+    });
+    expect(mismatched.statusCode).toBe(404);
+    expect(mismatched.json()).toMatchObject({
+      error: { code: "requirement_context_not_found" },
+    });
+    await app.close();
+  });
+
   it("超级管理员可通过版本化 API 创建客户、项目和多个仓库", async () => {
     const app = createApp();
     const headers = { authorization: "Bearer admin-session" };
