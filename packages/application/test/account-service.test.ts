@@ -44,6 +44,32 @@ const repository = () =>
   ]);
 
 describe("平台账号管理", () => {
+  it("接受六位纯数字密码并拒绝不足六位的密码", async () => {
+    const accounts = repository();
+    const service = new AccountAdministrationService(accounts);
+
+    const created = await service.create(administrator, {
+      username: "numeric.password",
+      actorName: "数字密码账号",
+      roles: ["developer"],
+      password: "123456",
+    });
+    await expect(
+      service.authenticate({
+        username: created.username,
+        password: "123456",
+      }),
+    ).resolves.toMatchObject({ username: "numeric.password" });
+    await expect(
+      service.create(administrator, {
+        username: "short.password",
+        actorName: "短密码账号",
+        roles: ["developer"],
+        password: "12345",
+      }),
+    ).rejects.toThrow();
+  });
+
   it("使用账号密码认证，且停用账号和错误密码不能建立会话", async () => {
     const accounts = repository();
     const service = new AccountAdministrationService(accounts);

@@ -228,6 +228,11 @@ describe("ForgeX 控制台框架", () => {
     expect(
       screen.getByRole("button", { name: "新建账号" }),
     ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "新建账号" }));
+    expect(screen.getByLabelText("初始密码")).toHaveAttribute(
+      "minlength",
+      "6",
+    );
     expect(
       screen.getByRole("button", { name: "编辑 super.admin" }),
     ).toBeInTheDocument();

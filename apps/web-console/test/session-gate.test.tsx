@@ -68,16 +68,17 @@ describe("SessionGate", () => {
 
     const usernameInput = await screen.findByLabelText("账号");
     const passwordInput = screen.getByLabelText("密码");
+    expect(passwordInput).toHaveAttribute("minlength", "6");
     await userEvent.type(usernameInput, "product.owner");
-    await userEvent.type(passwordInput, "Correct-Horse-2026!");
+    await userEvent.type(passwordInput, "123456");
     await userEvent.click(screen.getByRole("button", { name: "登录" }));
 
     expect(client.startSession).toHaveBeenCalledWith({
       username: "product.owner",
-      password: "Correct-Horse-2026!",
+      password: "123456",
     });
     expect(await screen.findByText("ForgeX 运行总览")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("Correct-Horse-2026!")).toBeNull();
+    expect(screen.queryByDisplayValue("123456")).toBeNull();
     expect(screen.getByText("product.owner")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "退出登录" }));
