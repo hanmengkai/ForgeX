@@ -66,53 +66,105 @@ export function DashboardOverview({
 
       <section className="dashboard-grid" aria-label="平台概况">
         <article className="dashboard-card primary-card">
-          <span className="dashboard-card-icon">
-            <RequirementIcon />
-          </span>
-          <span>业务需求</span>
+          <div className="dashboard-card-top">
+            <span className="dashboard-card-index">01</span>
+            <span className="dashboard-card-icon">
+              <RequirementIcon />
+            </span>
+          </div>
+          <span className="dashboard-card-title">业务需求</span>
           <strong>{loading ? "—" : items.length}</strong>
           <small>
             {running > 0
               ? `${running} 项正在由 AI 实现`
               : "当前没有执行中的需求"}
           </small>
-          <a
-            href="/requirements"
-            onClick={(event) => link(event, "/requirements")}
-          >
-            查看需求
-          </a>
+          <footer className="dashboard-card-footer">
+            <a
+              href="/requirements"
+              onClick={(event) => link(event, "/requirements")}
+            >
+              查看需求 <span aria-hidden="true">→</span>
+            </a>
+            <span className="dashboard-card-signal" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+            </span>
+          </footer>
         </article>
         <article className="dashboard-card">
-          <span className="dashboard-card-icon">
-            <AgentIcon />
-          </span>
-          <span>Agent 账户</span>
+          <div className="dashboard-card-top">
+            <span className="dashboard-card-index">02</span>
+            <span className="dashboard-card-icon">
+              <AgentIcon />
+            </span>
+          </div>
+          <span className="dashboard-card-title">Agent 账户</span>
           <strong>{connected} 个 / 不限数量</strong>
           <small>{online} 台设备在线，可继续连接新的 Agent</small>
-          <a href="/agents" onClick={(event) => link(event, "/agents")}>
-            管理 Agent
-          </a>
+          <footer className="dashboard-card-footer">
+            <a href="/agents" onClick={(event) => link(event, "/agents")}>
+              管理 Agent <span aria-hidden="true">→</span>
+            </a>
+            <span className="dashboard-card-signal" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+            </span>
+          </footer>
         </article>
         <article className="dashboard-card">
-          <span className="dashboard-card-icon">
-            <ApprovalIcon />
-          </span>
-          <span>待确认事项</span>
+          <div className="dashboard-card-top">
+            <span className="dashboard-card-index">03</span>
+            <span className="dashboard-card-icon">
+              <ApprovalIcon />
+            </span>
+          </div>
+          <span className="dashboard-card-title">待确认事项</span>
           <strong>{loading ? "—" : pending}</strong>
           <small>外部操作和验收仍由人员做最终判断</small>
-          <a href="/approvals" onClick={(event) => link(event, "/approvals")}>
-            进入确认中心
-          </a>
+          <footer className="dashboard-card-footer">
+            <a href="/approvals" onClick={(event) => link(event, "/approvals")}>
+              进入确认中心 <span aria-hidden="true">→</span>
+            </a>
+            <span className="dashboard-card-signal" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+            </span>
+          </footer>
         </article>
         <article className="dashboard-card">
-          <span className="dashboard-card-icon">
-            <CheckIcon />
-          </span>
-          <span>安全边界</span>
+          <div className="dashboard-card-top">
+            <span className="dashboard-card-index">04</span>
+            <span className="dashboard-card-icon">
+              <CheckIcon />
+            </span>
+          </div>
+          <span className="dashboard-card-title">安全边界</span>
           <strong className="text-metric">已保护</strong>
           <small>生产写入、凭据和验证结论保持隔离</small>
-          <span className="dashboard-card-state">策略在线</span>
+          <footer className="dashboard-card-footer">
+            <span className="dashboard-card-state">策略在线</span>
+            <span className="dashboard-card-signal" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+            </span>
+          </footer>
         </article>
       </section>
 
