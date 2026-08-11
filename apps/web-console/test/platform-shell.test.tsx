@@ -167,6 +167,8 @@ describe("ForgeX 控制台框架", () => {
     expect(screen.getByText("1 个 / 不限数量")).toBeInTheDocument();
     expect(screen.getByText("平台运行正常")).toBeInTheDocument();
     expect(screen.getByText("super.admin")).toBeInTheDocument();
+    expect(screen.getByText("super.admin").closest(".workspace-identity"))
+      .toBeInTheDocument();
     expect(screen.getByText("超级管理员")).toBeInTheDocument();
     expect(
       document.querySelectorAll(".dashboard-card .icon").length,
