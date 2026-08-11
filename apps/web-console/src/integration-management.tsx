@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type { ExtensionCatalogItem, ForgeXClient } from "./api.js";
+import { createBrowserUuid } from "./browser-uuid.js";
 
 interface IntegrationManagementProps {
   client: ForgeXClient;
 }
-
-const createBindingKey = (): string => crypto.randomUUID();
 
 export function IntegrationManagement({ client }: IntegrationManagementProps) {
   const [tools, setTools] = useState<ExtensionCatalogItem[]>([]);
@@ -28,7 +27,7 @@ export function IntegrationManagement({ client }: IntegrationManagementProps) {
   const [approval, setApproval] = useState<"automatic" | "review_required">(
     "automatic",
   );
-  const [bindingKey, setBindingKey] = useState(createBindingKey);
+  const [bindingKey, setBindingKey] = useState(createBrowserUuid);
   const [output, setOutput] = useState("");
   const [copied, setCopied] = useState(false);
 
@@ -120,7 +119,7 @@ export function IntegrationManagement({ client }: IntegrationManagementProps) {
   };
 
   const resetBinding = () => {
-    setBindingKey(createBindingKey());
+    setBindingKey(createBrowserUuid());
     setOutput("");
     setCopied(false);
   };
