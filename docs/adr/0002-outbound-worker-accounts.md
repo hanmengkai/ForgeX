@@ -8,7 +8,7 @@
 
 每台客户设备安装 Worker，并在本机完成 Codex 登录。Worker 主动连接 Control Plane，发送心跳、能力和不可逆账户指纹，领取有时限的任务租约。
 
-Control Plane 不接收 Codex 密码、OAuth Token、Cookie 或 API Key。首版每个账户只允许一个并发租约，单个租户最多登记五个账户。
+Control Plane 不接收 Codex 密码、OAuth Token、Cookie 或 API Key。每个账户只允许一个并发租约，单个租户可按团队实际规模登记账户，不设置固定产品上限。
 
 ## 原因
 

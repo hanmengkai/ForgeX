@@ -767,8 +767,7 @@ describe("createHttpForgeXClient", () => {
             data: [],
             meta: {
               connectedAccounts: 0,
-              maxAccounts: 5,
-              availableSlots: 5,
+              unlimited: true,
             },
             links: {
               actions: { connect: "/api/v1/worker-enrollments" },

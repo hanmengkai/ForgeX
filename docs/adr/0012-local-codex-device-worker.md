@@ -6,7 +6,7 @@
 
 ## 背景
 
-ForgeX 的控制面已经能够确认需求、生成权威派发记录，并用最多五个客户 Codex 账号对应的设备租约并行调度任务。但“设备领到任务”不等于“需求被真实实现”：设备还需要在正确仓库中创建隔离工作区，调用本机 Codex，形成可追溯提交，并把结果可靠地交回控制面。
+ForgeX 的控制面已经能够确认需求、生成权威派发记录，并按团队规模使用多个客户 Codex 账号对应的设备租约并行调度任务。但“设备领到任务”不等于“需求被真实实现”：设备还需要在正确仓库中创建隔离工作区，调用本机 Codex，形成可追溯提交，并把结果可靠地交回控制面。
 
 OpenAI 官方把 [Codex SDK](https://developers.openai.com/codex/sdk/) 定位为在应用和自动化流程中以编程方式运行本地 Codex Agent 的接口；[App Server](https://developers.openai.com/codex/app-server/) 更适合富客户端集成，其中远程 WebSocket 传输仍标为实验能力。因此设备 Worker 使用 TypeScript Codex SDK，而不把 App Server WebSocket 暴露成生产远程执行协议。
 

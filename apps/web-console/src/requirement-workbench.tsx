@@ -19,6 +19,7 @@ import { AccountManagement } from "./account-management.js";
 import { CreateRequirementDialog } from "./create-requirement-dialog.js";
 import { DashboardOverview } from "./dashboard-overview.js";
 import { ExtensionCenter } from "./extension-center.js";
+import { IntegrationManagement } from "./integration-management.js";
 import {
   AgentIcon,
   ApprovalIcon,
@@ -32,6 +33,7 @@ import {
   UserIcon,
 } from "./icons.js";
 import { McpInvocationCenter } from "./mcp-invocation-center.js";
+import { PlatformConfigurationCenter } from "./platform-configuration-center.js";
 import { SkillSelectionDialog } from "./skill-selection-dialog.js";
 import { WorkerCenter } from "./worker-center.js";
 
@@ -51,7 +53,9 @@ type ConsoleView =
   | "workers"
   | "extensions"
   | "approvals"
-  | "accounts";
+  | "accounts"
+  | "platformProjects"
+  | "integrations";
 
 const pathByView: Record<ConsoleView, string> = {
   dashboard: "/dashboard",
@@ -60,6 +64,8 @@ const pathByView: Record<ConsoleView, string> = {
   extensions: "/extensions",
   approvals: "/approvals",
   accounts: "/platform/accounts",
+  platformProjects: "/platform/projects",
+  integrations: "/platform/integrations",
 };
 
 const viewFromPath = (path: string): ConsoleView => {
@@ -886,7 +892,10 @@ export function RequirementWorkbench({
   }, [client, load, navigate]);
 
   useEffect(() => {
-    if (activeView === "accounts" && !isAdministrator) {
+    if (
+      ["accounts", "platformProjects", "integrations"].includes(activeView) &&
+      !isAdministrator
+    ) {
       navigate(pathByView.dashboard, true);
     }
   }, [activeView, isAdministrator, navigate]);
@@ -1121,6 +1130,38 @@ export function RequirementWorkbench({
           </a>
           {isAdministrator ? (
             <a
+              className={`nav-item ${activeView === "platformProjects" ? "active" : ""}`}
+              href={pathByView.platformProjects}
+              aria-label="客户与项目"
+              aria-current={
+                activeView === "platformProjects" ? "page" : undefined
+              }
+              onClick={(event) => {
+                event.preventDefault();
+                navigate(pathByView.platformProjects);
+              }}
+            >
+              <RequirementIcon />
+              客户与项目
+            </a>
+          ) : null}
+          {isAdministrator ? (
+            <a
+              className={`nav-item ${activeView === "integrations" ? "active" : ""}`}
+              href={pathByView.integrations}
+              aria-label="MCP 与外部工具"
+              aria-current={activeView === "integrations" ? "page" : undefined}
+              onClick={(event) => {
+                event.preventDefault();
+                navigate(pathByView.integrations);
+              }}
+            >
+              <ExtensionIcon />
+              MCP 与外部工具
+            </a>
+          ) : null}
+          {isAdministrator ? (
+            <a
               className={`nav-item ${activeView === "accounts" ? "active" : ""}`}
               href={pathByView.accounts}
               aria-label="账号管理"
@@ -1191,6 +1232,10 @@ export function RequirementWorkbench({
             <ExtensionCenter client={client} />
           ) : activeView === "workers" ? (
             <WorkerCenter client={client} initialOverview={workerOverview} />
+          ) : activeView === "platformProjects" && isAdministrator ? (
+            <PlatformConfigurationCenter client={client} />
+          ) : activeView === "integrations" && isAdministrator ? (
+            <IntegrationManagement client={client} />
           ) : activeView === "accounts" && isAdministrator ? (
             <AccountManagement client={client} />
           ) : activeView === "requirements" ? (

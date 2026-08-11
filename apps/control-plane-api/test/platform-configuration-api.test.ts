@@ -16,7 +16,10 @@ import {
   type SessionAuthenticator,
 } from "@forgex/application";
 import { EvidenceAuthority } from "@forgex/domain";
-import { McpHealthAuthority, SkillEvaluationAuthority } from "@forgex/extensions";
+import {
+  McpHealthAuthority,
+  SkillEvaluationAuthority,
+} from "@forgex/extensions";
 
 import { buildControlPlaneApi } from "../src/index.js";
 
@@ -104,6 +107,31 @@ describe("平台资源配置 API", () => {
     const createRepositoryUrl =
       project.json().data.links.actions.createRepository;
 
+    const invalidRepository = await app.inject({
+      method: "POST",
+      url: createRepositoryUrl,
+      headers,
+      payload: {
+        schemaVersion: 1,
+        name: "相对路径仓库",
+        gitUrl: "https://gitee.com/example/invalid.git",
+        localPath: "./invalid",
+        defaultBranch: "main",
+      },
+    });
+    expect(invalidRepository.statusCode).toBe(422);
+    expect(invalidRepository.json()).toMatchObject({
+      error: {
+        code: "validation_error",
+        details: [
+          {
+            field: "localPath",
+            message: "本地路径必须是 Windows、UNC 或 Linux 绝对路径",
+          },
+        ],
+      },
+    });
+
     for (const repository of [
       {
         name: "控制面",
@@ -147,7 +175,7 @@ describe("平台资源配置 API", () => {
     });
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({
-      code: "platform_configuration_admin_required",
+      error: { code: "platform_configuration_admin_required" },
     });
     await app.close();
   });

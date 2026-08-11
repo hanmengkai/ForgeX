@@ -141,22 +141,28 @@ describe("MCP 与外部工具配置", () => {
       screen.getByLabelText("工具技术名称"),
       "notifications.send",
     );
-    await userEvent.type(
-      screen.getByLabelText("业务动作名称"),
-      "发送团队通知",
-    );
+    await userEvent.type(screen.getByLabelText("业务动作名称"), "发送团队通知");
     await userEvent.type(
       screen.getByLabelText("业务动作说明"),
       "向指定团队成员发送一条业务通知",
     );
-    await userEvent.selectOptions(screen.getByLabelText("操作影响"), "external_action");
+    await userEvent.selectOptions(
+      screen.getByLabelText("操作影响"),
+      "external_action",
+    );
     await userEvent.click(screen.getByRole("button", { name: "生成本地配置" }));
 
     const output = screen.getByLabelText("MCP 本地发布配置");
-    expect(output).toHaveValue(expect.stringContaining('"connectionBindingKey"'));
-    expect(output).toHaveValue(expect.stringContaining('"external_action"'));
+    expect((output as HTMLTextAreaElement).value).toContain(
+      '"connectionBindingKey"',
+    );
+    expect((output as HTMLTextAreaElement).value).toContain(
+      '"external_action"',
+    );
     expect(
-      screen.getByText(/npm run --workspace @forgex\/extension-admin admin -- mcp-pack/),
+      screen.getByText(
+        /npm run --workspace @forgex\/extension-admin admin -- mcp-pack/,
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText(/配置只在当前浏览器生成/)).toBeInTheDocument();
   });

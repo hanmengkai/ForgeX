@@ -38,11 +38,9 @@ describe("WorkerRegistry", () => {
     expect(() => new WorkerRegistry(registryOptions(0))).toThrow(
       "Codex 账户上限必须是正整数",
     );
-    expect(() =>
-      new WorkerRegistry(registryOptions(Number.MAX_SAFE_INTEGER + 1)),
-    ).toThrow(
-      "Codex 账户上限必须是安全整数",
-    );
+    expect(
+      () => new WorkerRegistry(registryOptions(Number.MAX_SAFE_INTEGER + 1)),
+    ).toThrow("Codex 账户上限必须是安全整数");
   });
 
   it("拒绝会让设备永久在线的无效离线阈值", () => {

@@ -109,8 +109,8 @@ export class WorkerRegistry {
     if (!Number.isInteger(options.maxAccounts) || options.maxAccounts < 1) {
       throw new Error("Codex 账户上限必须是正整数");
     }
-    if (options.maxAccounts > 5) {
-      throw new Error("Codex 账户上限不能超过 5 个");
+    if (!Number.isSafeInteger(options.maxAccounts)) {
+      throw new Error("Codex 账户上限必须是安全整数");
     }
 
     this.#tenantKey = options.tenantKey.trim();

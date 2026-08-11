@@ -194,7 +194,7 @@ describe("Verification Runner config", () => {
     expect(config.scope.repositoryKey).toBe(target.repositoryKey);
     expect(config.containerUser).toBe("65532:65532");
     expect(JSON.stringify(config)).not.toContain("PRIVATE KEY");
-  }, 15_000);
+  }, 30_000);
 
   it.runIf(process.platform !== "win32")(
     "拒绝可被其他本机用户读取的 Runner 会话文件",

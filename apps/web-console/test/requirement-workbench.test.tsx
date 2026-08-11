@@ -61,6 +61,16 @@ const createClient = (): ForgeXClient => ({
   createAccount: vi.fn(),
   updateAccount: vi.fn(),
   deleteAccount: vi.fn(),
+  listPlatformConfiguration: vi.fn().mockResolvedValue({ customers: [] }),
+  createPlatformCustomer: vi.fn(),
+  updatePlatformCustomer: vi.fn(),
+  deletePlatformCustomer: vi.fn(),
+  createPlatformProject: vi.fn(),
+  updatePlatformProject: vi.fn(),
+  deletePlatformProject: vi.fn(),
+  createProjectRepository: vi.fn(),
+  updateProjectRepository: vi.fn(),
+  deleteProjectRepository: vi.fn(),
   listRequirements: vi.fn().mockResolvedValue({ items, nextCursor: null }),
   listExtensions: vi.fn().mockResolvedValue({
     businessKnowledge: [],
@@ -93,8 +103,7 @@ const createClient = (): ForgeXClient => ({
     ],
     capacity: {
       connectedAccounts: 2,
-      maxAccounts: 5,
-      availableSlots: 3,
+      unlimited: true,
     },
   }),
   connectWorker: vi.fn(),
@@ -220,10 +229,11 @@ describe("RequirementWorkbench", () => {
 
     await user.click(screen.getByRole("link", { name: "设备与 Agent" }));
 
-    expect(await screen.findByText("2 / 5 个账户已连接")).toBeInTheDocument();
+    expect(await screen.findByText("2 个账户已连接")).toBeInTheDocument();
+    expect(screen.getByText("不限数量")).toBeInTheDocument();
     expect(screen.getByText("研发电脑 1")).toBeInTheDocument();
     expect(screen.getByText("正在处理：访客预约")).toBeInTheDocument();
-    expect(screen.getByText("还有 3 个可用槽位")).toBeInTheDocument();
+    expect(screen.getByText("不限数量")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/sessionKey|workerKey|指纹/);
     expect(client.listWorkers).toHaveBeenCalledTimes(1);
   });
@@ -235,8 +245,7 @@ describe("RequirementWorkbench", () => {
       workers: [],
       capacity: {
         connectedAccounts: 0,
-        maxAccounts: 5,
-        availableSlots: 5,
+        unlimited: true,
       },
       connectAction: "/api/v1/worker-enrollments",
     });

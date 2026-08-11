@@ -204,9 +204,7 @@ describe("ForgeX 控制台框架", () => {
       await screen.findByRole("heading", { name: "客户与项目" }),
     ).toBeInTheDocument();
 
-    await userEvent.click(
-      screen.getByRole("link", { name: "MCP 与外部工具" }),
-    );
+    await userEvent.click(screen.getByRole("link", { name: "MCP 与外部工具" }));
     expect(window.location.pathname).toBe("/platform/integrations");
     expect(
       await screen.findByRole("heading", { name: "MCP 与外部工具" }),

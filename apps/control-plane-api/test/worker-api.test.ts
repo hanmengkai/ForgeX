@@ -337,8 +337,7 @@ describe("Codex 设备网关 API", () => {
       ],
       meta: {
         connectedAccounts: 1,
-        maxAccounts: 5,
-        availableSlots: 4,
+        unlimited: true,
       },
       links: { actions: {} },
     });
@@ -409,7 +408,7 @@ describe("Codex 设备网关 API", () => {
     });
     expect(afterExchange.json().meta).toMatchObject({
       connectedAccounts: 1,
-      availableSlots: 4,
+      unlimited: true,
     });
     await app.close();
   });
@@ -1012,7 +1011,7 @@ describe("Codex 设备网关 API", () => {
     await app.close();
   });
 
-  it("多个 API 副本共享五账户上限和交付租约", async () => {
+  it("多个 API 副本共享不限量账户和交付租约", async () => {
     const repository = new InMemoryWorkerFleetRepository();
     const requirementRepository = new InMemoryRequirementRepository();
     const { app: firstApp } = createTestApp(repository, requirementRepository);
@@ -1033,7 +1032,7 @@ describe("Codex 设备网关 API", () => {
         accountName: registration(6).accountName,
       },
     });
-    const rejected = await secondApp.inject({
+    const sixth = await secondApp.inject({
       method: "POST",
       url: "/api/v1/worker-enrollments/exchange",
       payload: {
@@ -1043,7 +1042,8 @@ describe("Codex 设备网关 API", () => {
         capabilities: registration(6).capabilities,
       },
     });
-    expect(rejected.statusCode).toBe(409);
+    expect(sixth.statusCode).toBe(201);
+    connections.push(sixth.json().data.connection);
 
     const { queued } = await requestConfirmedDelivery(
       firstApp,

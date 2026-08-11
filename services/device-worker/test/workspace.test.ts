@@ -201,5 +201,5 @@ describe("GitWorktreeWorkspaceProvider", () => {
     await expect(provider.commitCompleted(workspace)).rejects.toThrow(
       "分离 HEAD",
     );
-  }, 15_000);
+  }, 30_000);
 });

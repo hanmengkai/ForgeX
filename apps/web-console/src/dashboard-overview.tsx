@@ -33,7 +33,6 @@ export function DashboardOverview({
       item.status === "验证失败，版本已封存",
   ).length;
   const connected = workers?.capacity.connectedAccounts ?? 0;
-  const maxAccounts = workers?.capacity.maxAccounts ?? 5;
   const online =
     workers?.workers.filter((worker) => worker.status !== "离线").length ?? 0;
 
@@ -89,13 +88,8 @@ export function DashboardOverview({
             <AgentIcon />
           </span>
           <span>Agent 账户</span>
-          <strong>
-            {connected} / {maxAccounts}
-          </strong>
-          <small>
-            {online} 台设备在线，可用槽位{" "}
-            {workers?.capacity.availableSlots ?? maxAccounts}
-          </small>
+          <strong>{connected} 个 / 不限数量</strong>
+          <small>{online} 台设备在线，可继续连接新的 Agent</small>
           <a href="/agents" onClick={(event) => link(event, "/agents")}>
             管理 Agent
           </a>

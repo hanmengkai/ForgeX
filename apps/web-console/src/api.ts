@@ -90,8 +90,7 @@ export interface WorkerFleetOverview {
   workers: WorkerListItem[];
   capacity: {
     connectedAccounts: number;
-    maxAccounts: number;
-    availableSlots: number;
+    unlimited: true;
   };
   connectAction?: string | undefined;
 }
@@ -214,6 +213,58 @@ export interface AccountUpdateInput {
   password?: string;
 }
 
+export interface PlatformRepositoryItem {
+  name: string;
+  gitUrl: string;
+  localPath: string;
+  defaultBranch: string;
+  enabled: boolean;
+  revision: number;
+  links: { self: string };
+}
+
+export interface PlatformProjectItem {
+  name: string;
+  summary: string;
+  enabled: boolean;
+  revision: number;
+  repositories: PlatformRepositoryItem[];
+  links: { self: string; actions: { createRepository: string } };
+}
+
+export interface PlatformCustomerItem {
+  name: string;
+  summary: string;
+  enabled: boolean;
+  revision: number;
+  projects: PlatformProjectItem[];
+  links: { self: string; actions: { createProject: string } };
+}
+
+export interface PlatformConfigurationOverview {
+  customers: PlatformCustomerItem[];
+}
+
+export interface PlatformResourceCreateInput {
+  name: string;
+  summary: string;
+}
+
+export interface PlatformResourceUpdateInput extends PlatformResourceCreateInput {
+  enabled: boolean;
+}
+
+export interface PlatformRepositoryCreateInput {
+  name: string;
+  gitUrl: string;
+  localPath: string;
+  defaultBranch: string;
+}
+
+export interface PlatformRepositoryUpdateInput extends PlatformRepositoryCreateInput {
+  enabled: boolean;
+}
+
 export class ForgeXHttpError extends Error {
   readonly statusCode: number;
 
@@ -239,6 +290,43 @@ export interface ForgeXClient {
     input: AccountUpdateInput,
   ): Promise<void>;
   deleteAccount(selfUrl: string, expectedRevision: number): Promise<void>;
+  listPlatformConfiguration(): Promise<PlatformConfigurationOverview>;
+  createPlatformCustomer(input: PlatformResourceCreateInput): Promise<void>;
+  updatePlatformCustomer(
+    selfUrl: string,
+    expectedRevision: number,
+    input: PlatformResourceUpdateInput,
+  ): Promise<void>;
+  deletePlatformCustomer(
+    selfUrl: string,
+    expectedRevision: number,
+  ): Promise<void>;
+  createPlatformProject(
+    actionUrl: string,
+    input: PlatformResourceCreateInput,
+  ): Promise<void>;
+  updatePlatformProject(
+    selfUrl: string,
+    expectedRevision: number,
+    input: PlatformResourceUpdateInput,
+  ): Promise<void>;
+  deletePlatformProject(
+    selfUrl: string,
+    expectedRevision: number,
+  ): Promise<void>;
+  createProjectRepository(
+    actionUrl: string,
+    input: PlatformRepositoryCreateInput,
+  ): Promise<void>;
+  updateProjectRepository(
+    selfUrl: string,
+    expectedRevision: number,
+    input: PlatformRepositoryUpdateInput,
+  ): Promise<void>;
+  deleteProjectRepository(
+    selfUrl: string,
+    expectedRevision: number,
+  ): Promise<void>;
   listRequirements(): Promise<RequirementListPage>;
   listWorkers(): Promise<WorkerFleetOverview>;
   connectWorker(
@@ -339,6 +427,81 @@ const platformAccountSchema = z
   .strict();
 const accountListResponseSchema = z
   .object({ data: z.array(platformAccountSchema).max(500) })
+  .strict();
+const platformCustomerSelfPattern =
+  /^\/api\/v1\/platform\/customers\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const platformProjectSelfPattern =
+  /^\/api\/v1\/platform\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const platformRepositorySelfPattern =
+  /^\/api\/v1\/platform\/repositories\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const platformRepositoryItemSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100),
+    gitUrl: z.string().trim().min(4).max(1_000),
+    localPath: z.string().trim().min(1).max(1_000),
+    defaultBranch: z.string().trim().min(1).max(200),
+    enabled: z.boolean(),
+    revision: z.number().int().positive(),
+    links: z
+      .object({ self: z.string().regex(platformRepositorySelfPattern) })
+      .strict(),
+  })
+  .strict();
+const platformProjectItemSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100),
+    summary: z.string().trim().min(4).max(500),
+    enabled: z.boolean(),
+    revision: z.number().int().positive(),
+    repositories: z.array(platformRepositoryItemSchema).max(500),
+    links: z
+      .object({
+        self: z.string().regex(platformProjectSelfPattern),
+        actions: z.object({ createRepository: z.string() }).strict(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((project, context) => {
+    if (
+      project.links.actions.createRepository !==
+      `${project.links.self}/repositories`
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["links", "actions", "createRepository"],
+        message: "代码仓库创建入口与项目不匹配",
+      });
+    }
+  });
+const platformCustomerItemSchema = z
+  .object({
+    name: z.string().trim().min(2).max(100),
+    summary: z.string().trim().min(4).max(500),
+    enabled: z.boolean(),
+    revision: z.number().int().positive(),
+    projects: z.array(platformProjectItemSchema).max(500),
+    links: z
+      .object({
+        self: z.string().regex(platformCustomerSelfPattern),
+        actions: z.object({ createProject: z.string() }).strict(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((customer, context) => {
+    if (
+      customer.links.actions.createProject !== `${customer.links.self}/projects`
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["links", "actions", "createProject"],
+        message: "项目创建入口与客户不匹配",
+      });
+    }
+  });
+const platformConfigurationResponseSchema = z
+  .object({ data: z.array(platformCustomerItemSchema).max(500) })
   .strict();
 const requirementSelfPattern =
   /^\/api\/v1\/requirements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -538,35 +701,32 @@ const requirementDetailResponseSchema = z
 
 const workerListResponseSchema = z
   .object({
-    data: z
-      .array(
-        z
-          .object({
-            deviceName: z.string().trim().min(2).max(100),
-            accountName: z.string().trim().min(2).max(100),
-            status: z.enum(["空闲", "正在工作", "离线"]),
-            currentWork: z.string().trim().min(2).max(150).nullable(),
-          })
-          .strict()
-          .superRefine((worker, context) => {
-            if (
-              (worker.status === "正在工作" && worker.currentWork === null) ||
-              (worker.status !== "正在工作" && worker.currentWork !== null)
-            ) {
-              context.addIssue({
-                code: "custom",
-                path: ["currentWork"],
-                message: "设备工作内容与状态不一致",
-              });
-            }
-          }),
-      )
-      .max(5),
+    data: z.array(
+      z
+        .object({
+          deviceName: z.string().trim().min(2).max(100),
+          accountName: z.string().trim().min(2).max(100),
+          status: z.enum(["空闲", "正在工作", "离线"]),
+          currentWork: z.string().trim().min(2).max(150).nullable(),
+        })
+        .strict()
+        .superRefine((worker, context) => {
+          if (
+            (worker.status === "正在工作" && worker.currentWork === null) ||
+            (worker.status !== "正在工作" && worker.currentWork !== null)
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["currentWork"],
+              message: "设备工作内容与状态不一致",
+            });
+          }
+        }),
+    ),
     meta: z
       .object({
-        connectedAccounts: z.number().int().min(0).max(5),
-        maxAccounts: z.number().int().min(1).max(5),
-        availableSlots: z.number().int().min(0).max(5),
+        connectedAccounts: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        unlimited: z.literal(true),
       })
       .strict(),
     links: z
@@ -581,11 +741,7 @@ const workerListResponseSchema = z
   })
   .strict()
   .superRefine((overview, context) => {
-    if (
-      overview.data.length !== overview.meta.connectedAccounts ||
-      overview.meta.connectedAccounts + overview.meta.availableSlots !==
-        overview.meta.maxAccounts
-    ) {
+    if (overview.data.length !== overview.meta.connectedAccounts) {
       context.addIssue({
         code: "custom",
         path: ["meta"],
@@ -892,6 +1048,17 @@ const assertRequirementSelfUrl = (url: string): void => {
   }
 };
 
+const assertPlatformUrl = (
+  url: string,
+  pattern: RegExp,
+  label: string,
+): string => {
+  if (!pattern.test(url)) {
+    throw new Error(`${label}入口已经失效，请刷新页面后重试`);
+  }
+  return url;
+};
+
 const assertRequirementActionUrl = (url: string | undefined): string => {
   if (!url) {
     throw new Error("这个操作已经失效，请刷新页面后重试");
@@ -1086,6 +1253,116 @@ export const createHttpForgeXClient = (
         method: "DELETE",
         body: JSON.stringify({ schemaVersion: 1, expectedRevision }),
       });
+    },
+    listPlatformConfiguration: async () => {
+      const response = await request("/api/v1/platform/customers");
+      const parsed = platformConfigurationResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("客户与项目配置格式不正确，请联系管理员");
+      }
+      return { customers: parsed.data.data };
+    },
+    createPlatformCustomer: async (input) => {
+      await request("/api/v1/platform/customers", {
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: 1, ...input }),
+      });
+    },
+    updatePlatformCustomer: async (selfUrl, expectedRevision, input) => {
+      await request(
+        assertPlatformUrl(selfUrl, platformCustomerSelfPattern, "客户编辑"),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            schemaVersion: 1,
+            expectedRevision,
+            ...input,
+          }),
+        },
+      );
+    },
+    deletePlatformCustomer: async (selfUrl, expectedRevision) => {
+      await request(
+        assertPlatformUrl(selfUrl, platformCustomerSelfPattern, "客户删除"),
+        {
+          method: "DELETE",
+          body: JSON.stringify({ schemaVersion: 1, expectedRevision }),
+        },
+      );
+    },
+    createPlatformProject: async (actionUrl, input) => {
+      const self = actionUrl.endsWith("/projects")
+        ? actionUrl.slice(0, -"/projects".length)
+        : "";
+      assertPlatformUrl(self, platformCustomerSelfPattern, "项目创建");
+      await request(actionUrl, {
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: 1, ...input }),
+      });
+    },
+    updatePlatformProject: async (selfUrl, expectedRevision, input) => {
+      await request(
+        assertPlatformUrl(selfUrl, platformProjectSelfPattern, "项目编辑"),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            schemaVersion: 1,
+            expectedRevision,
+            ...input,
+          }),
+        },
+      );
+    },
+    deletePlatformProject: async (selfUrl, expectedRevision) => {
+      await request(
+        assertPlatformUrl(selfUrl, platformProjectSelfPattern, "项目删除"),
+        {
+          method: "DELETE",
+          body: JSON.stringify({ schemaVersion: 1, expectedRevision }),
+        },
+      );
+    },
+    createProjectRepository: async (actionUrl, input) => {
+      const self = actionUrl.endsWith("/repositories")
+        ? actionUrl.slice(0, -"/repositories".length)
+        : "";
+      assertPlatformUrl(self, platformProjectSelfPattern, "代码仓库创建");
+      await request(actionUrl, {
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: 1, ...input }),
+      });
+    },
+    updateProjectRepository: async (selfUrl, expectedRevision, input) => {
+      await request(
+        assertPlatformUrl(
+          selfUrl,
+          platformRepositorySelfPattern,
+          "代码仓库编辑",
+        ),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            schemaVersion: 1,
+            expectedRevision,
+            ...input,
+          }),
+        },
+      );
+    },
+    deleteProjectRepository: async (selfUrl, expectedRevision) => {
+      await request(
+        assertPlatformUrl(
+          selfUrl,
+          platformRepositorySelfPattern,
+          "代码仓库删除",
+        ),
+        {
+          method: "DELETE",
+          body: JSON.stringify({ schemaVersion: 1, expectedRevision }),
+        },
+      );
     },
     listRequirements: async () => {
       const response = await request("/api/v1/requirements?limit=100");

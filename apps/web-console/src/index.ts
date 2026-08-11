@@ -7,6 +7,14 @@ export {
   type PlatformAccountItem,
   type AccountCreateInput,
   type AccountUpdateInput,
+  type PlatformConfigurationOverview,
+  type PlatformCustomerItem,
+  type PlatformProjectItem,
+  type PlatformRepositoryItem,
+  type PlatformRepositoryCreateInput,
+  type PlatformRepositoryUpdateInput,
+  type PlatformResourceCreateInput,
+  type PlatformResourceUpdateInput,
   type ExtensionCatalogItem,
   type ExtensionCatalogOverview,
   type RequirementActionLinks,
@@ -25,3 +33,5 @@ export { KnowledgeBaseCenter } from "./knowledge-base-center.js";
 export { WorkerCenter } from "./worker-center.js";
 export { McpInvocationCenter } from "./mcp-invocation-center.js";
 export { AccountManagement } from "./account-management.js";
+export { PlatformConfigurationCenter } from "./platform-configuration-center.js";
+export { IntegrationManagement } from "./integration-management.js";
