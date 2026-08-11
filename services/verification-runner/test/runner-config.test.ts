@@ -88,6 +88,7 @@ const plan: VerificationSuitePlan = {
   requirementRevision: target.requirementRevision,
   gitHashAlgorithm: target.gitHashAlgorithm,
   commitSha: target.commitSha,
+  preview: { entryPath: ".forgex/preview.html" },
   suites: [
     {
       suiteKey: "unit",

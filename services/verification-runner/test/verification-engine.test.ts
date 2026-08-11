@@ -1,9 +1,12 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
 import {
   FixedSuiteVerificationEngine,
+  readIsolatedPreviewArtifact,
   VerificationSuitePlanSchema,
   verificationSuitePlanHash,
   type VerificationRunnerTarget,
@@ -47,6 +50,7 @@ const plan = (suites: SuiteInput[]): VerificationSuitePlan => ({
   requirementRevision: target.requirementRevision,
   gitHashAlgorithm: target.gitHashAlgorithm,
   commitSha: target.commitSha,
+  preview: { entryPath: ".forgex/preview.html" },
   suites: suites.map((suite) => ({
     ...suite,
     execution: suite.execution ?? {
@@ -138,6 +142,12 @@ describe("FixedSuiteVerificationEngine", () => {
     expect(verificationSuitePlanHash(first.data)).not.toBe(
       verificationSuitePlanHash(changed),
     );
+    expect(verificationSuitePlanHash(first.data)).not.toBe(
+      verificationSuitePlanHash({
+        ...first.data,
+        preview: { entryPath: "product/preview.html" },
+      }),
+    );
   });
 
   it("只验证权威提交，以固定套件结果覆盖全部验收条件并生成确定性 Preview", async () => {
@@ -170,10 +180,15 @@ describe("FixedSuiteVerificationEngine", () => {
     const planProvider = {
       planFor: vi.fn(async () => trustedPlan),
     };
+    const interactivePreview = new TextEncoder().encode(
+      '<!doctype html><html><body><button id="book">立即预约</button><output id="result"></output><script>book.onclick=()=>result.textContent="预约成功"</script></body></html>',
+    );
+    const previewArtifactReader = vi.fn(async () => interactivePreview);
     const engine = new FixedSuiteVerificationEngine({
       workspace,
       sandbox,
       planProvider,
+      previewArtifactReader,
       trustedPlanAnchors: [anchorFor(trustedPlan)],
     });
 
@@ -202,14 +217,16 @@ describe("FixedSuiteVerificationEngine", () => {
         ),
       },
     ]);
-    expect(first.artifact).toEqual(second.artifact);
+    expect(first.artifact).toEqual(interactivePreview);
+    expect(second.artifact).toEqual(interactivePreview);
+    expect(previewArtifactReader).toHaveBeenCalledWith({
+      workspacePath: path.resolve("verification-workspaces", "run-a"),
+      entryPath: ".forgex/preview.html",
+    });
     const html = new TextDecoder().decode(first.artifact);
-    expect(html).toContain("ForgeX 独立验证通过");
-    expect(html).toContain("访客 &lt;script&gt;alert(1)&lt;/script&gt; 预约");
-    expect(html).toContain("单元测试");
-    expect(html).toContain("生产构建");
-    expect(html).not.toContain(target.requirementKey);
-    expect(html).not.toContain("<script>");
+    expect(html).toContain("立即预约");
+    expect(html).toContain("预约成功");
+    expect(html).not.toContain("ForgeX 独立验证通过");
   });
 
   it("固定套件失败时逐项给出失败结果，且始终清理隔离工作区", async () => {
@@ -325,11 +342,73 @@ describe("FixedSuiteVerificationEngine", () => {
           return invocation === 1 ? originalPlan : smuggledPlan;
         }),
       },
+      previewArtifactReader: vi.fn(async () =>
+        new TextEncoder().encode(
+          "<!doctype html><button>确认</button><script>document.querySelector('button').onclick=()=>{}</script>",
+        ),
+      ),
       trustedPlanAnchors: [anchorFor(originalPlan)],
     });
 
     await expect(engine.verify(target)).resolves.toBeDefined();
     await expect(engine.verify(target)).rejects.toThrow("计划");
+  });
+
+  it("只读取权威工作树内自包含的 HTML Preview，交互效果留给产品负责人验收", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "forgex-preview-"));
+    try {
+      const previewPath = path.join(workspace, "preview.html");
+      const interactive =
+        '<!doctype html><html><body><label>姓名<input></label><button>提交</button><output aria-live="polite"></output><script>document.querySelector("button").onclick=()=>document.querySelector("output").textContent="提交成功"</script></body></html>';
+      await writeFile(previewPath, interactive, "utf8");
+
+      await expect(
+        readIsolatedPreviewArtifact({
+          workspacePath: workspace,
+          entryPath: "preview.html",
+        }),
+      ).resolves.toEqual(new TextEncoder().encode(interactive));
+
+      await writeFile(
+        previewPath,
+        '<!doctype html><button>提交</button><img src="https://tracking.example/collect">',
+        "utf8",
+      );
+      await expect(
+        readIsolatedPreviewArtifact({
+          workspacePath: workspace,
+          entryPath: "preview.html",
+        }),
+      ).rejects.toThrow("自包含");
+
+      const staticCandidate = "<!doctype html><h1>尚未完成的产品页面</h1>";
+      await writeFile(previewPath, staticCandidate, "utf8");
+      await expect(
+        readIsolatedPreviewArtifact({
+          workspacePath: workspace,
+          entryPath: "preview.html",
+        }),
+      ).resolves.toEqual(new TextEncoder().encode(staticCandidate));
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("Preview 入口不能离开权威工作树", () => {
+    expect(
+      VerificationSuitePlanSchema.safeParse({
+        ...plan([
+          {
+            suiteKey: "unit",
+            name: "单元测试",
+            criterionKeys: target.acceptanceCriteria.map(
+              (criterion) => criterion.criterionKey,
+            ),
+          },
+        ]),
+        preview: { entryPath: "../preview.html" },
+      }).success,
+    ).toBe(false);
   });
 
   it("拒绝把一个仓库的可信计划用于另一个仓库", async () => {

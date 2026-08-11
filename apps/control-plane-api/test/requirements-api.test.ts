@@ -1534,7 +1534,8 @@ describe("需求 API", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain("ForgeX 可信预览");
+    expect(response.body).toContain("ForgeX 提交预览");
+    expect(response.body).toContain("交互效果仍需你确认");
     expect(response.body).toContain('sandbox="allow-scripts"');
     expect(response.body).toContain(
       "@media (prefers-color-scheme: dark) { header strong { color: #a9edca; } }",

@@ -550,8 +550,8 @@ const previewWrapper = (content: Uint8Array): string => {
     </style>
   </head>
   <body>
-    <header><strong>ForgeX 可信预览</strong><span>已隔离外部连接与页面跳转</span></header>
-    <iframe id="forgex-preview" title="已验证的产品效果" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    <header><strong>ForgeX 提交预览</strong><span>已绑定验证提交；交互效果仍需你确认</span></header>
+    <iframe id="forgex-preview" title="与已验证提交绑定的产品效果" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
     <script>
       const encoded = "${base64Content}";
       const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));

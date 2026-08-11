@@ -7,6 +7,9 @@
   "requirementRevision": 1,
   "gitHashAlgorithm": "sha1",
   "commitSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "preview": {
+    "entryPath": ".forgex/preview.html"
+  },
   "suites": [
     {
       "suiteKey": "repository-integrity",

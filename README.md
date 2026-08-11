@@ -51,7 +51,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml up --build
 
 Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须在 Web 前增加 TLS，并把示例标识、摘要和数据库密码全部替换。
 
-独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 registry digest 或本机 `sha256:<image-id>` 固定，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。
+独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 registry digest 或本机 `sha256:<image-id>` 固定，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。验证全部通过后，Runner 会从同一权威提交中读取计划精确绑定的产品 HTML，按普通文件、路径、大小、UTF-8 和自包含资源边界校验，再把原始字节作为内容寻址 Preview 发布。控制面只在无网络、无表单提交、无跳转、无同源权限的 sandbox iframe 中展示它。Runner 只证明 Preview 与已验证提交精确绑定且能安全打开，不用标签或候选脚本替用户断言“交互已通过”；产品负责人必须实际操作该页面后再验收，固定套件证据仍独立证明业务条件。
 
 仓库随附一个真正可构建的最小独立验证镜像。它只读取只读候选工作树，检查锁文件、严格 TypeScript 基线、文件数量与大小、符号链接和敏感文件，不调用候选自己的 `npm scripts`。先构建镜像并记录内容寻址 ID：
 
@@ -82,7 +82,7 @@ npm run --workspace @forgex/verification-runner admin -- targets \
   --bootstrap /private/runner/runner.bootstrap.json
 ```
 
-复制 [计划示例](services/verification-runner/runner.plan.example.json)，把其中的 requirement、revision、commit、criterion keys 和上一步得到的 target 精确对应，并把 `image` 换成实际 registry digest 或本机 image ID。计划文件也必须放在私有目录。下面的命令会再次向控制面读取当前 target；任务、提交或验收条件已经变化时会拒绝写配置，匹配时才计算完整 `planHash`：
+复制 [计划示例](services/verification-runner/runner.plan.example.json)，把其中的 requirement、revision、commit、criterion keys 和上一步得到的 target 精确对应，把 `image` 换成实际 registry digest 或本机 image ID，并确认 `preview.entryPath` 指向该提交内由设备生成的 `.forgex/preview.html`。该文件必须是自包含、可操作、无外链的单页 HTML；它用于产品效果验收，不能替代固定套件的独立证据。计划文件也必须放在私有目录。下面的命令会再次向控制面读取当前 target；任务、提交、Preview 入口或验收条件已经变化时会拒绝写配置，匹配时才计算完整 `planHash`：
 
 ```bash
 npm run --workspace @forgex/verification-runner admin -- plan \

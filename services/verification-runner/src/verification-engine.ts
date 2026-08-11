@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 
+import { parse, type DefaultTreeAdapterTypes } from "parse5";
 import { z } from "zod";
 
 import {
@@ -79,6 +82,27 @@ const containerArgument = z
     "验证命令参数不能包含换行或空字符",
   );
 
+const previewEntryPath = z
+  .string()
+  .min(6)
+  .max(240)
+  .refine(
+    (value) => !value.includes("\\"),
+    "Preview 入口必须使用 POSIX 相对路径",
+  )
+  .refine((value) => {
+    const segments = value.split("/");
+    return (
+      segments.every(
+        (segment) =>
+          segment.length > 0 &&
+          segment !== "." &&
+          segment !== ".." &&
+          /^[a-zA-Z0-9._-]+$/u.test(segment),
+      ) && value.toLowerCase().endsWith(".html")
+    );
+  }, "Preview 入口必须是工作树内的 HTML 文件");
+
 const suiteExecutionSchema = z
   .object({
     image: containerImage,
@@ -137,6 +161,7 @@ export const VerificationSuitePlanSchema = z
     requirementRevision: z.number().int().positive().max(10_000),
     gitHashAlgorithm: z.enum(["sha1", "sha256"]),
     commitSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u),
+    preview: z.object({ entryPath: previewEntryPath }).strict(),
     suites: z.array(suitePlanSchema).min(1).max(50),
   })
   .strict()
@@ -190,6 +215,169 @@ export interface VerificationSandbox {
     plan: VerificationSuitePlan;
   }): Promise<z.input<typeof sandboxResultSchema>>;
 }
+
+const MAX_PREVIEW_BYTES = 1024 * 1024;
+const sameLocalPath = (left: string, right: string): boolean =>
+  process.platform === "win32"
+    ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
+    : path.resolve(left) === path.resolve(right);
+const isWithinLocalDirectory = (
+  directory: string,
+  candidate: string,
+): boolean => {
+  const root = `${path.resolve(directory)}${path.sep}`;
+  const resolvedCandidate = path.resolve(candidate);
+  return process.platform === "win32"
+    ? resolvedCandidate.toLowerCase().startsWith(root.toLowerCase())
+    : resolvedCandidate.startsWith(root);
+};
+const forbiddenPreviewElements = new Set([
+  "applet",
+  "base",
+  "embed",
+  "frame",
+  "iframe",
+  "link",
+  "object",
+]);
+const previewUrlAttributes = new Set([
+  "action",
+  "cite",
+  "data",
+  "formaction",
+  "href",
+  "poster",
+  "src",
+  "srcset",
+]);
+const previewUrlIsSelfContained = (value: string): boolean => {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith("#") ||
+    /^data:image\/(?:gif|jpeg|png|webp);base64,[a-z0-9+/=]+$/iu.test(trimmed)
+  );
+};
+
+const assertIsolatedPreviewHtml = (html: string): void => {
+  if (/\0/u.test(html) || /@import|url\s*\(/iu.test(html)) {
+    throw new Error("Preview 必须是自包含 HTML");
+  }
+  const document = parse(html, { sourceCodeLocationInfo: true });
+  let hasDoctype = false;
+  const visit = (node: DefaultTreeAdapterTypes.Node): void => {
+    if (node.nodeName === "#documentType" && "name" in node) {
+      hasDoctype = node.name.toLowerCase() === "html";
+      return;
+    }
+    if ("tagName" in node) {
+      const tagName = node.tagName.toLowerCase();
+      if (forbiddenPreviewElements.has(tagName)) {
+        throw new Error("Preview 必须是自包含 HTML");
+      }
+      if (tagName === "meta") {
+        const httpEquiv = node.attrs.find(
+          (attribute) => attribute.name.toLowerCase() === "http-equiv",
+        );
+        if (httpEquiv) throw new Error("Preview 必须是自包含 HTML");
+      }
+      for (const attribute of node.attrs) {
+        const name = attribute.name.toLowerCase();
+        if (
+          name.startsWith("on") ||
+          (previewUrlAttributes.has(name) &&
+            !previewUrlIsSelfContained(attribute.value))
+        ) {
+          throw new Error("Preview 必须是自包含 HTML");
+        }
+      }
+    }
+    if ("childNodes" in node) node.childNodes.forEach(visit);
+    if ("content" in node) visit(node.content);
+  };
+  visit(document);
+  if (!hasDoctype) throw new Error("Preview 必须声明 HTML 文档类型");
+};
+
+export const readIsolatedPreviewArtifact = async (input: {
+  workspacePath: string;
+  entryPath: string;
+}): Promise<Uint8Array<ArrayBuffer>> => {
+  const workspacePath = path.resolve(input.workspacePath);
+  const entryPath = previewEntryPath.parse(input.entryPath);
+  const [workspaceMetadata, workspaceRealPath] = await Promise.all([
+    lstat(workspacePath),
+    realpath(workspacePath),
+  ]);
+  if (
+    !workspaceMetadata.isDirectory() ||
+    workspaceMetadata.isSymbolicLink() ||
+    !sameLocalPath(workspaceRealPath, workspacePath)
+  ) {
+    throw new Error("Preview 工作树不是可信普通目录");
+  }
+  const segments = entryPath.split("/");
+  let current = workspacePath;
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    const metadata = await lstat(current);
+    const last = index === segments.length - 1;
+    if (
+      metadata.isSymbolicLink() ||
+      (last ? !metadata.isFile() : !metadata.isDirectory())
+    ) {
+      throw new Error("Preview 入口必须是不跳转的普通 HTML 文件");
+    }
+  }
+  const [before, resolvedPreviewPath] = await Promise.all([
+    lstat(current),
+    realpath(current),
+  ]);
+  if (
+    !sameLocalPath(resolvedPreviewPath, current) ||
+    !isWithinLocalDirectory(workspacePath, current)
+  ) {
+    throw new Error("Preview 入口不能离开权威工作树");
+  }
+  let handle;
+  try {
+    handle = await open(
+      current,
+      process.platform === "win32"
+        ? constants.O_RDONLY
+        : constants.O_RDONLY | constants.O_NOFOLLOW,
+    );
+    const metadata = await handle.stat();
+    if (
+      !metadata.isFile() ||
+      metadata.dev !== before.dev ||
+      metadata.ino !== before.ino ||
+      metadata.size < 1 ||
+      metadata.size > MAX_PREVIEW_BYTES
+    ) {
+      throw new Error("Preview 超过允许的文件边界");
+    }
+    const bytes = Uint8Array.from(await handle.readFile());
+    const after = await lstat(current);
+    if (
+      after.isSymbolicLink() ||
+      after.dev !== metadata.dev ||
+      after.ino !== metadata.ino ||
+      after.size !== metadata.size
+    ) {
+      throw new Error("Preview 入口在读取期间发生替换");
+    }
+    let html: string;
+    try {
+      html = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error("Preview 必须使用 UTF-8 HTML");
+    }
+    assertIsolatedPreviewHtml(html);
+    return bytes;
+  } finally {
+    await handle?.close();
+  }
+};
 
 export const assertVerificationSuitePlanTarget = (
   targetInput: VerificationRunnerTarget,
@@ -266,17 +454,21 @@ export class FixedSuiteVerificationEngine implements VerificationEngine {
   readonly #workspace: VerificationWorkspaceProvider;
   readonly #sandbox: VerificationSandbox;
   readonly #planProvider: VerificationSuitePlanProvider;
+  readonly #previewArtifactReader: typeof readIsolatedPreviewArtifact;
   readonly #trustedPlanHashes = new Map<string, string>();
 
   constructor(options: {
     workspace: VerificationWorkspaceProvider;
     sandbox: VerificationSandbox;
     planProvider: VerificationSuitePlanProvider;
+    previewArtifactReader?: typeof readIsolatedPreviewArtifact;
     trustedPlanAnchors: readonly VerificationSuitePlanAnchor[];
   }) {
     this.#workspace = options.workspace;
     this.#sandbox = options.sandbox;
     this.#planProvider = options.planProvider;
+    this.#previewArtifactReader =
+      options.previewArtifactReader ?? readIsolatedPreviewArtifact;
     const anchors = z
       .array(VerificationSuitePlanAnchorSchema)
       .min(1)
@@ -340,8 +532,16 @@ export class FixedSuiteVerificationEngine implements VerificationEngine {
         name: suite.name,
         status: results.get(suite.suiteKey)!,
       }));
+      const allSuitesPassed = renderedSuites.every(
+        (suite) => suite.status === "passed",
+      );
       return {
-        artifact: renderPreview(target, renderedSuites),
+        artifact: allSuitesPassed
+          ? await this.#previewArtifactReader({
+              workspacePath: path.resolve(workspace.path),
+              entryPath: plan.preview.entryPath,
+            })
+          : renderPreview(target, renderedSuites),
         checks: target.acceptanceCriteria.map((criterion) => {
           const covering = plan.suites.filter((suite) =>
             suite.criterionKeys.includes(criterion.criterionKey),

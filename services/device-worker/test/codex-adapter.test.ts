@@ -107,6 +107,8 @@ describe("OpenAiCodexSdkAdapter", () => {
     expect(run.mock.calls[0]?.[0].prompt).toContain(
       "不要执行 git add、git commit",
     );
+    expect(run.mock.calls[0]?.[0].prompt).toContain(".forgex/preview.html");
+    expect(run.mock.calls[0]?.[0].prompt).toContain("自包含的交互 Preview");
     expect(run.mock.calls[0]?.[0].prompt).toBe(
       requirementPrompt(requirementAssignment),
     );

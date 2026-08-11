@@ -30,6 +30,7 @@ const plan: VerificationSuitePlan = {
   requirementRevision: 2,
   gitHashAlgorithm: "sha1",
   commitSha: "a".repeat(40),
+  preview: { entryPath: ".forgex/preview.html" },
   suites: [
     {
       suiteKey: "unit",

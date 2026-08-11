@@ -179,6 +179,7 @@ describe("verification runner admin", () => {
       requirementRevision: target.requirementRevision,
       gitHashAlgorithm: target.gitHashAlgorithm,
       commitSha: target.commitSha,
+      preview: { entryPath: ".forgex/preview.html" },
       suites: [
         {
           suiteKey: "integrity",
@@ -237,6 +238,7 @@ describe("verification runner admin", () => {
         requirementRevision: 1,
         gitHashAlgorithm: "sha1",
         commitSha: "a".repeat(40),
+        preview: { entryPath: ".forgex/preview.html" },
         suites: [],
       }),
       { mode: 0o600 },
