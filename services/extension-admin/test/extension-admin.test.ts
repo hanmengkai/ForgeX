@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ExtensionAdminBootstrapInputSchema,
+  McpReleaseInputSchema,
   SkillReleaseInputSchema,
   bootstrapExtensionAdmin,
   prepareSkillRelease,
@@ -92,7 +93,7 @@ afterEach(async () => {
 
 describe("extension admin", () => {
   it("仓库内 bootstrap 与 Skill 发布输入示例符合公开协议", async () => {
-    const [bootstrap, release] = await Promise.all([
+    const [bootstrap, release, mcpRelease] = await Promise.all([
       readFile(
         path.resolve(
           "services/extension-admin/extension-admin.bootstrap.example.json",
@@ -103,6 +104,10 @@ describe("extension admin", () => {
         path.resolve("services/extension-admin/skill.release.example.json"),
         "utf8",
       ),
+      readFile(
+        path.resolve("services/extension-admin/mcp.release.example.json"),
+        "utf8",
+      ),
     ]);
 
     expect(() =>
@@ -110,6 +115,9 @@ describe("extension admin", () => {
     ).not.toThrow();
     expect(() =>
       SkillReleaseInputSchema.parse(JSON.parse(release)),
+    ).not.toThrow();
+    expect(() =>
+      McpReleaseInputSchema.parse(JSON.parse(mcpRelease)),
     ).not.toThrow();
   });
 

@@ -53,6 +53,9 @@ export const RequirementWorkerAssignmentSchema = z
 const McpExecutionEnvelopeSchema = z
   .object({
     connectionBindingKey: internalKey,
+    protocolVersion: z.string().regex(/^20\d{2}-\d{2}-\d{2}$/u),
+    serverIdentityHashAlgorithm: z.literal("sha256"),
+    serverIdentityHash: z.string().regex(/^[a-f0-9]{64}$/u),
     serviceName: readableText,
     toolName: readableText,
     technicalName: z

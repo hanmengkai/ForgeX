@@ -3,7 +3,10 @@ import {
   McpWorkerAssignmentSchema,
   RequirementWorkerAssignmentSchema,
 } from "../src/control-plane-client.js";
-import { canonicalMcpJsonHash } from "../src/local-mcp.js";
+import {
+  canonicalMcpJsonHash,
+  canonicalMcpServerIdentityHash,
+} from "../src/local-mcp.js";
 
 export const tenantKey = "11111111-1111-4111-8111-111111111111";
 export const projectKey = "22222222-2222-4222-8222-222222222222";
@@ -71,6 +74,12 @@ export const mcpAssignment = McpWorkerAssignmentSchema.parse({
   leasedUntil: "2026-08-10T10:01:00.000Z",
   execution: {
     connectionBindingKey: mcpConnectionBindingKey,
+    protocolVersion: "2025-06-18",
+    serverIdentityHashAlgorithm: "sha256",
+    serverIdentityHash: canonicalMcpServerIdentityHash({
+      name: "team-notifications",
+      version: "2.4.0",
+    }),
     serviceName: "团队通知",
     toolName: "发送上线通知",
     technicalName: "notifications.send",

@@ -10,6 +10,8 @@ import { assertTrustedStdioMcpConnection } from "../src/config.js";
 import {
   OfficialMcpExecutionAdapter,
   canonicalMcpJsonHash,
+  canonicalMcpServerIdentityHash,
+  probeLocalMcpConnection,
 } from "../src/local-mcp.js";
 import { assignmentKey, projectKey, requirementKey } from "./fixtures.js";
 
@@ -24,6 +26,11 @@ const inputSchema = {
   additionalProperties: false,
 };
 const argumentsValue = { target: "production" };
+const serverIdentity = { name: "team-notifications", version: "2.4.0" };
+const clientTrust = {
+  protocolVersion: "2025-06-18",
+  serverIdentity,
+};
 
 const assignment = (overrides: Record<string, unknown> = {}) =>
   ({
@@ -38,6 +45,9 @@ const assignment = (overrides: Record<string, unknown> = {}) =>
     leasedUntil: "2026-08-10T10:01:00.000Z",
     execution: {
       connectionBindingKey,
+      protocolVersion: clientTrust.protocolVersion,
+      serverIdentityHashAlgorithm: "sha256",
+      serverIdentityHash: canonicalMcpServerIdentityHash(serverIdentity),
       serviceName: "团队通知",
       toolName: "发送上线通知",
       technicalName: "notifications.send",
@@ -75,6 +85,74 @@ afterEach(async () => {
 });
 
 describe("OfficialMcpExecutionAdapter", () => {
+  it("只读探测真实协商协议、服务器身份和完整工具定义", async () => {
+    const close = vi.fn(async () => Promise.resolve());
+    const callTool = vi.fn();
+    const connect = vi.fn(async () => ({
+      ...clientTrust,
+      listTools: vi.fn(async () => ({
+        tools: [{ name: "notifications.send", inputSchema }],
+      })),
+      callTool,
+      close,
+    }));
+
+    await expect(
+      probeLocalMcpConnection(connection, {
+        connect,
+        verifyStdioConnection: async () => Promise.resolve(),
+      }),
+    ).resolves.toEqual({
+      protocolVersion: "2025-06-18",
+      serverIdentity: { name: "team-notifications", version: "2.4.0" },
+      tools: [{ technicalName: "notifications.send", inputSchema }],
+    });
+    expect(connect).toHaveBeenCalledWith(connection, expect.any(AbortSignal));
+    expect(callTool).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("探测发现额外工具或远端错误时失败关闭且不泄露详情", async () => {
+    const marker = "Authorization: Bearer local-probe-secret";
+    const extraTool = {
+      ...connection,
+      allowedTools: ["notifications.send"],
+    };
+
+    await expect(
+      probeLocalMcpConnection(extraTool, {
+        connect: async () => ({
+          ...clientTrust,
+          listTools: async () => ({
+            tools: [
+              { name: "notifications.send", inputSchema },
+              { name: "secrets.read", inputSchema: {} },
+            ],
+          }),
+          callTool: vi.fn(),
+          close: async () => Promise.resolve(),
+        }),
+        verifyStdioConnection: async () => Promise.resolve(),
+      }),
+    ).rejects.toThrow("允许清单");
+
+    const error = await probeLocalMcpConnection(connection, {
+      connect: async () => ({
+        ...clientTrust,
+        listTools: async () => {
+          throw new Error(marker);
+        },
+        callTool: vi.fn(),
+        close: async () => Promise.resolve(),
+      }),
+      verifyStdioConnection: async () => Promise.resolve(),
+    }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      message: "本地 MCP 工具清单读取失败，服务端详情已隐藏",
+    });
+    expect(String(error)).not.toContain(marker);
+  });
+
   it("通过官方 MCP stdio 协议执行精确绑定的本地工具", async () => {
     const commandPath = process.execPath;
     const commandSha256 = createHash("sha256")
@@ -93,31 +171,53 @@ describe("OfficialMcpExecutionAdapter", () => {
     const fixtureSha256 = createHash("sha256")
       .update(fixtureContent, "utf8")
       .digest("hex");
-    const adapter = new OfficialMcpExecutionAdapter({
-      connections: [
+    const stdioConnection = {
+      ...connection,
+      commandPath,
+      commandSha256,
+      args: [
         {
-          ...connection,
-          commandPath,
-          commandSha256,
-          args: [
-            {
-              kind: "trusted_file",
-              path: fixturePath,
-              sha256: fixtureSha256,
-            },
-          ],
-          timeoutMs: 10_000,
+          kind: "trusted_file" as const,
+          path: fixturePath,
+          sha256: fixtureSha256,
         },
       ],
-      verifyStdioConnection: (stdioConnection) =>
-        assertTrustedStdioMcpConnection(stdioConnection, {
-          platform: "win32",
-          assertWindowsTrustedLauncherPath: async () => Promise.resolve(),
-        }),
+      timeoutMs: 10_000,
+    };
+    const verifyStdioConnection = (
+      candidate: Parameters<typeof assertTrustedStdioMcpConnection>[0],
+    ) =>
+      assertTrustedStdioMcpConnection(candidate, {
+        platform: "win32",
+        assertWindowsTrustedLauncherPath: async () => Promise.resolve(),
+      });
+
+    const realProbe = await probeLocalMcpConnection(stdioConnection, {
+      verifyStdioConnection,
+    });
+    expect(realProbe).toEqual({
+      protocolVersion: expect.stringMatching(/^20\d{2}-\d{2}-\d{2}$/u),
+      serverIdentity: {
+        name: "forgex-mcp-stdio-fixture",
+        version: "0.1.0",
+      },
+      tools: [{ technicalName: "notifications.send", inputSchema }],
+    });
+
+    const adapter = new OfficialMcpExecutionAdapter({
+      connections: [stdioConnection],
+      verifyStdioConnection,
     });
 
     await expect(
-      adapter.execute({ assignment: assignment() }),
+      adapter.execute({
+        assignment: assignment({
+          protocolVersion: realProbe.protocolVersion,
+          serverIdentityHash: canonicalMcpServerIdentityHash(
+            realProbe.serverIdentity,
+          ),
+        }),
+      }),
     ).resolves.toEqual({
       outcome: "succeeded",
       summary: "本地工具操作已完成",
@@ -133,6 +233,7 @@ describe("OfficialMcpExecutionAdapter", () => {
     const callTool = vi.fn(async () => ({ content: [], isError: false }));
     const close = vi.fn(async () => Promise.resolve());
     const connect = vi.fn(async () => ({
+      ...clientTrust,
       listTools: vi.fn(async () => ({
         tools: [{ name: "notifications.send", inputSchema }],
       })),
@@ -169,15 +270,17 @@ describe("OfficialMcpExecutionAdapter", () => {
 
   it("未知连接、本地工具越权或实际 Schema 漂移时均在调用前失败关闭", async () => {
     const callTool = vi.fn();
+    const listTools = vi.fn(async () => ({
+      tools: [
+        {
+          name: "notifications.send",
+          inputSchema: { ...inputSchema, required: [] },
+        },
+      ],
+    }));
     const connect = vi.fn(async () => ({
-      listTools: vi.fn(async () => ({
-        tools: [
-          {
-            name: "notifications.send",
-            inputSchema: { ...inputSchema, required: [] },
-          },
-        ],
-      })),
+      ...clientTrust,
+      listTools,
       callTool,
       close: vi.fn(async () => Promise.resolve()),
     }));
@@ -192,6 +295,17 @@ describe("OfficialMcpExecutionAdapter", () => {
         assignment: assignment({ connectionBindingKey: requirementKey }),
       }),
     ).rejects.toThrow("本地连接绑定");
+    await expect(
+      adapter.execute({
+        assignment: assignment({
+          serverIdentityHash: canonicalMcpServerIdentityHash({
+            name: "replacement-server",
+            version: "1.0.0",
+          }),
+        }),
+      }),
+    ).rejects.toThrow("服务身份或协议");
+    expect(listTools).not.toHaveBeenCalled();
     await expect(adapter.execute({ assignment: assignment() })).rejects.toThrow(
       "参数定义",
     );
@@ -202,6 +316,7 @@ describe("OfficialMcpExecutionAdapter", () => {
     const adapter = new OfficialMcpExecutionAdapter({
       connections: [connection],
       connect: async () => ({
+        ...clientTrust,
         listTools: async () => ({
           tools: [{ name: "notifications.send", inputSchema }],
         }),
@@ -240,6 +355,7 @@ describe("OfficialMcpExecutionAdapter", () => {
     const toolListFailure = new OfficialMcpExecutionAdapter({
       connections: [connection],
       connect: async () => ({
+        ...clientTrust,
         listTools: async () => {
           throw new Error(marker);
         },
@@ -277,27 +393,32 @@ describe("OfficialMcpExecutionAdapter", () => {
     const fixtureSha256 = createHash("sha256")
       .update(fixtureContent, "utf8")
       .digest("hex");
-    const adapter = new OfficialMcpExecutionAdapter({
-      connections: [
+    const stdioConnection = {
+      ...connection,
+      commandPath,
+      commandSha256,
+      args: [
         {
-          ...connection,
-          commandPath,
-          commandSha256,
-          args: [
-            {
-              kind: "trusted_file",
-              path: fixturePath,
-              sha256: fixtureSha256,
-            },
-          ],
-          timeoutMs: 10_000,
+          kind: "trusted_file" as const,
+          path: fixturePath,
+          sha256: fixtureSha256,
         },
       ],
-      verifyStdioConnection: (stdioConnection) =>
-        assertTrustedStdioMcpConnection(stdioConnection, {
-          platform: "win32",
-          assertWindowsTrustedLauncherPath: async () => Promise.resolve(),
-        }),
+      timeoutMs: 10_000,
+    };
+    const verifyStdioConnection = (
+      candidate: Parameters<typeof assertTrustedStdioMcpConnection>[0],
+    ) =>
+      assertTrustedStdioMcpConnection(candidate, {
+        platform: "win32",
+        assertWindowsTrustedLauncherPath: async () => Promise.resolve(),
+      });
+    const realProbe = await probeLocalMcpConnection(stdioConnection, {
+      verifyStdioConnection,
+    });
+    const adapter = new OfficialMcpExecutionAdapter({
+      connections: [stdioConnection],
+      verifyStdioConnection,
     });
     const errorArguments = { target: "error" };
 
@@ -306,6 +427,10 @@ describe("OfficialMcpExecutionAdapter", () => {
         assignment: assignment({
           arguments: errorArguments,
           argumentsHash: canonicalMcpJsonHash(errorArguments),
+          protocolVersion: realProbe.protocolVersion,
+          serverIdentityHash: canonicalMcpServerIdentityHash(
+            realProbe.serverIdentity,
+          ),
         }),
       })
       .catch((caught: unknown) => caught);

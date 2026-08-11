@@ -79,7 +79,7 @@ const extensionAuthoritySchema = z
   })
   .strict();
 
-const ExtensionAdminConfigSchema = z
+export const ExtensionAdminConfigSchema = z
   .object({
     schemaVersion: z.literal(1),
     controlPlaneUrl: controlPlaneOrigin,
@@ -255,7 +255,7 @@ export const bootstrapExtensionAdmin = async (
   return paths;
 };
 
-const loadConfig = async (
+export const loadExtensionAdminConfig = async (
   configPath: string,
   check: PrivatePathCheck,
 ): Promise<z.infer<typeof ExtensionAdminConfigSchema>> =>
@@ -512,7 +512,7 @@ export const prepareSkillRelease = async (
 ): Promise<PreparedSkillRelease> => {
   const parsed = SkillReleaseInputSchema.parse(input);
   const check = options.assertPrivatePath ?? defaultAssertPrivatePath;
-  const config = await loadConfig(options.configPath, check);
+  const config = await loadExtensionAdminConfig(options.configPath, check);
   const content = await buildSkillPackage(parsed.sourceDirectory, check);
   const visibleText = [
     parsed.name,
@@ -662,7 +662,7 @@ export const publishPreparedSkillRelease = async (options: {
   skillKey: string;
 }> => {
   const check = options.assertPrivatePath ?? defaultAssertPrivatePath;
-  const config = await loadConfig(options.configPath, check);
+  const config = await loadExtensionAdminConfig(options.configPath, check);
   const bundle = PreparedSkillReleaseSchema.parse(options.bundle);
   if (
     bundle.manifest.tenantKey !== config.scope.tenantKey ||

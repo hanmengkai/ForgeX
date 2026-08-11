@@ -253,17 +253,30 @@ describe("McpRegistryApplicationService", () => {
       expect.objectContaining({ action: "enabled" }),
     ]);
 
-    await service.recordHealth(
-      tenantKey,
-      await signedNextHealth(service, {
-        recoveryChallengeKey: failure.recoveryChallengeKey,
-        producedAt: "2026-08-10T08:32:00.000Z",
-      }),
+    const recoveryHealth = await signedNextHealth(service, {
+      recoveryChallengeKey: failure.recoveryChallengeKey,
+      producedAt: "2026-08-10T08:32:00.000Z",
+    });
+    await service.recordHealth(tenantKey, recoveryHealth);
+    await service.recover(
+      administrator,
+      serverKey,
+      1,
+      recoveryHealth.payload.attestationKey,
     );
-    await service.enable(administrator, serverKey, 1);
     await expect(
       service.getEnabledToolForInvocation(tenantKey, serverKey, readToolKey),
     ).resolves.not.toBeNull();
+    await service.disable(administrator, serverKey);
+    await service.recover(
+      administrator,
+      serverKey,
+      1,
+      recoveryHealth.payload.attestationKey,
+    );
+    await expect(
+      service.getEnabledToolForInvocation(tenantKey, serverKey, readToolKey),
+    ).resolves.toBeNull();
   });
 
   it("自动熔断审计写入失败时回滚停用状态", async () => {

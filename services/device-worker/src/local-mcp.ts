@@ -114,7 +114,28 @@ const McpToolResultSchema = z
   })
   .passthrough();
 
+const McpServerIdentitySchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    version: z.string().trim().min(1).max(100),
+  })
+  .passthrough()
+  .transform((identity) => ({
+    name: identity.name,
+    version: identity.version,
+  }));
+const McpProtocolVersionSchema = z.string().regex(/^20\d{2}-\d{2}-\d{2}$/u);
+
+export const canonicalMcpServerIdentityHash = (input: unknown): string => {
+  const identity = McpServerIdentitySchema.parse(input);
+  return createHash("sha256")
+    .update(JSON.stringify(identity), "utf8")
+    .digest("hex");
+};
+
 interface BoundMcpClient {
+  protocolVersion?: string;
+  serverIdentity?: { name: string; version: string };
   listTools(
     input: { cursor?: string },
     options: { signal: AbortSignal; timeout: number; maxTotalTimeout: number },
@@ -223,6 +244,25 @@ const connectOfficialMcp: LocalMcpConnector = async (connection, signal) => {
     { name: "forgex-device-worker", version: "0.1.0" },
     { capabilities: {} },
   );
+  let protocolVersion: string | undefined;
+  const requestClient = client as unknown as {
+    request(
+      request: { method?: unknown },
+      resultSchema: unknown,
+      options?: unknown,
+    ): Promise<unknown>;
+  };
+  const originalRequest = requestClient.request.bind(client);
+  requestClient.request = async (request, resultSchema, options) => {
+    const result = await originalRequest(request, resultSchema, options);
+    if (request.method === "initialize") {
+      protocolVersion = McpProtocolVersionSchema.parse(
+        z.object({ protocolVersion: z.unknown() }).passthrough().parse(result)
+          .protocolVersion,
+      );
+    }
+    return result;
+  };
   const transport = await transportFor(connection);
   try {
     await client.connect(transport, {
@@ -234,11 +274,109 @@ const connectOfficialMcp: LocalMcpConnector = async (connection, signal) => {
     await transport.close().catch(() => undefined);
     throw error;
   }
+  const serverIdentity = McpServerIdentitySchema.parse(
+    client.getServerVersion(),
+  );
+  if (!protocolVersion) throw new Error("MCP 没有返回协商协议版本");
   return {
+    protocolVersion,
+    serverIdentity,
     listTools: (input, options) => client.listTools(input, options),
     callTool: (input, options) => client.callTool(input, undefined, options),
     close: () => client.close(),
   };
+};
+
+export interface LocalMcpProbeResult {
+  protocolVersion: string;
+  serverIdentity: { name: string; version: string };
+  tools: Array<{
+    technicalName: string;
+    inputSchema: Record<string, unknown>;
+  }>;
+}
+
+export const probeLocalMcpConnection = async (
+  connectionInput: DeviceMcpConnection,
+  options: {
+    signal?: AbortSignal;
+    connect?: LocalMcpConnector;
+    verifyStdioConnection?: typeof assertTrustedStdioMcpConnection;
+  } = {},
+): Promise<LocalMcpProbeResult> => {
+  const connection = DeviceMcpConnectionSchema.parse(connectionInput);
+  if (connection.transport === "stdio") {
+    await (options.verifyStdioConnection ?? assertTrustedStdioMcpConnection)(
+      connection,
+    );
+  }
+  const signal = options.signal ?? new AbortController().signal;
+  const client = await withoutRemoteErrorDetails(
+    "本地 MCP 连接失败，服务端详情已隐藏",
+    () => (options.connect ?? connectOfficialMcp)(connection, signal),
+  );
+  try {
+    const protocolVersion = McpProtocolVersionSchema.parse(
+      client.protocolVersion,
+    );
+    const serverIdentity = McpServerIdentitySchema.parse(client.serverIdentity);
+    const tools: LocalMcpProbeResult["tools"] = [];
+    const names = new Set<string>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page += 1) {
+      const response = await withoutRemoteErrorDetails(
+        "本地 MCP 工具清单读取失败，服务端详情已隐藏",
+        async () =>
+          McpToolListSchema.parse(
+            await client.listTools(cursor ? { cursor } : {}, {
+              signal,
+              timeout: connection.timeoutMs,
+              maxTotalTimeout: connection.timeoutMs,
+            }),
+          ),
+      );
+      for (const tool of response.tools) {
+        const normalizedName = tool.name.toLowerCase();
+        if (names.has(normalizedName)) {
+          throw new Error("本地 MCP 返回了重复工具");
+        }
+        names.add(normalizedName);
+        tools.push({
+          technicalName: tool.name,
+          inputSchema: tool.inputSchema,
+        });
+        if (tools.length > connection.allowedTools.length) {
+          throw new Error("本地 MCP 实际工具超过设备允许清单");
+        }
+      }
+      cursor = response.nextCursor;
+      if (!cursor) break;
+      if (cursors.has(cursor)) throw new Error("本地 MCP 工具分页游标循环");
+      cursors.add(cursor);
+      if (page === 19) throw new Error("本地 MCP 工具分页超过设备上限");
+    }
+    const expected = [...connection.allowedTools]
+      .map((name) => name.toLowerCase())
+      .sort();
+    const observed = [...names].sort();
+    if (JSON.stringify(expected) !== JSON.stringify(observed)) {
+      throw new Error("本地 MCP 实际工具与设备允许清单不一致");
+    }
+    return {
+      protocolVersion,
+      serverIdentity,
+      tools: tools.sort((left, right) =>
+        left.technicalName < right.technicalName
+          ? -1
+          : left.technicalName > right.technicalName
+            ? 1
+            : 0,
+      ),
+    };
+  } finally {
+    await client.close().catch(() => undefined);
+  }
 };
 
 export class OfficialMcpExecutionAdapter implements LocalMcpExecutionAdapter {
@@ -305,6 +443,13 @@ export class OfficialMcpExecutionAdapter implements LocalMcpExecutionAdapter {
       () => this.#connect(connection, signal),
     );
     try {
+      if (
+        client.protocolVersion !== input.assignment.execution.protocolVersion ||
+        canonicalMcpServerIdentityHash(client.serverIdentity) !==
+          input.assignment.execution.serverIdentityHash
+      ) {
+        throw new Error("本地 MCP 服务身份或协议与可信任务不一致");
+      }
       let cursor: string | undefined;
       let targetSchema: Record<string, unknown> | null = null;
       const cursors = new Set<string>();

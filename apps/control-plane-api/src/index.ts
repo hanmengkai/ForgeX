@@ -277,6 +277,15 @@ const mcpHealthCommandSchema = z
 const revisionActionCommandSchema = z
   .object({ schemaVersion: z.literal(1) })
   .strict();
+const mcpRecoveryCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    attestationKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
 const emptyCommandSchema = z.object({}).strict();
 const requirementListQuerySchema = z
   .object({
@@ -1383,7 +1392,15 @@ export const buildControlPlaneApi = (
         );
       }
       try {
-        options.mcpHealthAuthority.verify(command.data.health);
+        const alreadyRecorded = await mcpServers.hasRecordedHealth(
+          principal.tenantKey,
+          command.data.health,
+        );
+        if (alreadyRecorded) {
+          options.mcpHealthAuthority.verifyPersisted(command.data.health);
+        } else {
+          options.mcpHealthAuthority.verify(command.data.health);
+        }
       } catch {
         throw new ApplicationError(
           422,
@@ -1396,6 +1413,39 @@ export const buildControlPlaneApi = (
         command.data.health,
       );
       return reply.send({ data: outcome });
+    },
+  );
+
+  app.get(
+    "/api/v1/extensions/mcp/:serverKey/revisions/:revision/probe-binding",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const params = mcpRevisionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "MCP 探测链参数需要调整",
+          validationDetails(params.error),
+        );
+      }
+      const [binding, recoveryChallengeKey] = await Promise.all([
+        mcpServers.getNextProbeBinding(
+          principal.tenantKey,
+          params.data.serverKey,
+          params.data.revision,
+        ),
+        mcpServers.getRecoveryChallenge(
+          principal.tenantKey,
+          params.data.serverKey,
+          params.data.revision,
+        ),
+      ]);
+      return reply.send({
+        data: { ...binding, recoveryChallengeKey },
+      });
     },
   );
 
@@ -1421,6 +1471,34 @@ export const buildControlPlaneApi = (
         principal,
         params.data.serverKey,
         params.data.revision,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    "/api/v1/extensions/mcp/:serverKey/revisions/:revision/recover",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const params = mcpRevisionParamsSchema.safeParse(request.params);
+      const command = mcpRecoveryCommandSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "MCP 恢复内容需要调整",
+          !params.success
+            ? validationDetails(params.error)
+            : validationDetails(command.error!),
+        );
+      }
+      await mcpServers.recover(
+        principal,
+        params.data.serverKey,
+        params.data.revision,
+        command.data.attestationKey,
       );
       return reply.code(204).send();
     },

@@ -471,6 +471,7 @@ describe("需求 API", () => {
       ],
       clock: () => new Date("2026-08-10T03:00:00.000Z"),
     });
+    let mcpNow = Date.parse("2026-08-10T03:00:00.000Z");
     const mcpHealthAuthority = new McpHealthAuthority({
       verifiers: [
         {
@@ -483,7 +484,7 @@ describe("需求 API", () => {
           scopes: [{ tenantKey, projectKey }],
         },
       ],
-      clock: () => new Date("2026-08-10T03:00:00.000Z"),
+      clock: () => new Date(mcpNow),
     });
     const { app } = createTestApp(mcpHealthAuthority, {
       skillEvaluationAuthority,
@@ -738,6 +739,68 @@ describe("需求 API", () => {
         })
       ).statusCode,
     ).toBe(200);
+    mcpNow += 25 * 60 * 60 * 1_000;
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/extensions/mcp/${serverKey}/health`,
+          headers: { authorization: "Bearer admin-session" },
+          payload: { schemaVersion: 1, health },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const staleNewPayload = {
+      ...healthPayload,
+      attestationKey: "aa000000-0000-4000-8000-000000000011",
+      probeSequence: 2,
+      previousAttestationKey: healthPayload.attestationKey,
+    };
+    const staleNewHealth = {
+      payload: staleNewPayload,
+      signature: signPayload(
+        null,
+        Buffer.from(
+          McpHealthAuthority.canonicalPayload(staleNewPayload),
+          "utf8",
+        ),
+        verifierPrivateKey,
+      ).toString("base64"),
+    };
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/extensions/mcp/${serverKey}/health`,
+          headers: { authorization: "Bearer admin-session" },
+          payload: { schemaVersion: 1, health: staleNewHealth },
+        })
+      ).statusCode,
+    ).toBe(422);
+    mcpNow = Date.parse("2026-08-10T03:00:00.000Z");
+    const probeBinding = await app.inject({
+      method: "GET",
+      url: `/api/v1/extensions/mcp/${serverKey}/revisions/1/probe-binding`,
+      headers: { authorization: "Bearer admin-session" },
+    });
+    expect(probeBinding.statusCode, probeBinding.body).toBe(200);
+    expect(probeBinding.headers["cache-control"]).toBe("no-store");
+    expect(probeBinding.json()).toEqual({
+      data: {
+        probeSequence: 2,
+        previousAttestationKey: healthPayload.attestationKey,
+        recoveryChallengeKey: null,
+      },
+    });
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/api/v1/extensions/mcp/${serverKey}/revisions/1/probe-binding`,
+          headers: { authorization: "Bearer developer-session" },
+        })
+      ).statusCode,
+    ).toBe(403);
     expect(
       (
         await app.inject({
@@ -1049,6 +1112,9 @@ describe("需求 API", () => {
       invocationKey: location.split("/").at(-1),
       execution: {
         connectionBindingKey: manifest.connectionBindingKey,
+        protocolVersion: manifest.protocolVersion,
+        serverIdentityHashAlgorithm: "sha256",
+        serverIdentityHash: "e".repeat(64),
         serviceName: "代码仓库助手",
         toolName: "创建交付分支",
         technicalName: "repository.create_branch",

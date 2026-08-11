@@ -56,7 +56,11 @@ export interface TrustedMcpToolDirectory {
     serverKey: string,
     toolKey: string,
     projectKey?: string,
-  ): Promise<{ manifest: McpServerManifest; tool: McpToolDefinition } | null>;
+  ): Promise<{
+    manifest: McpServerManifest;
+    tool: McpToolDefinition;
+    serverIdentityHash: string;
+  } | null>;
 }
 
 export interface McpInvocationWorkerDispatcher {
@@ -98,6 +102,9 @@ type PreparedDispatchState =
 
 export interface McpExecutionEnvelope {
   connectionBindingKey: string;
+  protocolVersion: string;
+  serverIdentityHashAlgorithm: "sha256";
+  serverIdentityHash: string;
   serviceName: string;
   toolName: string;
   technicalName: string;
@@ -1489,6 +1496,9 @@ export class McpInvocationApplicationService {
           kind: "ready" as const,
           envelope: {
             connectionBindingKey: record.connectionBindingKey,
+            protocolVersion: trusted!.manifest.protocolVersion,
+            serverIdentityHashAlgorithm: "sha256" as const,
+            serverIdentityHash: trusted!.serverIdentityHash,
             serviceName: record.serverName,
             toolName: record.toolDisplayName,
             technicalName: record.technicalName,

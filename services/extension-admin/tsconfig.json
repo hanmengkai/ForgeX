@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../../packages/extensions" },
-    { "path": "../../packages/application" }
+    { "path": "../../packages/application" },
+    { "path": "../device-worker" }
   ]
 }

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "name": "团队通知服务",
+  "summary": "通过客户设备上的本地连接发送团队业务通知",
+  "connection": {
+    "schemaVersion": 1,
+    "connectionBindingKey": "30000000-0000-4000-8000-000000000003",
+    "transport": "streamable_http",
+    "url": "http://127.0.0.1:3210/mcp",
+    "headers": {},
+    "allowedTools": ["notifications.send"],
+    "timeoutMs": 30000
+  },
+  "tools": [
+    {
+      "technicalName": "notifications.send",
+      "displayName": "发送团队通知",
+      "description": "向指定团队成员发送一条业务通知",
+      "effect": "external_action",
+      "approval": "review_required"
+    }
+  ]
+}

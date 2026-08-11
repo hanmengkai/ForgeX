@@ -534,6 +534,7 @@ const McpHealthFuseSchema = z
     failureAttestationKey: internalKey,
     recoveryChallengeKey: internalKey,
     recoveryAttestationKey: internalKey.nullable(),
+    recoveryApplied: z.boolean().optional(),
   })
   .strict();
 
@@ -846,7 +847,18 @@ export class McpServerRegistry {
             throw new Error("MCP 恢复熔断没有绑定后续健康探测");
           }
         }
-        restoredRelease.healthFuse = structuredClone(release.healthFuse);
+        if (
+          release.healthFuse.recoveryApplied === true &&
+          !release.healthFuse.recoveryAttestationKey
+        ) {
+          throw new Error("MCP 恢复熔断的应用状态缺少健康证明");
+        }
+        restoredRelease.healthFuse = {
+          ...structuredClone(release.healthFuse),
+          recoveryApplied:
+            release.healthFuse.recoveryApplied ??
+            release.healthFuse.recoveryAttestationKey !== null,
+        };
       }
       const restoredServer = registry.#servers.get(item.serverKey)!;
       const identityAttestation = item.identityAttestationKey
@@ -895,6 +907,11 @@ export class McpServerRegistry {
         record.attestationKey !== release.healthFuse.recoveryAttestationKey
       ) {
         throw new Error("MCP 启用审计没有绑定熔断后的恢复探测");
+      }
+      if (release.healthFuse?.recoveryApplied !== undefined) {
+        if (release.healthFuse.recoveryApplied !== true) {
+          throw new Error("MCP 启用审计没有完成熔断恢复");
+        }
       }
       restoredEnabled.set(record.serverKey, record.revision);
       registry.#currentEnableRecords.set(
@@ -978,6 +995,31 @@ export class McpServerRegistry {
   }
 
   recordHealth(input: SignedMcpHealthAttestation): McpHealthRecordOutcome {
+    const signed = SignedMcpHealthAttestationSchema.parse(input);
+    const canonicalSigned = JSON.stringify(signed);
+    const known = this.#attestationKeys.get(signed.payload.attestationKey);
+    if (known) {
+      if (known !== canonicalSigned) {
+        throw new Error("同一 MCP 探测标识不能绑定不同内容");
+      }
+      this.#healthAuthority.verifyPersisted(signed);
+      const nextProbe = this.getNextProbeBinding(
+        signed.payload.serverKey,
+        signed.payload.serverRevision,
+      );
+      return {
+        transition: null,
+        recoveryChallengeKey:
+          signed.payload.status === "healthy"
+            ? signed.payload.recoveryChallengeKey
+            : this.getRecoveryChallenge(
+                signed.payload.serverKey,
+                signed.payload.serverRevision,
+              ),
+        nextProbeSequence: nextProbe.probeSequence,
+        previousAttestationKey: nextProbe.previousAttestationKey,
+      };
+    }
     const receipt = this.#healthAuthority.verify(input);
     const transition = this.#recordVerifiedHealth(
       {
@@ -992,13 +1034,27 @@ export class McpServerRegistry {
     );
     return {
       transition: transition ? structuredClone(transition) : null,
-      recoveryChallengeKey: this.getRecoveryChallenge(
-        receipt.payload.serverKey,
-        receipt.payload.serverRevision,
-      ),
+      recoveryChallengeKey:
+        receipt.payload.status === "healthy"
+          ? receipt.payload.recoveryChallengeKey
+          : this.getRecoveryChallenge(
+              receipt.payload.serverKey,
+              receipt.payload.serverRevision,
+            ),
       nextProbeSequence: nextProbe.probeSequence,
       previousAttestationKey: nextProbe.previousAttestationKey,
     };
+  }
+
+  hasRecordedHealth(input: SignedMcpHealthAttestation): boolean {
+    const signed = SignedMcpHealthAttestationSchema.parse(input);
+    const known = this.#attestationKeys.get(signed.payload.attestationKey);
+    if (!known) return false;
+    if (known !== JSON.stringify(signed)) {
+      throw new Error("同一 MCP 探测标识不能绑定不同内容");
+    }
+    this.#healthAuthority.verifyPersisted(signed);
+    return true;
   }
 
   #recordVerifiedHealth(
@@ -1170,6 +1226,7 @@ export class McpServerRegistry {
       failureAttestationKey: payload.attestationKey,
       recoveryChallengeKey: randomUUID(),
       recoveryAttestationKey: null,
+      recoveryApplied: false,
     };
     if (server.enabledRevision === payload.serverRevision) {
       const recordedAt = this.#clock();
@@ -1241,7 +1298,43 @@ export class McpServerRegistry {
     };
     server.enabledRevision = revision;
     this.#currentEnableRecords.set(serverKey, record);
+    if (
+      release.healthFuse?.recoveryAttestationKey ===
+      attestation.receipt.payload.attestationKey
+    ) {
+      release.healthFuse.recoveryApplied = true;
+    }
     return structuredClone(record);
+  }
+
+  recover(command: {
+    serverKey: string;
+    revision: number;
+    attestationKey: string;
+    actor: { actorKey: string; actorName: string };
+  }): McpEnableRecord | null {
+    const serverKey = internalKey.parse(command.serverKey);
+    const revision = z
+      .number()
+      .int()
+      .min(1)
+      .max(Number.MAX_SAFE_INTEGER)
+      .parse(command.revision);
+    const attestationKey = internalKey.parse(command.attestationKey);
+    const release = this.#servers.get(serverKey)?.releases.get(revision);
+    const fuse = release?.healthFuse;
+    if (!release || !fuse) {
+      throw new Error("MCP 当前没有可恢复的健康熔断");
+    }
+    if (fuse.recoveryAttestationKey !== attestationKey) {
+      throw new Error("MCP 恢复操作没有绑定当前健康证明");
+    }
+    if (fuse.recoveryApplied === true) return null;
+    return this.enable({
+      serverKey,
+      revision,
+      actor: command.actor,
+    });
   }
 
   getRecoveryChallenge(
@@ -1255,10 +1348,12 @@ export class McpServerRegistry {
       .min(1)
       .max(Number.MAX_SAFE_INTEGER)
       .parse(revisionInput);
-    return (
-      this.#servers.get(serverKey)?.releases.get(revision)?.healthFuse
-        ?.recoveryChallengeKey ?? null
-    );
+    const fuse = this.#servers
+      .get(serverKey)
+      ?.releases.get(revision)?.healthFuse;
+    return fuse && fuse.recoveryApplied !== true
+      ? fuse.recoveryChallengeKey
+      : null;
   }
 
   getNextProbeBinding(
@@ -1318,14 +1413,28 @@ export class McpServerRegistry {
   getEnabledTool(
     serverKeyInput: string,
     toolKeyInput: string,
-  ): { manifest: McpServerManifest; tool: McpToolDefinition } | null {
+  ): {
+    manifest: McpServerManifest;
+    tool: McpToolDefinition;
+    serverIdentityHash: string;
+  } | null {
     const toolKey = internalKey.parse(toolKeyInput);
     const manifest = this.getEnabledManifest(serverKeyInput);
     if (!manifest) return null;
+    const server = this.#servers.get(manifest.serverKey);
+    if (!server?.identityHash) {
+      throw new Error("MCP 启用状态缺少可信服务身份");
+    }
     const tool = manifest.tools.find(
       (candidate) => candidate.toolKey === toolKey,
     );
-    return tool ? { manifest, tool: structuredClone(tool) } : null;
+    return tool
+      ? {
+          manifest,
+          tool: structuredClone(tool),
+          serverIdentityHash: server.identityHash,
+        }
+      : null;
   }
 
   getEnabledManifest(serverKeyInput: string): McpServerManifest | null {

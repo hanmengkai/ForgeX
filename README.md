@@ -81,6 +81,34 @@ npm run --workspace @forgex/extension-admin admin -- release \
 
 `pack` 在任何网络请求前固定 `skillKey`、版本、制品摘要、评测标识和签名；响应丢失时必须重放同一个 bundle，不能重新打包。内置套件只证明规范编码、范围/摘要绑定、交付只读权限和安全文本资源这五项发布基线，不冒充业务效果评测。需要更强业务保证时应增加独立、版本化的可信评测器，不能把候选 Skill 自述当成通过证据。
 
+## 可信 MCP 本地探测与启用
+
+MCP 凭据和连接方式始终留在客户设备的私有配置中。复制并填写 [MCP 发布输入示例](services/extension-admin/mcp.release.example.json)，确保其中的 `connectionBindingKey` 与正式 Worker 私有配置里的对应连接完全一致。`mcp-pack` 会直接连接本地 MCP，读取真实 `initialize` 协商版本、服务身份、完整工具清单与输入 Schema；它不会调用任何工具。stdio 启动器、脚本和配置会按绝对路径、owner/ACL/mode 与 SHA-256 复验，远程连接只允许 HTTPS 或本机回环 HTTP，且禁止重定向。
+
+```bash
+npm run --workspace @forgex/extension-admin admin -- mcp-pack \
+  --config /private/extensions/extension-admin.config.json \
+  --input /private/extensions/team-notifications.mcp.json \
+  --output /private/extensions/team-notifications.bundle.json
+
+npm run --workspace @forgex/extension-admin admin -- mcp-release \
+  --config /private/extensions/extension-admin.config.json \
+  --bundle /private/extensions/team-notifications.bundle.json
+
+# 至少每 24 小时前重新做一次真实只读探测并登记新证明
+npm run --workspace @forgex/extension-admin admin -- mcp-health-pack \
+  --config /private/extensions/extension-admin.config.json \
+  --input /private/extensions/team-notifications.mcp.json \
+  --source /private/extensions/team-notifications.bundle.json \
+  --output /private/extensions/team-notifications.health.json
+
+npm run --workspace @forgex/extension-admin admin -- mcp-health-release \
+  --config /private/extensions/extension-admin.config.json \
+  --bundle /private/extensions/team-notifications.health.json
+```
+
+生成的 bundle 不含 URL 请求头、环境变量、stdio 参数里的本地秘密或其他连接凭据，只包含业务清单、规范 Schema 和由独立 MCP 探测私钥签名的健康证明。发布命令严格按“发布清单与 Schema、登记健康证明、启用修订”执行；响应丢失时必须重放同一个 bundle，不能重新探测或重新生成标识。健康证明最多使用 24 小时；应在到期前定时执行 `mcp-health-pack` 与 `mcp-health-release`。前者先从控制面读取当前探测链头，再对同一受保护连接重新协商并精确核对原服务身份、协议和全部 Schema；后者普通续期只登记新证明，只有携带控制面熔断恢复挑战时才重新启用。健康续期响应丢失时同样重放稳定的 health bundle，已经持久化的完全相同证明即使后来超过新写时效也能幂等确认，新生成的过期证明仍会拒绝。第 2 版起必须在输入中沿用原 `serverKey` 与各 `toolKey`，从而保留可审计历史。服务身份是 MCP 协议自报信息，签名证明的是“受保护的本地连接在该时刻实际协商并暴露了这些能力”，不把它提升为第三方身份认证。控制面派发时会把该身份摘要和协议版本固化到任务信封，Worker 在向本地连接发送任何工具调用前必须用真实 `initialize` 结果精确复核，替换成同名同 Schema 的另一服务也会失败关闭。
+
 独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 registry digest 或本机 `sha256:<image-id>` 固定，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。验证全部通过后，Runner 会从同一权威提交中读取计划精确绑定的产品 HTML，按普通文件、路径、大小、UTF-8 和自包含资源边界校验，再把原始字节作为内容寻址 Preview 发布。控制面只在无网络、无表单提交、无跳转、无同源权限的 sandbox iframe 中展示它。Runner 只证明 Preview 与已验证提交精确绑定且能安全打开，不用标签或候选脚本替用户断言“交互已通过”；产品负责人必须实际操作该页面后再验收，固定套件证据仍独立证明业务条件。
 
 仓库随附一个真正可构建的最小独立验证镜像。它只读取只读候选工作树，检查锁文件、严格 TypeScript 基线、文件数量与大小、符号链接和敏感文件，不调用候选自己的 `npm scripts`。先构建镜像并记录内容寻址 ID：

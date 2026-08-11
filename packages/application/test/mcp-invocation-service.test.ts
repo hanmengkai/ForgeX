@@ -27,6 +27,7 @@ const serverKey = "33333333-3333-4333-8333-333333333333";
 const readToolKey = "44444444-4444-4444-8444-444444444444";
 const writeToolKey = "55555555-5555-4555-8555-555555555555";
 const now = new Date("2026-08-10T10:00:00.000Z");
+const serverIdentityHash = "b".repeat(64);
 
 const inputSchema = {
   type: "object",
@@ -107,7 +108,11 @@ class MutableToolDirectory implements TrustedMcpToolDirectory {
     requestedServerKey: string,
     requestedToolKey: string,
     _projectKey?: string,
-  ): Promise<{ manifest: McpServerManifest; tool: McpToolDefinition } | null> {
+  ): Promise<{
+    manifest: McpServerManifest;
+    tool: McpToolDefinition;
+    serverIdentityHash: string;
+  } | null> {
     if (
       !this.enabled ||
       requestedTenantKey !== tenantKey ||
@@ -122,6 +127,7 @@ class MutableToolDirectory implements TrustedMcpToolDirectory {
       ? {
           manifest: this.currentManifest,
           tool: this.returnedToolOverride ?? tool,
+          serverIdentityHash,
         }
       : null;
   }
@@ -920,7 +926,7 @@ describe("McpInvocationApplicationService", () => {
           requestedServerKey === serverKey &&
           scopedManifest &&
           tool
-          ? { manifest: scopedManifest, tool }
+          ? { manifest: scopedManifest, tool, serverIdentityHash }
           : null;
       },
     });
@@ -1004,6 +1010,9 @@ describe("McpInvocationApplicationService", () => {
       service.leaseForExecution(tenantKey, assignment),
     ).resolves.toEqual({
       connectionBindingKey: manifest.connectionBindingKey,
+      protocolVersion: manifest.protocolVersion,
+      serverIdentityHashAlgorithm: "sha256",
+      serverIdentityHash,
       serviceName: "代码仓库助手",
       toolName: "读取项目结构",
       technicalName: "repository.read_structure",

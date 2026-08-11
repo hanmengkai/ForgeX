@@ -289,6 +289,26 @@ describe("McpServerRegistry", () => {
     );
   });
 
+  it("已持久化的完全相同探测在过期后仍可幂等确认，但新探测仍拒绝过期", () => {
+    let current = now.getTime();
+    const target = registry(() => new Date(current));
+    target.publish(manifest);
+    const recorded = signNextHealth(target, manifest, {
+      producedAt: new Date(current).toISOString(),
+    });
+    const first = target.recordHealth(recorded);
+    current += 25 * 60 * 60 * 1_000;
+
+    expect(target.recordHealth(recorded)).toEqual(first);
+    expect(() =>
+      target.recordHealth(
+        signNextHealth(target, manifest, {
+          producedAt: new Date(current - 25 * 60 * 60 * 1_000).toISOString(),
+        }),
+      ),
+    ).toThrow("MCP 探测已经过期");
+  });
+
   it("可信失败探测即使观测到身份、协议、能力漂移或完全不可达也会先停用", () => {
     const failures: Partial<McpHealthPayload>[] = [
       {
@@ -364,6 +384,7 @@ describe("McpServerRegistry", () => {
       action: "enabled",
     });
     expect(target.getEnabledTool(serverKey, readToolKey)).not.toBeNull();
+    expect(target.getRecoveryChallenge(serverKey, 1)).toBeNull();
     expect(
       target.snapshot().servers[0]!.releases[0]!.attestations.length,
     ).toBeLessThanOrEqual(5);
@@ -379,6 +400,8 @@ describe("McpServerRegistry", () => {
     expect(
       restoredAfterWindow.getEnabledTool(serverKey, readToolKey),
     ).not.toBeNull();
+    target.disable({ serverKey, actor });
+    expect(target.getRecoveryChallenge(serverKey, 1)).toBeNull();
   });
 
   it("同一时间戳的失败探测不会被健康探测窗口淘汰", () => {
@@ -403,6 +426,46 @@ describe("McpServerRegistry", () => {
     });
     target.enable({ serverKey, revision: 1, actor });
     expect(target.getEnabledTool(serverKey, readToolKey)).not.toBeNull();
+  });
+
+  it("熔断恢复后清除活动挑战且不会让后续人工停用被健康续期重新启用", () => {
+    const target = registry();
+    target.publish(manifest);
+    recordNextHealth(target);
+    target.enable({ serverKey, revision: 1, actor });
+    recordNextHealth(target, manifest, { status: "unhealthy" });
+    const recoveryChallengeKey = target.getRecoveryChallenge(serverKey, 1);
+    expect(recoveryChallengeKey).not.toBeNull();
+    const recoveryHealth = signNextHealth(target, manifest, {
+      recoveryChallengeKey,
+      producedAt: "2026-08-10T08:31:00.000Z",
+    });
+    expect(target.recordHealth(recoveryHealth)).toMatchObject({
+      recoveryChallengeKey,
+    });
+    target.recover({
+      serverKey,
+      revision: 1,
+      attestationKey: recoveryHealth.payload.attestationKey,
+      actor,
+    });
+
+    expect(target.getRecoveryChallenge(serverKey, 1)).toBeNull();
+    expect(target.recordHealth(recoveryHealth)).toMatchObject({
+      recoveryChallengeKey,
+      previousAttestationKey: recoveryHealth.payload.attestationKey,
+    });
+    target.disable({ serverKey, actor });
+    expect(target.getRecoveryChallenge(serverKey, 1)).toBeNull();
+    expect(
+      target.recover({
+        serverKey,
+        revision: 1,
+        attestationKey: recoveryHealth.payload.attestationKey,
+        actor,
+      }),
+    ).toBeNull();
+    expect(target.getEnabledTool(serverKey, readToolKey)).toBeNull();
   });
 
   it("后来收到的失败探测会覆盖允许偏差内的未来健康时间，并在重启后保持阻断", () => {

@@ -139,6 +139,28 @@ export class McpRegistryApplicationService {
     );
   }
 
+  async hasRecordedHealth(
+    tenantKey: string,
+    input: SignedMcpHealthAttestation,
+  ): Promise<boolean> {
+    const signed = SignedMcpHealthAttestationSchema.parse(input);
+    const normalizedTenant = tenantKey.toLowerCase();
+    if (
+      signed.payload.tenantKey !== normalizedTenant ||
+      signed.payload.projectKey !== this.#projectKey
+    ) {
+      throw new Error("MCP 探测不属于当前租户或项目");
+    }
+    return this.#repository.transaction(
+      normalizedTenant,
+      this.#projectKey,
+      (transaction) =>
+        this.#restore(normalizedTenant, transaction.load()).hasRecordedHealth(
+          signed,
+        ),
+    );
+  }
+
   async enable(
     principal: AuthenticatedPrincipal,
     serverKey: string,
@@ -166,6 +188,39 @@ export class McpRegistryApplicationService {
           projectKey: this.#projectKey,
         };
         transaction.appendAudit(audit);
+        transaction.save(registry.snapshot());
+      },
+    );
+  }
+
+  async recover(
+    principal: AuthenticatedPrincipal,
+    serverKey: string,
+    revision: number,
+    attestationKey: string,
+  ): Promise<void> {
+    this.#assertAdministrator(principal);
+    await this.#repository.transaction(
+      principal.tenantKey,
+      this.#projectKey,
+      (transaction) => {
+        const registry = this.#restore(principal.tenantKey, transaction.load());
+        const record = registry.recover({
+          serverKey,
+          revision,
+          attestationKey,
+          actor: {
+            actorKey: principal.actorKey,
+            actorName: principal.actorName,
+          },
+        });
+        if (!record) return;
+        transaction.appendAudit({
+          ...record,
+          eventKey: randomUUID(),
+          tenantKey: principal.tenantKey,
+          projectKey: this.#projectKey,
+        });
         transaction.save(registry.snapshot());
       },
     );
@@ -230,7 +285,11 @@ export class McpRegistryApplicationService {
     serverKey: string,
     toolKey: string,
     projectKey = this.#projectKey,
-  ): Promise<{ manifest: McpServerManifest; tool: McpToolDefinition } | null> {
+  ): Promise<{
+    manifest: McpServerManifest;
+    tool: McpToolDefinition;
+    serverIdentityHash: string;
+  } | null> {
     if (!internalKeyPattern.test(projectKey)) {
       throw new Error("项目范围必须使用有效的内部标识");
     }
