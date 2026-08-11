@@ -38,7 +38,7 @@ const usernameSchema = z
   .min(3)
   .max(64)
   .regex(/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u);
-const passwordSchema = z.string().min(12).max(128);
+const passwordSchema = z.string().min(6).max(128);
 const missingAccountSalt = Buffer.alloc(16, 0xa5);
 const accountRowSchema = z
   .object({

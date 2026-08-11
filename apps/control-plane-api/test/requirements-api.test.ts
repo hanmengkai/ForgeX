@@ -258,7 +258,7 @@ describe("需求 API", () => {
         username: "developer.one",
         actorName: "研发一号",
         roles: ["developer"],
-        password: "Developer-Password-2026!",
+        password: "123456",
       },
     });
     expect(created.statusCode).toBe(201);

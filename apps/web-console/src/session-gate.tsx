@@ -7,6 +7,7 @@ import {
 } from "./api.js";
 import { SparkIcon } from "./icons.js";
 import { RequirementWorkbench } from "./requirement-workbench.js";
+import { ThemeToggle } from "./theme.js";
 
 export function SessionGate({
   client,
@@ -96,6 +97,7 @@ export function SessionGate({
   if (checking) {
     return (
       <main className="session-page" aria-busy="true">
+        <ThemeToggle />
         <div className="session-card" role="status">
           正在确认登录状态…
         </div>
@@ -119,6 +121,7 @@ export function SessionGate({
 
   return (
     <main className="session-page">
+      <ThemeToggle />
       <section className="session-card" aria-labelledby="session-title">
         <span className="session-brand-mark" aria-hidden="true">
           <SparkIcon />
@@ -156,7 +159,7 @@ export function SessionGate({
             type="password"
             value={password}
             autoComplete="current-password"
-            minLength={12}
+            minLength={6}
             maxLength={128}
             required
             disabled={submitting}

@@ -30,10 +30,15 @@ test("用户通过账号密码登录后刷新仍保持会话，并可安全注�
   await expect(page.getByLabel("账号")).toBeVisible();
 });
 
-test("移动端深色模式可用键盘完成登录且页面不横向溢出", async ({ page }) => {
+test("移动端可手动切换深色主题，刷新后保留且页面不横向溢出", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/");
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "切换为深色主题" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
   await page.getByLabel("账号").fill(username);
   await page.getByLabel("密码").focus();
@@ -41,6 +46,11 @@ test("移动端深色模式可用键盘完成登录且页面不横向溢出", as
   await page.keyboard.press("Enter");
   await expect(
     page.getByRole("heading", { name: "ForgeX 运行总览" }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: "切换为浅色主题" }),
   ).toBeVisible();
   expect(
     await page.evaluate(

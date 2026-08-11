@@ -249,7 +249,7 @@ export function AccountManagement({ client }: { client: ForgeXClient }) {
                 type="password"
                 value={form.password}
                 disabled={saving}
-                minLength={12}
+                minLength={6}
                 maxLength={128}
                 required={editing === "new"}
                 autoComplete="new-password"

@@ -97,10 +97,56 @@ const createClient = (): ForgeXClient =>
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
+  delete document.documentElement.dataset.theme;
+  document.documentElement.style.colorScheme = "";
   window.history.replaceState(null, "", "/");
 });
 
 describe("ForgeX 控制台框架", () => {
+  it("默认使用浅色主题，并允许用户切换后在刷新时保留深色选择", async () => {
+    const firstView = render(
+      <RequirementWorkbench
+        client={createClient()}
+        actorName="超级管理员"
+        actorUsername="super.admin"
+        roles={["administrator"]}
+      />,
+    );
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    const themeToggle = screen.getByRole("button", {
+      name: "切换为深色主题",
+    });
+    expect(themeToggle).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(themeToggle);
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+    expect(window.localStorage.getItem("forgex-color-theme")).toBe("dark");
+    expect(
+      screen.getByRole("button", { name: "切换为浅色主题" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    firstView.unmount();
+    delete document.documentElement.dataset.theme;
+    document.documentElement.style.colorScheme = "";
+
+    render(
+      <RequirementWorkbench
+        client={createClient()}
+        actorName="超级管理员"
+        actorUsername="super.admin"
+        roles={["administrator"]}
+      />,
+    );
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(
+      screen.getByRole("button", { name: "切换为浅色主题" }),
+    ).toBeInTheDocument();
+  });
+
   it("工作台展示有图标的运行概况、基础信息和顶部账号状态", async () => {
     const client = createClient();
     render(
@@ -121,6 +167,9 @@ describe("ForgeX 控制台框架", () => {
     expect(screen.getByText("1 个 / 不限数量")).toBeInTheDocument();
     expect(screen.getByText("平台运行正常")).toBeInTheDocument();
     expect(screen.getByText("super.admin")).toBeInTheDocument();
+    expect(
+      screen.getByText("super.admin").closest(".workspace-identity"),
+    ).toBeInTheDocument();
     expect(screen.getByText("超级管理员")).toBeInTheDocument();
     expect(
       document.querySelectorAll(".dashboard-card .icon").length,
@@ -179,6 +228,8 @@ describe("ForgeX 控制台框架", () => {
     expect(
       screen.getByRole("button", { name: "新建账号" }),
     ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "新建账号" }));
+    expect(screen.getByLabelText("初始密码")).toHaveAttribute("minlength", "6");
     expect(
       screen.getByRole("button", { name: "编辑 super.admin" }),
     ).toBeInTheDocument();

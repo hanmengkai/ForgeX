@@ -172,7 +172,7 @@ describe("createHttpForgeXClient", () => {
     await expect(
       client.startSession({
         username: "product.owner",
-        password: "Owner-Password-2026!",
+        password: "123456",
       }),
     ).resolves.toEqual(profile);
     await expect(client.getSession()).resolves.toEqual(profile);
@@ -187,7 +187,7 @@ describe("createHttpForgeXClient", () => {
       JSON.stringify({
         schemaVersion: 1,
         username: "product.owner",
-        password: "Owner-Password-2026!",
+        password: "123456",
       }),
     );
     expect(
