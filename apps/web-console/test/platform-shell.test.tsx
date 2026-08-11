@@ -43,8 +43,7 @@ const createClient = (): ForgeXClient =>
       ],
       capacity: {
         connectedAccounts: 1,
-        maxAccounts: 5,
-        availableSlots: 4,
+        unlimited: true,
       },
       connectAction: "/api/v1/worker-enrollments",
     }),
@@ -67,6 +66,16 @@ const createClient = (): ForgeXClient =>
     createAccount: vi.fn(),
     updateAccount: vi.fn(),
     deleteAccount: vi.fn(),
+    listPlatformConfiguration: vi.fn().mockResolvedValue({ customers: [] }),
+    createPlatformCustomer: vi.fn(),
+    updatePlatformCustomer: vi.fn(),
+    deletePlatformCustomer: vi.fn(),
+    createPlatformProject: vi.fn(),
+    updatePlatformProject: vi.fn(),
+    deletePlatformProject: vi.fn(),
+    createProjectRepository: vi.fn(),
+    updateProjectRepository: vi.fn(),
+    deleteProjectRepository: vi.fn(),
     connectWorker: vi.fn(),
     getMcpToolCatalog: vi.fn(),
     getMcpInvocationForm: vi.fn(),
@@ -108,7 +117,7 @@ describe("ForgeX 控制台框架", () => {
       await screen.findByRole("heading", { name: "ForgeX 运行总览" }),
     ).toBeInTheDocument();
     expect(screen.getByText("访客预约平台")).toBeInTheDocument();
-    expect(screen.getByText("1 / 5")).toBeInTheDocument();
+    expect(screen.getByText("1 个 / 不限数量")).toBeInTheDocument();
     expect(screen.getByText("平台运行正常")).toBeInTheDocument();
     expect(screen.getByText("super.admin")).toBeInTheDocument();
     expect(screen.getByText("超级管理员")).toBeInTheDocument();
@@ -178,8 +187,34 @@ describe("ForgeX 控制台框架", () => {
     expect(client.listAccounts).toHaveBeenCalledOnce();
   });
 
+  it("超级管理员可通过独立地址进入客户项目和 MCP 工具配置", async () => {
+    const client = createClient();
+    render(
+      <RequirementWorkbench
+        client={client}
+        actorName="超级管理员"
+        actorUsername="super.admin"
+        roles={["administrator"]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("link", { name: "客户与项目" }));
+    expect(window.location.pathname).toBe("/platform/projects");
+    expect(
+      await screen.findByRole("heading", { name: "客户与项目" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("link", { name: "MCP 与外部工具" }),
+    );
+    expect(window.location.pathname).toBe("/platform/integrations");
+    expect(
+      await screen.findByRole("heading", { name: "MCP 与外部工具" }),
+    ).toBeInTheDocument();
+  });
+
   it("普通账号看不到账号管理且不能通过地址直接进入", async () => {
-    window.history.replaceState(null, "", "/platform/accounts");
+    window.history.replaceState(null, "", "/platform/projects");
     const client = createClient();
     render(
       <RequirementWorkbench
@@ -193,6 +228,9 @@ describe("ForgeX 控制台框架", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
     expect(
       screen.queryByRole("link", { name: "账号管理" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "客户与项目" }),
     ).not.toBeInTheDocument();
     expect(client.listAccounts).not.toHaveBeenCalled();
   });

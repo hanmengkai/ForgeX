@@ -53,26 +53,23 @@ const enqueue = (
   });
 
 describe("WorkerFleetService", () => {
-  it("每个租户最多连接五个账户，普通列表不暴露指纹和连接密钥", async () => {
+  it("每个租户默认不限制账户数量，普通列表不暴露指纹和连接密钥", async () => {
     const service = new WorkerFleetService({
       repository: new InMemoryWorkerFleetRepository(),
       clock: () => new Date("2026-08-10T05:00:00.000Z"),
     });
-    for (let index = 1; index <= 5; index += 1) {
+    for (let index = 1; index <= 8; index += 1) {
       await service.connect(administrator, registration(index));
     }
 
-    await expect(
-      service.connect(administrator, registration(6)),
-    ).rejects.toThrow("最多可连接 5 个 Codex 账户");
     const views = await service.listForPeople(productOwner);
-    expect(views).toHaveLength(5);
+    expect(views).toHaveLength(8);
     expect(views[0]).not.toHaveProperty("workerKey");
     expect(views[0]).not.toHaveProperty("sessionKey");
     expect(views[0]).not.toHaveProperty("accountFingerprint");
   });
 
-  it("设备概况同时返回五账户容量且离线账户仍占用槽位", async () => {
+  it("设备概况明确返回不限数量且离线账户仍计入已连接数量", async () => {
     let now = new Date("2026-08-10T05:00:00.000Z");
     const service = new WorkerFleetService({
       repository: new InMemoryWorkerFleetRepository(),
@@ -86,8 +83,7 @@ describe("WorkerFleetService", () => {
 
     expect(overview.capacity).toEqual({
       connectedAccounts: 2,
-      maxAccounts: 5,
-      availableSlots: 3,
+      unlimited: true,
     });
     expect(overview.workers).toHaveLength(2);
     expect(overview.workers.every((worker) => worker.status === "离线")).toBe(
@@ -259,7 +255,7 @@ describe("WorkerFleetService", () => {
     });
   });
 
-  it("多个服务实例共享账户上限、队列和单调 fencing token", async () => {
+  it("多个服务实例共享不限量账户、队列和单调 fencing token", async () => {
     const repository = new InMemoryWorkerFleetRepository();
     const options = {
       repository,
@@ -268,15 +264,13 @@ describe("WorkerFleetService", () => {
     const firstService = new WorkerFleetService(options);
     const secondService = new WorkerFleetService(options);
     const connections = [];
-    for (let index = 1; index <= 5; index += 1) {
+    for (let index = 1; index <= 6; index += 1) {
       const service = index % 2 === 0 ? secondService : firstService;
       connections.push(
         (await service.connect(administrator, registration(index))).connection,
       );
     }
-    await expect(
-      secondService.connect(administrator, registration(6)),
-    ).rejects.toThrow("最多可连接 5 个 Codex 账户");
+    expect(await secondService.listForPeople(productOwner)).toHaveLength(6);
 
     await enqueue(firstService, {
       requirementKey: "66666666-6666-4666-8666-666666666666",
