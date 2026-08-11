@@ -15,7 +15,9 @@ COPY apps/web-console ./apps/web-console
 COPY tsconfig.base.json ./
 RUN npm ci
 ARG VITE_FORGEX_PROJECT_NAME=我的项目
+ARG VITE_FORGEX_AGENT_DOWNLOAD_URL=https://gitee.com/hmk_855_admin/forge-x/repository/archive/master.zip
 ENV VITE_FORGEX_PROJECT_NAME=$VITE_FORGEX_PROJECT_NAME
+ENV VITE_FORGEX_AGENT_DOWNLOAD_URL=$VITE_FORGEX_AGENT_DOWNLOAD_URL
 RUN npm run build --workspace @forgex/web-console
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine

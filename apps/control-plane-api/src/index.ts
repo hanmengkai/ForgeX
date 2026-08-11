@@ -30,6 +30,7 @@ import {
   requirementCompletionDigest,
   type AuthenticatedPrincipal,
   type AuthenticatedRunner,
+  type AccountAdministrationService,
   type ExtensionCatalogRepository,
   type McpRegistryRepository,
   type KnowledgeBaseRepository,
@@ -94,6 +95,7 @@ declare module "fastify" {
 }
 
 export interface ControlPlaneApiOptions {
+  accountService?: AccountAdministrationService;
   authenticator: SessionAuthenticator;
   runnerAuthenticator: RunnerSessionAuthenticator;
   evidenceAuthority: EvidenceAuthority;
@@ -342,6 +344,14 @@ const authenticatedPrincipalSchema = z
       .uuid()
       .transform((value) => value.toLowerCase()),
     actorName: z.string().trim().min(2).max(100),
+    username: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .min(3)
+      .max(64)
+      .regex(/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u)
+      .optional(),
     tenantKey: z
       .string()
       .uuid()
@@ -353,6 +363,55 @@ const authenticatedPrincipalSchema = z
     ...principal,
     roles: [...new Set(principal.roles)] as PlatformRole[],
   }));
+
+const usernameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(3)
+  .max(64)
+  .regex(/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u);
+const passwordSchema = z.string().min(12).max(128);
+const credentialsSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    username: usernameSchema,
+    password: passwordSchema,
+  })
+  .strict();
+const accountCreateSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    username: usernameSchema,
+    actorName: z.string().trim().min(2).max(100),
+    roles: z.array(platformRoleSchema).min(1).max(4),
+    password: passwordSchema,
+  })
+  .strict();
+const accountUpdateSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    expectedRevision: z.number().int().positive(),
+    actorName: z.string().trim().min(2).max(100),
+    roles: z.array(platformRoleSchema).min(1).max(4),
+    enabled: z.boolean(),
+    password: passwordSchema.optional(),
+  })
+  .strict();
+const accountDeleteSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    expectedRevision: z.number().int().positive(),
+  })
+  .strict();
+const accountParamsSchema = z
+  .object({
+    accountKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
 
 const SESSION_COOKIE_NAME = "forgex_session";
 const sessionCookieValuePattern = /^[A-Za-z0-9._~-]{1,4096}$/;
@@ -792,19 +851,55 @@ export const buildControlPlaneApi = (
       ...(options.sessionCookieSecure === false ? [] : ["Secure"]),
     ].join("; ");
 
+  const sessionProfile = (principal: AuthenticatedPrincipal) => ({
+    actorName: principal.actorName,
+    username: principal.username ?? principal.actorName,
+    roles: principal.roles,
+  });
+
   app.post("/api/v1/session", async (request, reply) => {
-    const authorization = request.headers.authorization;
-    const token = authorization?.startsWith("Bearer ")
-      ? authorization.slice("Bearer ".length)
-      : "";
-    if (!sessionCookieValuePattern.test(token)) {
-      throw new ApplicationError(
-        401,
-        "invalid_session",
-        "访问令牌无效，请检查后重试",
-      );
+    let principal: AuthenticatedPrincipal;
+    if (request.body !== undefined) {
+      if (request.headers["x-forgex-csrf"] !== "1") {
+        throw new ApplicationError(
+          403,
+          "csrf_validation_failed",
+          "页面验证已失效，请刷新后重试",
+        );
+      }
+      const credentials = credentialsSchema.safeParse(request.body);
+      if (!credentials.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "账号或密码格式不正确",
+          validationDetails(credentials.error),
+        );
+      }
+      const { schemaVersion: _schemaVersion, ...loginInput } = credentials.data;
+      principal =
+        (await options.accountService?.authenticate(loginInput)) ??
+        (() => {
+          throw new ApplicationError(
+            401,
+            "invalid_credentials",
+            "账号或密码不正确",
+          );
+        })();
+    } else {
+      const authorization = request.headers.authorization;
+      const token = authorization?.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length)
+        : "";
+      if (!sessionCookieValuePattern.test(token)) {
+        throw new ApplicationError(
+          401,
+          "invalid_session",
+          "访问令牌无效，请检查后重试",
+        );
+      }
+      principal = await authenticate(authorization);
     }
-    const principal = await authenticate(authorization);
     const sessionToken = await browserSessions.create(
       principal,
       sessionCookieMaxAgeSeconds,
@@ -815,14 +910,14 @@ export const buildControlPlaneApi = (
         "Set-Cookie",
         sessionCookie(sessionToken, sessionCookieMaxAgeSeconds),
       )
-      .send({ data: { actorName: principal.actorName } });
+      .send({ data: sessionProfile(principal) });
   });
 
   app.get("/api/v1/session", async (request, reply) => {
     const principal = await authenticateRequest(request);
     return reply
       .header("Cache-Control", "no-store")
-      .send({ data: { actorName: principal.actorName } });
+      .send({ data: sessionProfile(principal) });
   });
 
   app.delete("/api/v1/session", async (request, reply) => {
@@ -868,6 +963,8 @@ export const buildControlPlaneApi = (
       path.startsWith("/api/v1/mcp-invocations/") ||
       path === "/api/v1/workers" ||
       path.startsWith("/api/v1/workers/") ||
+      path === "/api/v1/accounts" ||
+      path.startsWith("/api/v1/accounts/") ||
       path === "/api/v1/worker-enrollments"
     ) {
       const credential = requestSessionCredential(request);
@@ -896,6 +993,127 @@ export const buildControlPlaneApi = (
     }
     return request.principal;
   };
+
+  const accountService = (): AccountAdministrationService => {
+    if (!options.accountService) {
+      throw new ApplicationError(
+        503,
+        "account_service_unavailable",
+        "账号管理暂时不可用，请联系平台管理员",
+      );
+    }
+    return options.accountService;
+  };
+
+  const accountView = (account: {
+    accountKey: string;
+    username: string;
+    actorName: string;
+    roles: PlatformRole[];
+    enabled: boolean;
+    revision: number;
+  }) => ({
+    username: account.username,
+    actorName: account.actorName,
+    roles: account.roles,
+    enabled: account.enabled,
+    revision: account.revision,
+    links: { self: `/api/v1/accounts/${account.accountKey}` },
+  });
+
+  app.get("/api/v1/accounts", async (request, reply) => {
+    const accounts = await accountService().list(principalFrom(request));
+    return reply
+      .header("Cache-Control", "no-store")
+      .send({ data: accounts.map(accountView) });
+  });
+
+  app.post("/api/v1/accounts", async (request, reply) => {
+    const command = accountCreateSchema.safeParse(request.body);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "账号信息需要调整",
+        validationDetails(command.error),
+      );
+    }
+    const { schemaVersion: _schemaVersion, ...input } = command.data;
+    const account = await accountService().create(
+      principalFrom(request),
+      input,
+    );
+    return reply
+      .header("Cache-Control", "no-store")
+      .header("Location", `/api/v1/accounts/${account.accountKey}`)
+      .status(201)
+      .send({ data: accountView(account) });
+  });
+
+  app.patch("/api/v1/accounts/:accountKey", async (request, reply) => {
+    const params = accountParamsSchema.safeParse(request.params);
+    const command = accountUpdateSchema.safeParse(request.body);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "账号信息需要调整",
+        validationDetails(params.error),
+      );
+    }
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "账号信息需要调整",
+        validationDetails(command.error),
+      );
+    }
+    const { schemaVersion: _schemaVersion, ...input } = command.data;
+    const principal = principalFrom(request);
+    const account = await accountService().update(
+      principal,
+      params.data.accountKey,
+      input,
+    );
+    await browserSessions.revokePrincipal(
+      principal.tenantKey,
+      account.accountKey,
+    );
+    return reply
+      .header("Cache-Control", "no-store")
+      .send({ data: accountView(account) });
+  });
+
+  app.delete("/api/v1/accounts/:accountKey", async (request, reply) => {
+    const params = accountParamsSchema.safeParse(request.params);
+    const command = accountDeleteSchema.safeParse(request.body);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "账号删除请求需要调整",
+        validationDetails(params.error),
+      );
+    }
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "账号删除请求需要调整",
+        validationDetails(command.error),
+      );
+    }
+    const principal = principalFrom(request);
+    await accountService().delete(principal, params.data.accountKey, {
+      expectedRevision: command.data.expectedRevision,
+    });
+    await browserSessions.revokePrincipal(
+      principal.tenantKey,
+      params.data.accountKey,
+    );
+    return reply.header("Cache-Control", "no-store").status(204).send();
+  });
 
   const workerConnectionFrom = (
     request: FastifyRequest,

@@ -13,9 +13,11 @@ import type {
   WorkerFleetOverview,
   WorkerListItem,
 } from "./api.js";
+import { DownloadIcon } from "./icons.js";
 
 interface WorkerCenterProps {
   client: ForgeXClient;
+  initialOverview?: WorkerFleetOverview | null;
 }
 
 const workerTone = (status: WorkerListItem["status"]) => {
@@ -24,9 +26,14 @@ const workerTone = (status: WorkerListItem["status"]) => {
   return "neutral";
 };
 
-export function WorkerCenter({ client }: WorkerCenterProps) {
-  const [overview, setOverview] = useState<WorkerFleetOverview | null>(null);
-  const [loading, setLoading] = useState(true);
+export function WorkerCenter({
+  client,
+  initialOverview = null,
+}: WorkerCenterProps) {
+  const [overview, setOverview] = useState<WorkerFleetOverview | null>(
+    initialOverview,
+  );
+  const [loading, setLoading] = useState(initialOverview === null);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -60,11 +67,15 @@ export function WorkerCenter({ client }: WorkerCenterProps) {
   }, [client]);
 
   useEffect(() => {
-    void load();
+    if (!initialOverview) void load();
     return () => {
       generationRef.current += 1;
     };
-  }, [load]);
+  }, [initialOverview, load]);
+
+  const agentDownloadUrl =
+    import.meta.env.VITE_FORGEX_AGENT_DOWNLOAD_URL ??
+    "https://gitee.com/hmk_855_admin/forge-x/repository/archive/master.zip";
 
   const counts = useMemo(() => {
     const workers = overview?.workers ?? [];
@@ -277,6 +288,52 @@ export function WorkerCenter({ client }: WorkerCenterProps) {
           </div>
         </section>
       ) : null}
+
+      <section className="content-section agent-installation">
+        <div className="agent-install-heading">
+          <div>
+            <span className="eyebrow">AGENT SETUP</span>
+            <h2>安装 ForgeX Agent</h2>
+            <p>安装包包含设备 Worker、配置示例和受控 Codex 启动器。</p>
+          </div>
+          <a
+            className="button primary"
+            href={agentDownloadUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <DownloadIcon />
+            下载 Agent 安装包
+          </a>
+        </div>
+        <ol className="agent-install-steps">
+          <li>
+            <strong>1. 下载并解压</strong>
+            <span>把安装包放到仅 Agent 管理员可写的目录。</span>
+          </li>
+          <li>
+            <strong>2. 准备运行环境</strong>
+            <span>
+              安装 Node.js 22，并复制填写{" "}
+              <code>worker.config.example.json</code>。
+            </span>
+          </li>
+          <li>
+            <strong>3. 生成接入码</strong>
+            <span>点击“连接新设备”，登记设备与 Codex 账户昵称。</span>
+          </li>
+          <li>
+            <strong>4. 启动并验证</strong>
+            <span>
+              执行页面生成的接入命令，再启动 Worker 并确认状态为“空闲”。
+            </span>
+          </li>
+        </ol>
+        <p className="agent-install-note">
+          Codex 登录在目标设备本地完成，ForgeX 控制面不会接收账号密码、Token
+          或本地凭据文件。
+        </p>
+      </section>
 
       {loading && !overview ? (
         <div className="loading-state" role="status">

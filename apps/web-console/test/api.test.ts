@@ -46,24 +46,26 @@ describe("createHttpForgeXClient", () => {
     };
   };
 
-  it("用访问令牌建立 HttpOnly 会话并可读取和注销", async () => {
+  it("用账号密码建立 HttpOnly 会话并可读取和注销", async () => {
+    const profile = {
+      actorName: "产品负责人",
+      username: "product.owner",
+      roles: ["product_owner"],
+    };
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { actorName: "产品负责人" } })),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { actorName: "产品负责人" } })),
-      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: profile })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: profile })))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const client = createHttpForgeXClient({ fetcher });
 
     await expect(
-      client.startSession("one-time-access-token-with-enough-entropy"),
-    ).resolves.toEqual({ actorName: "产品负责人" });
-    await expect(client.getSession()).resolves.toEqual({
-      actorName: "产品负责人",
-    });
+      client.startSession({
+        username: "product.owner",
+        password: "Owner-Password-2026!",
+      }),
+    ).resolves.toEqual(profile);
+    await expect(client.getSession()).resolves.toEqual(profile);
     await expect(client.endSession()).resolves.toBeUndefined();
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
@@ -71,9 +73,16 @@ describe("createHttpForgeXClient", () => {
       "/api/v1/session",
       "/api/v1/session",
     ]);
+    expect(fetcher.mock.calls[0]![1]?.body).toBe(
+      JSON.stringify({
+        schemaVersion: 1,
+        username: "product.owner",
+        password: "Owner-Password-2026!",
+      }),
+    );
     expect(
-      new Headers(fetcher.mock.calls[0]![1]?.headers).get("Authorization"),
-    ).toBe("Bearer one-time-access-token-with-enough-entropy");
+      new Headers(fetcher.mock.calls[0]![1]?.headers).get("X-ForgeX-CSRF"),
+    ).toBe("1");
     expect(fetcher.mock.calls[2]![1]?.method).toBe("DELETE");
     expect(
       new Headers(fetcher.mock.calls[2]![1]?.headers).get("X-ForgeX-CSRF"),

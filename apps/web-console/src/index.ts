@@ -3,6 +3,10 @@ export {
   ForgeXHttpError,
   type ForgeXClient,
   type SessionProfile,
+  type PlatformRole,
+  type PlatformAccountItem,
+  type AccountCreateInput,
+  type AccountUpdateInput,
   type ExtensionCatalogItem,
   type ExtensionCatalogOverview,
   type RequirementActionLinks,
@@ -20,3 +24,4 @@ export { ExtensionCenter } from "./extension-center.js";
 export { KnowledgeBaseCenter } from "./knowledge-base-center.js";
 export { WorkerCenter } from "./worker-center.js";
 export { McpInvocationCenter } from "./mcp-invocation-center.js";
+export { AccountManagement } from "./account-management.js";

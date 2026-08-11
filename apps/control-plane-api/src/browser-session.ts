@@ -9,6 +9,7 @@ export interface BrowserSessionManager {
   ): Promise<string>;
   authenticate(token: string): Promise<AuthenticatedPrincipal | null>;
   revoke(token: string): Promise<void>;
+  revokePrincipal(tenantKey: string, actorKey: string): Promise<void>;
 }
 
 export interface InMemoryBrowserSessionManagerOptions {
@@ -65,5 +66,16 @@ export class InMemoryBrowserSessionManager implements BrowserSessionManager {
 
   async revoke(token: string): Promise<void> {
     this.#sessions.delete(digest(token));
+  }
+
+  async revokePrincipal(tenantKey: string, actorKey: string): Promise<void> {
+    for (const [key, session] of this.#sessions) {
+      if (
+        session.principal.tenantKey === tenantKey &&
+        session.principal.actorKey === actorKey
+      ) {
+        this.#sessions.delete(key);
+      }
+    }
   }
 }

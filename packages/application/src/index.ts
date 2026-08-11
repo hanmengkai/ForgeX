@@ -4,6 +4,15 @@ export type {
   SessionAuthenticator,
 } from "./auth.js";
 export {
+  AccountAdministrationService,
+  InMemoryAccountRepository,
+  type AccountCreateInput,
+  type AccountDeleteInput,
+  type AccountRepository,
+  type AccountUpdateInput,
+  type PlatformAccount,
+} from "./account-service.js";
+export {
   InMemoryKnowledgeBaseRepository,
   KnowledgeBaseAuditEventSchema,
   KnowledgeChunkSchema,

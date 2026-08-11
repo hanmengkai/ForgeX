@@ -59,6 +59,10 @@ const createClient = (): ForgeXClient => ({
   startSession: vi.fn(),
   getSession: vi.fn(),
   endSession: vi.fn(),
+  listAccounts: vi.fn().mockResolvedValue([]),
+  createAccount: vi.fn(),
+  updateAccount: vi.fn(),
+  deleteAccount: vi.fn(),
   listRequirements: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [],

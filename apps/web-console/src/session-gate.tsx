@@ -19,7 +19,8 @@ export function SessionGate({
   const [checking, setChecking] = useState(true);
   const [serviceError, setServiceError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [token, setToken] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const generationRef = useRef(0);
@@ -63,8 +64,8 @@ export function SessionGate({
     setSubmitting(true);
     setLoginError(null);
     try {
-      const current = await client.startSession(token);
-      setToken("");
+      const current = await client.startSession({ username, password });
+      setPassword("");
       setProfile(current);
     } catch (caught) {
       setLoginError(
@@ -108,6 +109,8 @@ export function SessionGate({
         client={client}
         projectName={projectName}
         actorName={profile.actorName}
+        actorUsername={profile.username}
+        roles={profile.roles}
         onSignOut={logout}
         signingOut={signingOut}
       />
@@ -120,9 +123,11 @@ export function SessionGate({
         <span className="session-brand-mark" aria-hidden="true">
           <SparkIcon />
         </span>
-        <span className="eyebrow">ForgeX AI 交付工作台</span>
-        <h1 id="session-title">进入你的项目</h1>
-        <p>访问令牌只用于建立受保护的同源会话，不会保存在浏览器存储中。</p>
+        <span className="eyebrow">ForgeX CONTROL PLANE</span>
+        <h1 id="session-title">登录交付控制台</h1>
+        <p>
+          使用平台管理员分配的账号登录。密码只发送到同源控制面，不会写入浏览器存储。
+        </p>
         {serviceError ? (
           <div className="page-error" role="alert">
             {serviceError}
@@ -132,17 +137,30 @@ export function SessionGate({
           </div>
         ) : null}
         <form onSubmit={(event) => void login(event)}>
-          <label htmlFor="access-token">访问令牌</label>
+          <label htmlFor="account-username">账号</label>
           <input
-            id="access-token"
-            type="password"
-            value={token}
-            autoComplete="off"
-            minLength={24}
-            maxLength={512}
+            id="account-username"
+            type="text"
+            value={username}
+            autoComplete="username"
+            minLength={3}
+            maxLength={64}
             required
             disabled={submitting}
-            onChange={(event) => setToken(event.target.value)}
+            placeholder="例如：product.owner"
+            onChange={(event) => setUsername(event.target.value)}
+          />
+          <label htmlFor="account-password">密码</label>
+          <input
+            id="account-password"
+            type="password"
+            value={password}
+            autoComplete="current-password"
+            minLength={12}
+            maxLength={128}
+            required
+            disabled={submitting}
+            onChange={(event) => setPassword(event.target.value)}
           />
           {loginError ? (
             <p className="detail-error" role="alert">
@@ -154,12 +172,10 @@ export function SessionGate({
             type="submit"
             disabled={submitting}
           >
-            {submitting ? "正在进入…" : "进入工作台"}
+            {submitting ? "正在验证…" : "登录"}
           </button>
         </form>
-        <small>
-          令牌由 ForgeX 管理员单独发放；请勿通过公开聊天或 Issue 分享。
-        </small>
+        <small>忘记密码或账号被停用时，请联系 ForgeX 超级管理员。</small>
       </section>
     </main>
   );

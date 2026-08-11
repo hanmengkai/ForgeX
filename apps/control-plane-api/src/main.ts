@@ -1,7 +1,10 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Pool } from "pg";
-import { loadPostgresMigrations } from "@forgex/postgres";
+import {
+  loadPostgresMigrations,
+  PostgresAccountRepository,
+} from "@forgex/postgres";
 
 import { createProductionControlPlane } from "./production.js";
 import {
@@ -34,31 +37,64 @@ export const startControlPlane = async (
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });
-  const app = createProductionControlPlane({
-    config,
-    authRealmRevision: configDigest,
-    migrations,
-    pool,
-    serviceVersion: SERVICE_VERSION,
-    logger: true,
-  });
+  const accountRepository = new PostgresAccountRepository(pool);
   try {
-    await app.listen({ host: config.host, port: config.port });
+    const bootstrapUsername = environment.FORGEX_BOOTSTRAP_ADMIN_USERNAME;
+    const bootstrapPassword = environment.FORGEX_BOOTSTRAP_ADMIN_PASSWORD;
+    if (
+      (bootstrapUsername && !bootstrapPassword) ||
+      (!bootstrapUsername && bootstrapPassword)
+    ) {
+      throw new Error("初始化超级管理员账号和密码必须同时配置");
+    }
+    if (bootstrapUsername && bootstrapPassword) {
+      const bootstrapPrincipal = config.sessions.find((session) =>
+        session.principal.roles.includes("administrator"),
+      )?.principal;
+      if (!bootstrapPrincipal) {
+        throw new Error("初始化超级管理员需要运行配置中存在管理员租户");
+      }
+      await accountRepository.ensureBootstrapAdministrator({
+        tenantKey: bootstrapPrincipal.tenantKey,
+        username: bootstrapUsername,
+        actorName:
+          environment.FORGEX_BOOTSTRAP_ADMIN_NAME ??
+          bootstrapPrincipal.actorName,
+        password: bootstrapPassword,
+      });
+    }
+    const app = createProductionControlPlane({
+      accountRepository,
+      config,
+      authRealmRevision: configDigest,
+      migrations,
+      pool,
+      serviceVersion: SERVICE_VERSION,
+      logger: true,
+    });
+    try {
+      await app.listen({ host: config.host, port: config.port });
+    } catch (error) {
+      await app.close().catch(() => undefined);
+      throw error;
+    }
+
+    let stopping: Promise<void> | null = null;
+    const stop = (): Promise<void> => {
+      stopping ??= (async () => {
+        try {
+          await app.close();
+        } finally {
+          await pool.end();
+        }
+      })();
+      return stopping;
+    };
+    return { app, pool, stop };
   } catch (error) {
-    await app.close().catch(() => undefined);
     await pool.end().catch(() => undefined);
     throw error;
   }
-
-  let stopping: Promise<void> | null = null;
-  const stop = (): Promise<void> => {
-    stopping ??= (async () => {
-      await app.close();
-      await pool.end();
-    })();
-    return stopping;
-  };
-  return { app, pool, stop };
 };
 
 const entryPath = process.argv[1];

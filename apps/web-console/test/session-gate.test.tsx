@@ -9,9 +9,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionGate, type ForgeXClient } from "../src/index.js";
 
 const createClient = (): ForgeXClient => ({
-  startSession: vi.fn().mockResolvedValue({ actorName: "产品负责人" }),
+  startSession: vi.fn().mockResolvedValue({
+    actorName: "产品负责人",
+    username: "product.owner",
+    roles: ["product_owner"],
+  }),
   getSession: vi.fn().mockRejectedValue(new Error("请先登录")),
   endSession: vi.fn().mockResolvedValue(undefined),
+  listAccounts: vi.fn().mockResolvedValue([]),
+  createAccount: vi.fn(),
+  updateAccount: vi.fn(),
+  deleteAccount: vi.fn(),
   listRequirements: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [],
@@ -43,25 +51,26 @@ const createClient = (): ForgeXClient => ({
 afterEach(cleanup);
 
 describe("SessionGate", () => {
-  it("引导用户登录、清除输入令牌，并可从工作台安全注销", async () => {
+  it("使用账号密码登录、清除密码，并可从顶部安全注销", async () => {
     const client = createClient();
     render(<SessionGate client={client} projectName="访客项目" />);
 
-    const tokenInput = await screen.findByLabelText("访问令牌");
-    await userEvent.type(
-      tokenInput,
-      "one-time-access-token-with-enough-entropy",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "进入工作台" }));
+    const usernameInput = await screen.findByLabelText("账号");
+    const passwordInput = screen.getByLabelText("密码");
+    await userEvent.type(usernameInput, "product.owner");
+    await userEvent.type(passwordInput, "Correct-Horse-2026!");
+    await userEvent.click(screen.getByRole("button", { name: "登录" }));
 
-    expect(client.startSession).toHaveBeenCalledWith(
-      "one-time-access-token-with-enough-entropy",
-    );
-    expect(await screen.findByText("从第一个业务目标开始")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue(/one-time-access-token/u)).toBeNull();
+    expect(client.startSession).toHaveBeenCalledWith({
+      username: "product.owner",
+      password: "Correct-Horse-2026!",
+    });
+    expect(await screen.findByText("ForgeX 运行总览")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Correct-Horse-2026!")).toBeNull();
+    expect(screen.getByText("product.owner")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "退出登录" }));
     await waitFor(() => expect(client.endSession).toHaveBeenCalledOnce());
-    expect(await screen.findByLabelText("访问令牌")).toBeInTheDocument();
+    expect(await screen.findByLabelText("账号")).toBeInTheDocument();
   });
 });

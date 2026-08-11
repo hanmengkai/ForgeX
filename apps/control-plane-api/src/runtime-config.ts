@@ -27,6 +27,14 @@ export const AuthenticatedPrincipalRuntimeSchema = z
   .object({
     actorKey: internalKey,
     actorName: z.string().trim().min(2).max(100),
+    username: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .min(3)
+      .max(64)
+      .regex(/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u)
+      .optional(),
     tenantKey: internalKey,
     roles: z.array(platformRole).min(1).max(4),
   })
