@@ -830,6 +830,7 @@ export class VerificationCoordinatorService {
   #result(record: RequirementRecord): RequirementCommandResult {
     return {
       requirementKey: record.requirementKey,
+      repositoryKey: record.repositoryKey ?? null,
       view: record.workflow.toPeopleView(),
       allowedActions: record.workflow.listAllowedActions(),
     };

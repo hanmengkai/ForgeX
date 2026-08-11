@@ -245,6 +245,27 @@ export interface PlatformConfigurationOverview {
   customers: PlatformCustomerItem[];
 }
 
+export interface RequirementContextRepository {
+  name: string;
+  links: { actions: { createRequirement: string } };
+}
+
+export interface RequirementContextProject {
+  name: string;
+  summary: string;
+  repositories: RequirementContextRepository[];
+  links: { requirements: string };
+}
+
+export interface RequirementContextCustomer {
+  name: string;
+  projects: RequirementContextProject[];
+}
+
+export interface RequirementContextOverview {
+  customers: RequirementContextCustomer[];
+}
+
 export interface PlatformResourceCreateInput {
   name: string;
   summary: string;
@@ -327,7 +348,8 @@ export interface ForgeXClient {
     selfUrl: string,
     expectedRevision: number,
   ): Promise<void>;
-  listRequirements(): Promise<RequirementListPage>;
+  listRequirementContexts(): Promise<RequirementContextOverview>;
+  listRequirements(requirementsUrl?: string): Promise<RequirementListPage>;
   listWorkers(): Promise<WorkerFleetOverview>;
   connectWorker(
     actionUrl: string | undefined,
@@ -358,6 +380,10 @@ export interface ForgeXClient {
   ): Promise<KnowledgeSearchResult[]>;
   getRequirement(selfUrl: string): Promise<RequirementDetail>;
   createRequirement(spec: RequirementSpecInput): Promise<void>;
+  createRequirement(
+    actionUrl: string,
+    spec: RequirementSpecInput,
+  ): Promise<void>;
   reviseRequirement(
     actionUrl: string | undefined,
     spec: RequirementSpecInput,
@@ -503,8 +529,54 @@ const platformCustomerItemSchema = z
 const platformConfigurationResponseSchema = z
   .object({ data: z.array(platformCustomerItemSchema).max(500) })
   .strict();
+const projectRequirementsPattern =
+  /^\/api\/v1\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/requirements$/iu;
+const createRequirementPattern =
+  /^\/api\/v1\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/repositories\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/requirements$/iu;
+const requirementContextResponseSchema = z
+  .object({
+    data: z.array(
+      z
+        .object({
+          name: z.string().trim().min(2).max(100),
+          projects: z.array(
+            z
+              .object({
+                name: z.string().trim().min(2).max(100),
+                summary: z.string().trim().min(4).max(500),
+                repositories: z.array(
+                  z
+                    .object({
+                      name: z.string().trim().min(2).max(100),
+                      links: z
+                        .object({
+                          actions: z
+                            .object({
+                              createRequirement: z
+                                .string()
+                                .regex(createRequirementPattern),
+                            })
+                            .strict(),
+                        })
+                        .strict(),
+                    })
+                    .strict(),
+                ),
+                links: z
+                  .object({
+                    requirements: z.string().regex(projectRequirementsPattern),
+                  })
+                  .strict(),
+              })
+              .strict(),
+          ),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
 const requirementSelfPattern =
-  /^\/api\/v1\/requirements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^\/api\/v1\/(?:requirements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/requirements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu;
 const actionSuffixes = {
   revise: "/revisions",
   submitConfirmation: "/submit-confirmation",
@@ -1364,8 +1436,24 @@ export const createHttpForgeXClient = (
         },
       );
     },
-    listRequirements: async () => {
-      const response = await request("/api/v1/requirements?limit=100");
+    listRequirementContexts: async () => {
+      const response = await request("/api/v1/requirement-contexts");
+      const parsed = requirementContextResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("需求所属客户与项目格式不正确，请联系管理员");
+      }
+      return { customers: parsed.data.data };
+    },
+    listRequirements: async (requirementsUrl = "/api/v1/requirements") => {
+      if (
+        requirementsUrl !== "/api/v1/requirements" &&
+        !projectRequirementsPattern.test(requirementsUrl)
+      ) {
+        throw new Error("需求列表入口已经失效，请刷新后重试");
+      }
+      const response = await request(`${requirementsUrl}?limit=100`);
       const parsed = requirementListResponseSchema.safeParse(
         await response.json(),
       );
@@ -1570,8 +1658,23 @@ export const createHttpForgeXClient = (
       }
       return parsed.data.data;
     },
-    createRequirement: async (spec) => {
-      await request("/api/v1/requirements", {
+    createRequirement: async (
+      actionOrSpec: string | RequirementSpecInput,
+      scopedSpec?: RequirementSpecInput,
+    ) => {
+      const actionUrl =
+        typeof actionOrSpec === "string"
+          ? actionOrSpec
+          : "/api/v1/requirements";
+      const spec = typeof actionOrSpec === "string" ? scopedSpec : actionOrSpec;
+      if (
+        (actionUrl !== "/api/v1/requirements" &&
+          !createRequirementPattern.test(actionUrl)) ||
+        spec === undefined
+      ) {
+        throw new Error("需求创建入口已经失效，请刷新后重试");
+      }
+      await request(actionUrl, {
         method: "POST",
         body: JSON.stringify(spec),
       });

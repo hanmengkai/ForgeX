@@ -13,6 +13,7 @@ const createClient = (): ForgeXClient =>
     startSession: vi.fn(),
     getSession: vi.fn(),
     endSession: vi.fn(),
+    listRequirementContexts: vi.fn().mockResolvedValue({ customers: [] }),
     listRequirements: vi.fn().mockResolvedValue({
       items: [
         {

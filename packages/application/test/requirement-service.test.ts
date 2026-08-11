@@ -12,6 +12,7 @@ import {
 
 const tenantKey = "11111111-1111-4111-8111-111111111111";
 const projectKey = "22222222-2222-4222-8222-222222222222";
+const repositoryKey = "44444444-4444-4444-8444-444444444444";
 const principal: AuthenticatedPrincipal = {
   actorKey: "33333333-3333-4333-8333-333333333333",
   actorName: "产品负责人",
@@ -34,6 +35,24 @@ const spec = RequirementSpecSchema.parse({
 });
 
 describe("RequirementApplicationService", () => {
+  it("新需求会持久化所属代码仓库，后续交付不会退回启动时的全局仓库", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+    });
+
+    const created = await service.create(principal, spec);
+    const stored = await repository.transaction(
+      tenantKey,
+      projectKey,
+      (transaction) => transaction.find(created.requirementKey),
+    );
+
+    expect(stored).toMatchObject({ projectKey, repositoryKey });
+  });
+
   it("需求分析师可修订完整规格并留下版本审计，研发不能修改", async () => {
     const repository = new InMemoryRequirementRepository();
     const service = new RequirementApplicationService({

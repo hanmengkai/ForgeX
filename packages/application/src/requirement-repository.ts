@@ -205,6 +205,7 @@ export interface RequirementAuditEvent {
 export interface RequirementRecord {
   tenantKey: string;
   projectKey: string;
+  repositoryKey?: string | null;
   requirementKey: string;
   createdAt: string;
   spec: RequirementSpec;
@@ -218,6 +219,7 @@ export interface RequirementListOptions {
 
 export interface RequirementListItem {
   requirementKey: string;
+  repositoryKey: string | null;
   view: RequirementPeopleView;
   allowedActions: RequirementAllowedAction[];
 }

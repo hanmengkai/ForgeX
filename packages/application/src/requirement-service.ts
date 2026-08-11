@@ -41,6 +41,7 @@ export interface RequirementApplicationServiceOptions {
 
 export interface RequirementCommandResult {
   requirementKey: string;
+  repositoryKey?: string | null;
   view: RequirementPeopleView;
   allowedActions: RequirementAllowedAction[];
 }
@@ -129,6 +130,7 @@ export class RequirementApplicationService {
     const record: RequirementRecord = {
       tenantKey: principal.tenantKey.toLowerCase(),
       projectKey: this.#projectKey,
+      repositoryKey: this.#repositoryKey,
       requirementKey: workflow.internalKey,
       createdAt: this.#nowIso(),
       spec: structuredClone(spec),
@@ -148,6 +150,7 @@ export class RequirementApplicationService {
         );
         return {
           requirementKey: record.requirementKey,
+          repositoryKey: record.repositoryKey ?? null,
           view: workflow.toPeopleView(),
           allowedActions: workflow.listAllowedActions(),
         };
@@ -245,6 +248,7 @@ export class RequirementApplicationService {
         );
         return {
           requirementKey: record.requirementKey,
+          repositoryKey: record.repositoryKey ?? null,
           view: record.workflow.toPeopleView(),
           allowedActions: record.workflow.listAllowedActions(),
         };
@@ -324,7 +328,7 @@ export class RequirementApplicationService {
           dispatchKey: randomUUID(),
           tenantKey: record.tenantKey,
           projectKey: record.projectKey,
-          repositoryKey: this.#repositoryKey,
+          repositoryKey: record.repositoryKey ?? this.#repositoryKey,
           requirementKey: record.requirementKey,
           requirementRevision: record.workflow.currentRevision,
           title: record.spec.title,
@@ -408,6 +412,7 @@ export class RequirementApplicationService {
         }
         return {
           requirementKey: record.requirementKey,
+          repositoryKey: record.repositoryKey ?? null,
           view: record.workflow.toPeopleView(),
           allowedActions: record.workflow.listAllowedActions(),
           spec: structuredClone(record.spec),
@@ -490,6 +495,7 @@ export class RequirementApplicationService {
         this.#appendAudit(transaction, record, principal, action);
         return {
           requirementKey: record.requirementKey,
+          repositoryKey: record.repositoryKey ?? null,
           view: record.workflow.toPeopleView(),
           allowedActions: record.workflow.listAllowedActions(),
         };

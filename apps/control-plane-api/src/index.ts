@@ -440,6 +440,31 @@ const platformRepositoryParamsSchema = z
       .transform((value) => value.toLowerCase()),
   })
   .strict();
+const requirementProjectParamsSchema = platformProjectParamsSchema;
+const requirementProjectRepositoryParamsSchema = z
+  .object({
+    projectKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+    repositoryKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const scopedRequirementParamsSchema = z
+  .object({
+    projectKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+    requirementKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
 const platformResourceNameSchema = z
   .string()
   .trim()
@@ -597,8 +622,9 @@ const requirementLinks = (
   allowedActions: RequirementAllowedAction[],
   principal: AuthenticatedPrincipal,
   previewAvailable = false,
+  collectionPath = "/api/v1/requirements",
 ) => {
-  const self = `/api/v1/requirements/${requirementKey}`;
+  const self = `${collectionPath}/${requirementKey}`;
   const actions: {
     revise?: string;
     submitConfirmation?: string;
@@ -838,6 +864,16 @@ export const buildControlPlaneApi = (
     options.platformConfigurationRepository ??
       new InMemoryPlatformConfigurationRepository(),
   );
+  const requirementServiceFor = (
+    projectKey: string,
+    repositoryKey = options.repositoryKey,
+  ) =>
+    new RequirementApplicationService({
+      repository: options.requirementRepository,
+      projectKey,
+      repositoryKey,
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
   const deliveries = new DeliveryCoordinatorService({
     requirements,
     requirementRepository: options.requirementRepository,
@@ -1070,6 +1106,8 @@ export const buildControlPlaneApi = (
     if (
       path === "/api/v1/requirements" ||
       path.startsWith("/api/v1/requirements/") ||
+      path === "/api/v1/requirement-contexts" ||
+      path.startsWith("/api/v1/projects/") ||
       path === "/api/v1/extensions" ||
       path.startsWith("/api/v1/extensions/") ||
       path === "/api/v1/knowledge-bases" ||
@@ -1293,6 +1331,32 @@ export const buildControlPlaneApi = (
       },
     },
   });
+  const requirementContextView = (customer: {
+    name: string;
+    projects: Array<{
+      projectKey: string;
+      name: string;
+      summary: string;
+      repositories: Array<{ repositoryKey: string; name: string }>;
+    }>;
+  }) => ({
+    name: customer.name,
+    projects: customer.projects.map((project) => ({
+      name: project.name,
+      summary: project.summary,
+      repositories: project.repositories.map((repository) => ({
+        name: repository.name,
+        links: {
+          actions: {
+            createRequirement: `/api/v1/projects/${project.projectKey}/repositories/${repository.repositoryKey}/requirements`,
+          },
+        },
+      })),
+      links: {
+        requirements: `/api/v1/projects/${project.projectKey}/requirements`,
+      },
+    })),
+  });
   const platformValidationError = (error: z.ZodError): ApplicationError =>
     new ApplicationError(
       422,
@@ -1300,6 +1364,15 @@ export const buildControlPlaneApi = (
       "平台配置信息需要调整",
       validationDetails(error),
     );
+
+  app.get("/api/v1/requirement-contexts", async (request, reply) => {
+    const customers = await platformConfiguration.listRequirementContexts(
+      principalFrom(request),
+    );
+    return reply
+      .header("Cache-Control", "no-store")
+      .send({ data: customers.map(requirementContextView) });
+  });
 
   app.get("/api/v1/platform/customers", async (request, reply) => {
     const customers = await platformConfiguration.list(principalFrom(request));
@@ -1726,6 +1799,92 @@ export const buildControlPlaneApi = (
       meta: { nextCursor: result.nextCursor },
     });
   });
+
+  app.post(
+    "/api/v1/projects/:projectKey/repositories/:repositoryKey/requirements",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementProjectRepositoryParamsSchema.safeParse(
+        request.params,
+      );
+      const parsed = RequirementSpecSchema.safeParse(request.body);
+      if (!params.success || !parsed.success) {
+        const error = !params.success ? params.error : parsed.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "需求内容需要调整",
+          validationDetails(error),
+        );
+      }
+      await platformConfiguration.getRequirementRepository(
+        principal,
+        params.data.projectKey,
+        params.data.repositoryKey,
+      );
+      const service = requirementServiceFor(
+        params.data.projectKey,
+        params.data.repositoryKey,
+      );
+      const result = await service.create(principal, parsed.data);
+      const location = `/api/v1/projects/${params.data.projectKey}/requirements/${result.requirementKey}`;
+      return reply
+        .status(201)
+        .header("Location", location)
+        .send({ data: result.view });
+    },
+  );
+
+  app.get(
+    "/api/v1/projects/:projectKey/requirements",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementProjectParamsSchema.safeParse(request.params);
+      const query = requirementListQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) {
+        const error = !params.success ? params.error : query.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "列表条件需要调整",
+          validationDetails(error),
+        );
+      }
+      const project = await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const availableRepositories = new Set(
+        project.repositories.map((repository) => repository.repositoryKey),
+      );
+      const result = await requirementServiceFor(params.data.projectKey).list(
+        principal,
+        {
+          limit: query.data.limit,
+          ...(query.data.cursor ? { cursor: query.data.cursor } : {}),
+        },
+      );
+      const collectionPath = `/api/v1/projects/${params.data.projectKey}/requirements`;
+      return reply.send({
+        data: result.items.map((item) => ({
+          ...item.view,
+          links: requirementLinks(
+            item.requirementKey,
+            item.repositoryKey == null ||
+              !availableRepositories.has(item.repositoryKey)
+              ? item.allowedActions.filter(
+                  (action) => action !== "startDelivery",
+                )
+              : item.allowedActions,
+            principal,
+            false,
+            collectionPath,
+          ),
+        })),
+        meta: { nextCursor: result.nextCursor },
+      });
+    },
+  );
 
   app.get("/api/v1/extensions", async (request, reply) => {
     const principal = principalFrom(request);
@@ -2620,6 +2779,277 @@ export const buildControlPlaneApi = (
             links: { self },
           },
         });
+    },
+  );
+
+  app.get(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(params.error),
+        );
+      }
+      const project = await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const result = await requirementServiceFor(params.data.projectKey).get(
+        principal,
+        params.data.requirementKey,
+      );
+      const collectionPath = `/api/v1/projects/${params.data.projectKey}/requirements`;
+      return reply.send({
+        data: {
+          ...result.view,
+          spec: result.spec,
+          acceptance: result.acceptance,
+          revisions: result.revisions,
+          links: requirementLinks(
+            result.requirementKey,
+            result.repositoryKey == null ||
+              !project.repositories.some(
+                (repository) =>
+                  repository.repositoryKey === result.repositoryKey,
+              )
+              ? result.allowedActions.filter(
+                  (action) => action !== "startDelivery",
+                )
+              : result.allowedActions,
+            principal,
+            result.acceptance !== null,
+            collectionPath,
+          ),
+        },
+      });
+    },
+  );
+
+  app.get(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/revisions",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "需求版本入口需要调整",
+          validationDetails(params.error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const result = await requirementServiceFor(params.data.projectKey).get(
+        principal,
+        params.data.requirementKey,
+      );
+      return reply.send({
+        data: result.revisions,
+        links: {
+          self: `/api/v1/projects/${params.data.projectKey}/requirements/${result.requirementKey}/revisions`,
+        },
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/revisions",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      const command = requirementRevisionCommandSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        const error = !params.success ? params.error : command.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "需求修订内容需要调整",
+          validationDetails(error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const result = await requirementServiceFor(params.data.projectKey).revise(
+        principal,
+        params.data.requirementKey,
+        command.data.expectedRevision,
+        command.data.spec,
+      );
+      return reply.send({ data: result.view });
+    },
+  );
+
+  app.get(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/preview",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(params.error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const target = await requirementServiceFor(
+        params.data.projectKey,
+      ).getPreviewTarget(principal, params.data.requirementKey);
+      const artifact = await options.previewArtifactStore.get(target);
+      if (!artifact) {
+        throw new ApplicationError(
+          404,
+          "preview_artifact_not_found",
+          "效果预览暂时不可用，请稍后再试",
+        );
+      }
+      assertPreviewArtifactIntegrity(target, artifact);
+      return reply
+        .type("text/html; charset=utf-8")
+        .header("Cache-Control", "no-store")
+        .header("Content-Security-Policy", PREVIEW_CONTENT_SECURITY_POLICY)
+        .header("Cross-Origin-Resource-Policy", "same-origin")
+        .header(
+          "Permissions-Policy",
+          "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        )
+        .header("Referrer-Policy", "no-referrer")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("X-Frame-Options", "DENY")
+        .send(previewWrapper(artifact.content));
+    },
+  );
+
+  app.post(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/submit-confirmation",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      const body = emptyCommandSchema.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        const error = !params.success ? params.error : body.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const result = await requirementServiceFor(
+        params.data.projectKey,
+      ).submitForConfirmation(principal, params.data.requirementKey);
+      return reply.send({ data: result.view });
+    },
+  );
+
+  app.post(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/confirm",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      const body = emptyCommandSchema.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        const error = !params.success ? params.error : body.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const result = await requirementServiceFor(
+        params.data.projectKey,
+      ).confirm(principal, params.data.requirementKey);
+      return reply.send({ data: result.view });
+    },
+  );
+
+  app.post(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/start-delivery",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      const command = StartDeliveryCommandSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        const error = !params.success ? params.error : command.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "交付安排需要调整",
+          validationDetails(error),
+        );
+      }
+      const service = requirementServiceFor(params.data.projectKey);
+      const detail = await service.get(principal, params.data.requirementKey);
+      if (detail.repositoryKey == null) {
+        throw new ApplicationError(
+          409,
+          "requirement_repository_not_configured",
+          "这个历史需求还没有绑定代码仓库，请重新创建或联系管理员处理",
+        );
+      }
+      await platformConfiguration.getRequirementRepository(
+        principal,
+        params.data.projectKey,
+        detail.repositoryKey,
+      );
+      return reply.status(202).send({
+        data: await deliveries.requestDelivery(
+          principal,
+          params.data.requirementKey,
+          command.data,
+          { projectKey: params.data.projectKey, requirements: service },
+        ),
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/accept",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      const body = emptyCommandSchema.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        const error = !params.success ? params.error : body.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "验收请求需要调整",
+          validationDetails(error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const result = await requirementServiceFor(params.data.projectKey).accept(
+        principal,
+        params.data.requirementKey,
+      );
+      return reply.send({ data: result.view });
     },
   );
 
