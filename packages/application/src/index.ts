@@ -34,6 +34,7 @@ export {
 } from "./knowledge-base-service.js";
 export { ApplicationError } from "./errors.js";
 export type { ApplicationErrorDetail } from "./errors.js";
+export { containsLikelyPlaintextCredential } from "./credential-safety.js";
 export {
   InMemoryMcpRegistryRepository,
   type McpEnableAuditEvent,

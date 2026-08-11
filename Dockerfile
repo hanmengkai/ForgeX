@@ -5,6 +5,7 @@ COPY apps/control-plane-api/package.json ./apps/control-plane-api/package.json
 COPY apps/web-console/package.json ./apps/web-console/package.json
 COPY services/device-worker/package.json ./services/device-worker/package.json
 COPY services/verification-runner/package.json ./services/verification-runner/package.json
+COPY services/extension-admin/package.json ./services/extension-admin/package.json
 COPY packages ./packages
 COPY apps/control-plane-api ./apps/control-plane-api
 COPY tsconfig.base.json ./

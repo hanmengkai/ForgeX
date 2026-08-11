@@ -1,0 +1,16 @@
+{
+  "name": "@forgex/extension-admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "admin": "node dist/main.js",
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@forgex/application": "0.1.0",
+    "@forgex/extensions": "0.1.0",
+    "zod": "^4.0.17"
+  }
+}

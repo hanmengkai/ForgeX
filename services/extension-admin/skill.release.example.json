@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.0",
+  "name": "访客预约交付助手",
+  "summary": "帮助团队按照访客业务规则实现可验收的预约能力",
+  "sourceDirectory": "C:\\forgex-private\\extensions\\visitor-skill",
+  "compatibleBlueprints": ["Web 业务应用"],
+  "requiredCapabilities": [],
+  "permissions": {
+    "workspace": "read_only",
+    "network": "none",
+    "commands": "none"
+  }
+}

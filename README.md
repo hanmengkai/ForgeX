@@ -51,6 +51,36 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml up --build
 
 Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须在 Web 前增加 TLS，并把示例标识、摘要和数据库密码全部替换。
 
+## 可信 Skill 发布与激活
+
+浏览器不持有扩展评测私钥。仓库提供独立的本地 `extension-admin`，由受控管理员身份生成 Ed25519 评测身份、把 `SKILL.md` 与 `references/`、`assets/` 下的 Markdown/纯文本/JSON 打成内容寻址制品，再按“发布、登记独立基线评测、激活”顺序提交控制面。脚本、二进制资源、越权权限和控制面明文凭据都会失败关闭。
+
+先把管理员访问令牌放入只允许该管理员身份读取的文件，复制并填写 [bootstrap 示例](services/extension-admin/extension-admin.bootstrap.example.json)，再执行：
+
+```bash
+npm run --workspace @forgex/extension-admin build
+npm run --workspace @forgex/extension-admin admin -- bootstrap \
+  --input /private/extensions/extension-admin.bootstrap.json \
+  --output /private/extensions
+```
+
+命令会生成两组彼此独立的 Skill 评测/MCP 探测私钥、`extension-admin.config.json`，以及不含管理员令牌和私钥的 `control-plane.extensions.json`。把公钥片段中的 `skillEvaluators`、`mcpVerifiers` 合并进控制面配置，更新 `FORGEX_CONTROL_PLANE_CONFIG_SHA256` 并重启控制面；私钥、管理员令牌和后续发布包不得提交 Git。
+
+Skill 源码必须先复制到只允许扩展管理员身份访问的私有 staging 目录，目录中必须包含 `SKILL.md`；可选业务资料只放在 `references/` 或 `assets/`。`pack` 会逐项检查目录与文件的 owner、ACL/mode、非符号链接和读取前后身份，不能直接从团队共享、其他用户可写的工作树签名。复制 [发布输入示例](services/extension-admin/skill.release.example.json) 后，先离线生成一个稳定、可安全重试的发布包，再提交：
+
+```bash
+npm run --workspace @forgex/extension-admin admin -- pack \
+  --config /private/extensions/extension-admin.config.json \
+  --input /private/extensions/visitor-skill.release.json \
+  --output /private/extensions/visitor-skill.bundle.json
+
+npm run --workspace @forgex/extension-admin admin -- release \
+  --config /private/extensions/extension-admin.config.json \
+  --bundle /private/extensions/visitor-skill.bundle.json
+```
+
+`pack` 在任何网络请求前固定 `skillKey`、版本、制品摘要、评测标识和签名；响应丢失时必须重放同一个 bundle，不能重新打包。内置套件只证明规范编码、范围/摘要绑定、交付只读权限和安全文本资源这五项发布基线，不冒充业务效果评测。需要更强业务保证时应增加独立、版本化的可信评测器，不能把候选 Skill 自述当成通过证据。
+
 独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 registry digest 或本机 `sha256:<image-id>` 固定，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。验证全部通过后，Runner 会从同一权威提交中读取计划精确绑定的产品 HTML，按普通文件、路径、大小、UTF-8 和自包含资源边界校验，再把原始字节作为内容寻址 Preview 发布。控制面只在无网络、无表单提交、无跳转、无同源权限的 sandbox iframe 中展示它。Runner 只证明 Preview 与已验证提交精确绑定且能安全打开，不用标签或候选脚本替用户断言“交互已通过”；产品负责人必须实际操作该页面后再验收，固定套件证据仍独立证明业务条件。
 
 仓库随附一个真正可构建的最小独立验证镜像。它只读取只读候选工作树，检查锁文件、严格 TypeScript 基线、文件数量与大小、符号链接和敏感文件，不调用候选自己的 `npm scripts`。先构建镜像并记录内容寻址 ID：

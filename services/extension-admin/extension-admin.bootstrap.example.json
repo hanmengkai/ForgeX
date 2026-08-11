@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "administratorName": "ForgeX 扩展管理员",
+  "controlPlaneUrl": "https://forgex.example.com",
+  "administratorSessionKeyPath": "C:\\forgex-private\\extensions\\administrator.key",
+  "scope": {
+    "tenantKey": "10000000-0000-4000-8000-000000000001",
+    "projectKey": "20000000-0000-4000-8000-000000000002"
+  },
+  "requestTimeoutMs": 5000
+}

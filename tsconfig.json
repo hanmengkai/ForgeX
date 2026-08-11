@@ -9,6 +9,7 @@
     { "path": "./apps/control-plane-api" },
     { "path": "./apps/web-console" },
     { "path": "./services/device-worker" },
-    { "path": "./services/verification-runner" }
+    { "path": "./services/verification-runner" },
+    { "path": "./services/extension-admin" }
   ]
 }

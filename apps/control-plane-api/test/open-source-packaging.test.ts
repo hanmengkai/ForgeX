@@ -51,6 +51,9 @@ describe("开源交付包装", () => {
     expect(dockerfile).toContain("USER node");
     expect(dockerfile).not.toContain("COPY services ./services");
     expect(dockerfile).not.toContain("/app /app");
+    expect(dockerfile).toContain(
+      "COPY services/extension-admin/package.json ./services/extension-admin/package.json",
+    );
     expect(webDockerfile).toContain("nginx-unprivileged");
     expect(dockerignore).toContain("**/*.config.json");
     expect(dockerignore).toContain("test-results");
