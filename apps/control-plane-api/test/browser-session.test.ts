@@ -33,4 +33,13 @@ describe("浏览器服务端会话", () => {
     await expect(sessions.authenticate(first)).resolves.toBeNull();
     await expect(sessions.authenticate(second)).resolves.toEqual(principal);
   });
+
+  it("账号权限变化后可按租户和人员撤销现有会话", async () => {
+    const sessions = new InMemoryBrowserSessionManager();
+    const token = await sessions.create(principal, 60);
+
+    await sessions.revokePrincipal(principal.tenantKey, principal.actorKey);
+
+    await expect(sessions.authenticate(token)).resolves.toBeNull();
+  });
 });

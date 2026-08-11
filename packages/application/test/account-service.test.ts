@@ -117,9 +117,9 @@ describe("平台账号管理", () => {
     await service.delete(administrator, created.accountKey, {
       expectedRevision: 2,
     });
-    expect((await service.list(administrator)).map((item) => item.username)).not.toContain(
-      "developer.one",
-    );
+    expect(
+      (await service.list(administrator)).map((item) => item.username),
+    ).not.toContain("developer.one");
   });
 
   it("普通成员不能管理账号，且不能删除最后一个可用管理员", async () => {

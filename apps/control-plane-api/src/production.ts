@@ -2,6 +2,10 @@ import type { FastifyInstance, FastifyServerOptions } from "fastify";
 
 import { EvidenceAuthority } from "@forgex/domain";
 import {
+  AccountAdministrationService,
+  type AccountRepository,
+} from "@forgex/application";
+import {
   McpHealthAuthority,
   SkillEvaluationAuthority,
 } from "@forgex/extensions";
@@ -17,6 +21,7 @@ import {
   PostgresSkillArtifactStore,
   PostgresSkillRegistryRepository,
   PostgresWorkerFleetRepository,
+  PostgresAccountRepository,
   type PostgresPool,
   type PostgresMigration,
   type PostgresQueryResult,
@@ -40,6 +45,7 @@ export interface ProductionControlPlaneOptions {
   authRealmRevision: string;
   pool: ProductionPostgresPool;
   migrations: readonly PostgresMigration[];
+  accountRepository?: AccountRepository;
   serviceVersion?: string;
   logger?: FastifyServerOptions["logger"];
 }
@@ -58,6 +64,9 @@ export const createProductionControlPlane = (
   });
 
   return buildControlPlaneApi({
+    accountService: new AccountAdministrationService(
+      options.accountRepository ?? new PostgresAccountRepository(options.pool),
+    ),
     authenticator: new HashedSessionAuthenticator(options.config.sessions),
     browserSessionManager: new PostgresBrowserSessionManager(options.pool, {
       projectKey: options.config.projectKey,

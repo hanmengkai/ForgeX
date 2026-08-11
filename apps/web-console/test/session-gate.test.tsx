@@ -16,6 +16,10 @@ const createClient = (): ForgeXClient => ({
   }),
   getSession: vi.fn().mockRejectedValue(new Error("请先登录")),
   endSession: vi.fn().mockResolvedValue(undefined),
+  listAccounts: vi.fn().mockResolvedValue([]),
+  createAccount: vi.fn(),
+  updateAccount: vi.fn(),
+  deleteAccount: vi.fn(),
   listRequirements: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [],

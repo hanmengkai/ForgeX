@@ -11,7 +11,7 @@ import {
   within,
 } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   RequirementWorkbench,
@@ -57,6 +57,10 @@ const createClient = (): ForgeXClient => ({
   startSession: vi.fn(),
   getSession: vi.fn(),
   endSession: vi.fn(),
+  listAccounts: vi.fn().mockResolvedValue([]),
+  createAccount: vi.fn(),
+  updateAccount: vi.fn(),
+  deleteAccount: vi.fn(),
   listRequirements: vi.fn().mockResolvedValue({ items, nextCursor: null }),
   listExtensions: vi.fn().mockResolvedValue({
     businessKnowledge: [],
@@ -152,7 +156,12 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
-afterEach(cleanup);
+beforeEach(() => window.history.replaceState(null, "", "/requirements"));
+
+afterEach(() => {
+  cleanup();
+  window.history.replaceState(null, "", "/");
+});
 
 describe("RequirementWorkbench", () => {
   it("用业务语言展示需求、进度和下一步，不暴露内部标识", async () => {
@@ -209,7 +218,7 @@ describe("RequirementWorkbench", () => {
     const client = createClient();
     render(<RequirementWorkbench client={client} />);
 
-    await user.click(screen.getByRole("button", { name: "设备中心" }));
+    await user.click(screen.getByRole("link", { name: "设备与 Agent" }));
 
     expect(await screen.findByText("2 / 5 个账户已连接")).toBeInTheDocument();
     expect(screen.getByText("研发电脑 1")).toBeInTheDocument();
@@ -239,7 +248,7 @@ describe("RequirementWorkbench", () => {
     });
     render(<RequirementWorkbench client={client} />);
 
-    await user.click(screen.getByRole("button", { name: "设备中心" }));
+    await user.click(screen.getByRole("link", { name: "设备与 Agent" }));
     await user.click(await screen.findByRole("button", { name: "连接新设备" }));
     await user.type(screen.getByLabelText("设备名称"), "研发电脑 1");
     await user.type(screen.getByLabelText(/Codex 账户昵称/u), "Codex 账户 1");
@@ -372,7 +381,7 @@ describe("RequirementWorkbench", () => {
       .mockResolvedValueOnce(undefined);
     render(<RequirementWorkbench client={client} />);
 
-    await user.click(screen.getByRole("button", { name: "扩展中心" }));
+    await user.click(screen.getByRole("link", { name: "扩展中心" }));
 
     expect(await screen.findByText("访客业务资料")).toBeInTheDocument();
     expect(screen.getByText("需求风险检查")).toBeInTheDocument();
@@ -477,7 +486,7 @@ describe("RequirementWorkbench", () => {
     vi.mocked(client.publishKnowledgeSource).mockResolvedValue(undefined);
     render(<RequirementWorkbench client={client} />);
 
-    await user.click(screen.getByRole("button", { name: "扩展中心" }));
+    await user.click(screen.getByRole("link", { name: "扩展中心" }));
     expect(
       await screen.findByRole("button", { name: "新建资料库" }),
     ).toBeInTheDocument();

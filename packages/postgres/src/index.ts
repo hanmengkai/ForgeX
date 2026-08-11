@@ -26,3 +26,7 @@ export {
   PostgresKnowledgeBaseRepository,
   createPostgresKnowledgeBaseRepository,
 } from "./postgres-knowledge-base-repository.js";
+export {
+  PostgresAccountRepository,
+  type PostgresAccountPool,
+} from "./postgres-account-repository.js";

@@ -37,6 +37,9 @@ services:
       FORGEX_DATABASE_URL: ${FORGEX_DATABASE_URL:?请设置已完成 URL 编码的 FORGEX_DATABASE_URL}
       FORGEX_CONTROL_PLANE_CONFIG: /run/forgex/control-plane.json
       FORGEX_CONTROL_PLANE_CONFIG_SHA256: ${FORGEX_CONTROL_PLANE_CONFIG_SHA256:?请设置控制面配置 SHA-256}
+      FORGEX_BOOTSTRAP_ADMIN_USERNAME: ${FORGEX_BOOTSTRAP_ADMIN_USERNAME:-}
+      FORGEX_BOOTSTRAP_ADMIN_NAME: ${FORGEX_BOOTSTRAP_ADMIN_NAME:-超级管理员}
+      FORGEX_BOOTSTRAP_ADMIN_PASSWORD: ${FORGEX_BOOTSTRAP_ADMIN_PASSWORD:-}
     volumes:
       - ./config/control-plane.json:/run/forgex/control-plane.json:ro
     depends_on:
@@ -60,6 +63,7 @@ services:
       dockerfile: apps/web-console/Dockerfile
       args:
         VITE_FORGEX_PROJECT_NAME: ${VITE_FORGEX_PROJECT_NAME:-我的项目}
+        VITE_FORGEX_AGENT_DOWNLOAD_URL: ${VITE_FORGEX_AGENT_DOWNLOAD_URL:-https://gitee.com/hmk_855_admin/forge-x/repository/archive/master.zip}
     restart: unless-stopped
     ports:
       - "${FORGEX_HTTP_PORT:-8080}:8080"

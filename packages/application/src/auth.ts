@@ -4,6 +4,7 @@ export type PlatformRole =
 export interface AuthenticatedPrincipal {
   actorKey: string;
   actorName: string;
+  username?: string | undefined;
   tenantKey: string;
   roles: PlatformRole[];
 }

@@ -87,4 +87,11 @@ export class PostgresBrowserSessionManager implements BrowserSessionManager {
       ],
     );
   }
+
+  async revokePrincipal(tenantKey: string, actorKey: string): Promise<void> {
+    await this.#pool.query(
+      "DELETE FROM forgex_browser_sessions WHERE tenant_key = $1 AND actor_key = $2 AND project_key = $3 AND repository_key = $4",
+      [tenantKey, actorKey, this.#projectKey, this.#repositoryKey],
+    );
+  }
 }

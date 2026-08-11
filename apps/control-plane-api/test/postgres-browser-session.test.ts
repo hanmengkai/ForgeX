@@ -82,6 +82,31 @@ const createFakePool = (): ProductionPostgresPool => {
         );
         return { rows: record ? [{ principal: record.principal }] : [] };
       }
+      if (
+        text.startsWith(
+          "DELETE FROM forgex_browser_sessions WHERE tenant_key = $1",
+        )
+      ) {
+        const [
+          storedTenantKey,
+          storedActorKey,
+          storedProjectKey,
+          storedRepositoryKey,
+        ] = values as string[];
+        for (let index = records.length - 1; index >= 0; index -= 1) {
+          const candidate = records[index];
+          if (!candidate) continue;
+          if (
+            candidate.tenantKey === storedTenantKey &&
+            candidate.actorKey === storedActorKey &&
+            candidate.projectKey === storedProjectKey &&
+            candidate.repositoryKey === storedRepositoryKey
+          ) {
+            records.splice(index, 1);
+          }
+        }
+        return { rows: [] };
+      }
       if (text.startsWith("DELETE FROM forgex_browser_sessions")) {
         const [sessionDigest, storedProjectKey, storedRepositoryKey, realm] =
           values as string[];
@@ -129,5 +154,8 @@ describe("PostgreSQL 浏览器会话", () => {
     const second = await sessions.create(principal, 3_600);
     await expect(sessions.authenticate(first)).resolves.toBeNull();
     await expect(sessions.authenticate(second)).resolves.toEqual(principal);
+
+    await sessions.revokePrincipal(tenantKey, actorKey);
+    await expect(sessions.authenticate(second)).resolves.toBeNull();
   });
 });

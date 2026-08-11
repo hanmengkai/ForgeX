@@ -9,14 +9,28 @@ import {
 
 import type {
   ForgeXClient,
+  PlatformRole,
   RequirementActionLinks,
   RequirementDetail,
   RequirementListItem,
   RequirementSpecInput,
 } from "./api.js";
+import { AccountManagement } from "./account-management.js";
 import { CreateRequirementDialog } from "./create-requirement-dialog.js";
+import { DashboardOverview } from "./dashboard-overview.js";
 import { ExtensionCenter } from "./extension-center.js";
-import { ArrowIcon, CheckIcon, PlusIcon, SparkIcon } from "./icons.js";
+import {
+  AgentIcon,
+  ApprovalIcon,
+  ArrowIcon,
+  CheckIcon,
+  DashboardIcon,
+  ExtensionIcon,
+  PlusIcon,
+  RequirementIcon,
+  SparkIcon,
+  UserIcon,
+} from "./icons.js";
 import { McpInvocationCenter } from "./mcp-invocation-center.js";
 import { SkillSelectionDialog } from "./skill-selection-dialog.js";
 import { WorkerCenter } from "./worker-center.js";
@@ -25,9 +39,42 @@ interface RequirementWorkbenchProps {
   client: ForgeXClient;
   projectName?: string;
   actorName?: string;
+  actorUsername?: string;
+  roles?: PlatformRole[];
   onSignOut?: () => Promise<void>;
   signingOut?: boolean;
 }
+
+type ConsoleView =
+  | "dashboard"
+  | "requirements"
+  | "workers"
+  | "extensions"
+  | "approvals"
+  | "accounts";
+
+const pathByView: Record<ConsoleView, string> = {
+  dashboard: "/dashboard",
+  requirements: "/requirements",
+  workers: "/agents",
+  extensions: "/extensions",
+  approvals: "/approvals",
+  accounts: "/platform/accounts",
+};
+
+const viewFromPath = (path: string): ConsoleView => {
+  const entry = Object.entries(pathByView).find(
+    ([, candidate]) => candidate === path,
+  );
+  return (entry?.[0] as ConsoleView | undefined) ?? "dashboard";
+};
+
+const roleLabel = (roles: readonly PlatformRole[]): string => {
+  if (roles.includes("administrator")) return "超级管理员";
+  if (roles.includes("product_owner")) return "产品负责人";
+  if (roles.includes("requirement_analyst")) return "需求分析师";
+  return "研发成员";
+};
 
 const actionEntries = (
   actions: RequirementActionLinks,
@@ -730,16 +777,25 @@ export function RequirementWorkbench({
   client,
   projectName = "我的项目",
   actorName,
+  actorUsername,
+  roles = [],
   onSignOut,
   signingOut = false,
 }: RequirementWorkbenchProps) {
+  const isAdministrator = roles.includes("administrator");
   const [items, setItems] = useState<RequirementListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [activeView, setActiveView] = useState<
-    "workbench" | "workers" | "extensions" | "approvals"
-  >("workbench");
+  const [activeView, setActiveView] = useState<ConsoleView>(() =>
+    viewFromPath(window.location.pathname),
+  );
+  const [workerOverview, setWorkerOverview] = useState<Awaited<
+    ReturnType<ForgeXClient["listWorkers"]>
+  > | null>(null);
+  const [workerOverviewError, setWorkerOverviewError] = useState<string | null>(
+    null,
+  );
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pendingDelivery, setPendingDelivery] = useState<{
     actionUrl: string;
@@ -757,6 +813,19 @@ export function RequirementWorkbench({
   const expandedDetailRef = useRef<string | null>(null);
   const actionActiveRef = useRef(false);
   const mountedRef = useRef(true);
+
+  const navigate = useCallback((path: string, replace = false) => {
+    const view = viewFromPath(path);
+    const normalizedPath = pathByView[view];
+    if (window.location.pathname !== normalizedPath) {
+      window.history[replace ? "replaceState" : "pushState"](
+        { view },
+        "",
+        normalizedPath,
+      );
+    }
+    setActiveView(view);
+  }, []);
 
   const load = useCallback(async () => {
     const generation = ++loadGenerationRef.current;
@@ -784,13 +853,43 @@ export function RequirementWorkbench({
   useEffect(() => {
     mountedRef.current = true;
     void load();
+    if (
+      window.location.pathname === "/" ||
+      !Object.values(pathByView).includes(window.location.pathname)
+    ) {
+      navigate(pathByView.dashboard, true);
+    }
+    const onPopState = () =>
+      setActiveView(viewFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPopState);
+    void client
+      .listWorkers()
+      .then((overview) => {
+        if (mountedRef.current) setWorkerOverview(overview);
+      })
+      .catch((caught: unknown) => {
+        if (mountedRef.current) {
+          setWorkerOverviewError(
+            caught instanceof Error
+              ? caught.message
+              : "暂时无法读取 Agent 状态",
+          );
+        }
+      });
     return () => {
       mountedRef.current = false;
       loadGenerationRef.current += 1;
       detailGenerationRef.current += 1;
       expandedDetailRef.current = null;
+      window.removeEventListener("popstate", onPopState);
     };
-  }, [load]);
+  }, [client, load, navigate]);
+
+  useEffect(() => {
+    if (activeView === "accounts" && !isAdministrator) {
+      navigate(pathByView.dashboard, true);
+    }
+  }, [activeView, isAdministrator, navigate]);
 
   const summary = useMemo(
     () => ({
@@ -949,80 +1048,93 @@ export function RequirementWorkbench({
           </span>
           <span>
             <strong>ForgeX</strong>
-            <small>AI 交付工作台</small>
-          </span>
-        </div>
-        <div className="project-chip">
-          <span className="project-avatar">{projectName.slice(0, 1)}</span>
-          <span>
-            <small>当前项目</small>
-            <strong>{projectName}</strong>
+            <small>AI DELIVERY OS</small>
           </span>
         </div>
         <nav aria-label="主导航">
-          <button
-            className={`nav-item ${activeView === "workbench" ? "active" : ""}`}
-            type="button"
+          <span className="nav-group-label">业务工作</span>
+          <a
+            className={`nav-item ${activeView === "dashboard" ? "active" : ""}`}
+            href={pathByView.dashboard}
             aria-label="工作台"
-            aria-current={activeView === "workbench" ? "page" : undefined}
-            onClick={() => setActiveView("workbench")}
+            aria-current={activeView === "dashboard" ? "page" : undefined}
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(pathByView.dashboard);
+            }}
           >
-            <span>⌂</span>工作台
-          </button>
-          <button
-            className="nav-item"
-            type="button"
-            aria-label="需求"
-            onClick={() => setActiveView("workbench")}
+            <DashboardIcon />
+            工作台
+          </a>
+          <a
+            className={`nav-item ${activeView === "requirements" ? "active" : ""}`}
+            href={pathByView.requirements}
+            aria-label="需求管理"
+            aria-current={activeView === "requirements" ? "page" : undefined}
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(pathByView.requirements);
+            }}
           >
-            <span>◫</span>需求
-          </button>
-          <button
-            className={`nav-item ${activeView === "workers" ? "active" : ""}`}
-            type="button"
-            aria-label="设备中心"
-            aria-current={activeView === "workers" ? "page" : undefined}
-            onClick={() => setActiveView("workers")}
-          >
-            <span>⌘</span>设备中心
-          </button>
-          <span className="nav-item disabled" aria-disabled="true">
-            <span>✓</span>质量与验收
-          </span>
-          <button
+            <RequirementIcon />
+            需求管理
+          </a>
+          <a
             className={`nav-item ${activeView === "approvals" ? "active" : ""}`}
-            type="button"
+            href={pathByView.approvals}
             aria-label="操作确认"
             aria-current={activeView === "approvals" ? "page" : undefined}
-            onClick={() => setActiveView("approvals")}
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(pathByView.approvals);
+            }}
           >
-            <span>✓</span>操作确认
-          </button>
-          <button
+            <ApprovalIcon />
+            操作确认
+          </a>
+          <span className="nav-group-label">平台管理</span>
+          <a
+            className={`nav-item ${activeView === "workers" ? "active" : ""}`}
+            href={pathByView.workers}
+            aria-label="设备与 Agent"
+            aria-current={activeView === "workers" ? "page" : undefined}
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(pathByView.workers);
+            }}
+          >
+            <AgentIcon />
+            设备与 Agent
+          </a>
+          <a
             className={`nav-item ${activeView === "extensions" ? "active" : ""}`}
-            type="button"
+            href={pathByView.extensions}
             aria-label="扩展中心"
             aria-current={activeView === "extensions" ? "page" : undefined}
-            onClick={() => setActiveView("extensions")}
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(pathByView.extensions);
+            }}
           >
-            <span>◇</span>扩展中心
-          </button>
-        </nav>
-        {actorName && onSignOut ? (
-          <div className="session-profile">
-            <span>
-              <small>当前用户</small>
-              <strong>{actorName}</strong>
-            </span>
-            <button
-              type="button"
-              disabled={signingOut}
-              onClick={() => void onSignOut()}
+            <ExtensionIcon />
+            扩展中心
+          </a>
+          {isAdministrator ? (
+            <a
+              className={`nav-item ${activeView === "accounts" ? "active" : ""}`}
+              href={pathByView.accounts}
+              aria-label="账号管理"
+              aria-current={activeView === "accounts" ? "page" : undefined}
+              onClick={(event) => {
+                event.preventDefault();
+                navigate(pathByView.accounts);
+              }}
             >
-              {signingOut ? "正在退出…" : "退出登录"}
-            </button>
-          </div>
-        ) : null}
+              <UserIcon />
+              账号管理
+            </a>
+          ) : null}
+        </nav>
         <div className="sidebar-note">
           <CheckIcon />
           <span>
@@ -1033,115 +1145,169 @@ export function RequirementWorkbench({
       </aside>
 
       <main className="workspace" id={activeView}>
-        {activeView === "approvals" ? (
-          <McpInvocationCenter client={client} />
-        ) : activeView === "extensions" ? (
-          <ExtensionCenter client={client} />
-        ) : activeView === "workers" ? (
-          <WorkerCenter client={client} />
-        ) : (
-          <>
-            <header className="topbar">
-              <div>
-                <span className="eyebrow">今天的交付概况</span>
-                <h1>你好，欢迎回来</h1>
-                <p>先处理需要判断的事项，其余工作交给 AI 和独立验证流程。</p>
-              </div>
+        <header className="workspace-header">
+          <div className="workspace-context">
+            <span className="system-indicator" aria-label="平台在线" />
+            <span>
+              <small>当前状态</small>
+              <strong>系统在线</strong>
+            </span>
+          </div>
+          <div className="workspace-account">
+            <span className="account-avatar compact">
+              <UserIcon />
+            </span>
+            <span>
+              <strong>{actorName ?? "本地开发"}</strong>
+              <small>{actorUsername ?? roleLabel(roles)}</small>
+            </span>
+            {roles.length > 0 ? (
+              <span className="top-role">角色：{roleLabel(roles)}</span>
+            ) : null}
+            {onSignOut ? (
               <button
-                className="button primary"
                 type="button"
-                onClick={() => setCreating(true)}
+                disabled={signingOut}
+                onClick={() => void onSignOut()}
               >
-                <PlusIcon />
-                新建需求
+                {signingOut ? "正在退出…" : "退出登录"}
               </button>
-            </header>
-
-            <section className="summary-grid" aria-label="需求概况">
-              <div className="summary-card attention">
-                <span>需要我处理</span>
-                <strong>{summary.needsAction}</strong>
-                <small>确认或安排交付</small>
-              </div>
-              <div className="summary-card running">
-                <span>AI 正在执行</span>
-                <strong>{summary.running}</strong>
-                <small>设备并行处理中</small>
-              </div>
-              <div className="summary-card neutral">
-                <span>等待我验收</span>
-                <strong>{summary.accepting}</strong>
-                <small>可查看真实效果</small>
-              </div>
-              <div className="summary-card success">
-                <span>本轮已完成</span>
-                <strong>{summary.completed}</strong>
-                <small>证据链完整</small>
-              </div>
-            </section>
-
-            <section className="content-section" id="requirements">
-              <div className="section-heading">
+            ) : null}
+          </div>
+        </header>
+        <div className="workspace-body">
+          {activeView === "dashboard" ? (
+            <DashboardOverview
+              projectName={projectName}
+              items={items}
+              workers={workerOverview}
+              loading={loading}
+              error={error ?? workerOverviewError}
+              onNavigate={navigate}
+            />
+          ) : activeView === "approvals" ? (
+            <McpInvocationCenter client={client} />
+          ) : activeView === "extensions" ? (
+            <ExtensionCenter client={client} />
+          ) : activeView === "workers" ? (
+            <WorkerCenter client={client} initialOverview={workerOverview} />
+          ) : activeView === "accounts" && isAdministrator ? (
+            <AccountManagement client={client} />
+          ) : activeView === "requirements" ? (
+            <>
+              <header className="topbar">
                 <div>
-                  <span className="eyebrow">需求主线</span>
-                  <h2>正在推进的工作</h2>
+                  <span className="eyebrow">REQUIREMENT FLOW</span>
+                  <h1>需求管理</h1>
+                  <p>查看业务目标、交付状态和下一步需要人员判断的事项。</p>
                 </div>
-                <span className="filter-button">共 {items.length} 项</span>
-              </div>
+                <button
+                  className="button primary"
+                  type="button"
+                  onClick={() => setCreating(true)}
+                >
+                  <PlusIcon />
+                  新建需求
+                </button>
+              </header>
 
-              {error ? (
-                <div className="page-error" role="alert">
-                  {error}
-                  <button type="button" onClick={() => void load()}>
-                    重新加载
-                  </button>
+              <section className="summary-grid" aria-label="需求概况">
+                <div className="summary-card attention">
+                  <span>需要我处理</span>
+                  <strong>{summary.needsAction}</strong>
+                  <small>确认或安排交付</small>
                 </div>
-              ) : null}
-              {loading ? (
-                <div className="loading-state" role="status">
-                  正在整理需求进度…
+                <div className="summary-card running">
+                  <span>AI 正在执行</span>
+                  <strong>{summary.running}</strong>
+                  <small>设备并行处理中</small>
                 </div>
-              ) : items.length === 0 && !error ? (
-                <div className="empty-state">
-                  <SparkIcon />
-                  <h3>从第一个业务目标开始</h3>
-                  <p>创建需求后，ForgeX 会引导确认、实现和验证。</p>
-                  <button
-                    className="button primary"
-                    type="button"
-                    onClick={() => setCreating(true)}
-                  >
-                    新建需求
-                  </button>
+                <div className="summary-card neutral">
+                  <span>等待我验收</span>
+                  <strong>{summary.accepting}</strong>
+                  <small>可查看真实效果</small>
                 </div>
-              ) : items.length > 0 ? (
-                <div className="requirement-list">
-                  {items.map((item) => (
-                    <RequirementCard
-                      key={item.links.self}
-                      item={item}
-                      busyAction={busyAction}
-                      actionsBusy={busyAction !== null}
-                      expanded={expandedDetail === item.links.self}
-                      detail={
-                        expandedDetail === item.links.self ? detail : null
-                      }
-                      detailError={
-                        expandedDetail === item.links.self ? detailError : null
-                      }
-                      detailLoading={
-                        expandedDetail === item.links.self && detailLoading
-                      }
-                      onAction={runAction}
-                      onRevise={reviseRequirement}
-                      onToggleDetail={toggleDetail}
-                    />
-                  ))}
+                <div className="summary-card success">
+                  <span>本轮已完成</span>
+                  <strong>{summary.completed}</strong>
+                  <small>证据链完整</small>
                 </div>
-              ) : null}
-            </section>
-          </>
-        )}
+              </section>
+
+              <section className="content-section" id="requirements">
+                <div className="section-heading">
+                  <div>
+                    <span className="eyebrow">需求主线</span>
+                    <h2>正在推进的工作</h2>
+                  </div>
+                  <span className="filter-button">共 {items.length} 项</span>
+                </div>
+
+                {error ? (
+                  <div className="page-error" role="alert">
+                    {error}
+                    <button type="button" onClick={() => void load()}>
+                      重新加载
+                    </button>
+                  </div>
+                ) : null}
+                {loading ? (
+                  <div className="loading-state" role="status">
+                    正在整理需求进度…
+                  </div>
+                ) : items.length === 0 && !error ? (
+                  <div className="empty-state">
+                    <SparkIcon />
+                    <h3>从第一个业务目标开始</h3>
+                    <p>创建需求后，ForgeX 会引导确认、实现和验证。</p>
+                    <button
+                      className="button primary"
+                      type="button"
+                      onClick={() => setCreating(true)}
+                    >
+                      新建需求
+                    </button>
+                  </div>
+                ) : items.length > 0 ? (
+                  <div className="requirement-list">
+                    {items.map((item) => (
+                      <RequirementCard
+                        key={item.links.self}
+                        item={item}
+                        busyAction={busyAction}
+                        actionsBusy={busyAction !== null}
+                        expanded={expandedDetail === item.links.self}
+                        detail={
+                          expandedDetail === item.links.self ? detail : null
+                        }
+                        detailError={
+                          expandedDetail === item.links.self
+                            ? detailError
+                            : null
+                        }
+                        detailLoading={
+                          expandedDetail === item.links.self && detailLoading
+                        }
+                        onAction={runAction}
+                        onRevise={reviseRequirement}
+                        onToggleDetail={toggleDetail}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+            </>
+          ) : (
+            <DashboardOverview
+              projectName={projectName}
+              items={items}
+              workers={workerOverview}
+              loading={loading}
+              error={error ?? workerOverviewError}
+              onNavigate={navigate}
+            />
+          )}
+        </div>
       </main>
 
       {creating ? (

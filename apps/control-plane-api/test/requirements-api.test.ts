@@ -334,7 +334,13 @@ describe("需求 API", () => {
       headers: { authorization: "Bearer product-session" },
     });
     expect(login.statusCode).toBe(200);
-    expect(login.json()).toEqual({ data: { actorName: "产品负责人" } });
+    expect(login.json()).toEqual({
+      data: {
+        actorName: "产品负责人",
+        username: "产品负责人",
+        roles: ["product_owner"],
+      },
+    });
     const cookie = login.headers["set-cookie"];
     expect(cookie).toMatch(/forgex_session=[A-Za-z0-9_-]{43}/u);
     expect(cookie).not.toContain("product-session");
@@ -348,7 +354,13 @@ describe("需求 API", () => {
       headers: { cookie },
     });
     expect(current.statusCode).toBe(200);
-    expect(current.json()).toEqual({ data: { actorName: "产品负责人" } });
+    expect(current.json()).toEqual({
+      data: {
+        actorName: "产品负责人",
+        username: "产品负责人",
+        roles: ["product_owner"],
+      },
+    });
 
     const logout = await app.inject({
       method: "DELETE",

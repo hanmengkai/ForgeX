@@ -183,8 +183,35 @@ export interface KnowledgeSourcePublishInput {
 
 export type ExtensionCatalogItem = ExtensionItemForPeople;
 export type ExtensionCatalogOverview = ExtensionCatalogOverviewForPeople;
+export type PlatformRole =
+  "product_owner" | "requirement_analyst" | "developer" | "administrator";
 export interface SessionProfile {
   actorName: string;
+  username: string;
+  roles: PlatformRole[];
+}
+
+export interface PlatformAccountItem {
+  username: string;
+  actorName: string;
+  roles: PlatformRole[];
+  enabled: boolean;
+  revision: number;
+  links: { self: string };
+}
+
+export interface AccountCreateInput {
+  username: string;
+  actorName: string;
+  roles: PlatformRole[];
+  password: string;
+}
+
+export interface AccountUpdateInput {
+  actorName: string;
+  roles: PlatformRole[];
+  enabled: boolean;
+  password?: string;
 }
 
 export class ForgeXHttpError extends Error {
@@ -198,9 +225,20 @@ export class ForgeXHttpError extends Error {
 }
 
 export interface ForgeXClient {
-  startSession(token: string): Promise<SessionProfile>;
+  startSession(input: {
+    username: string;
+    password: string;
+  }): Promise<SessionProfile>;
   getSession(): Promise<SessionProfile>;
   endSession(): Promise<void>;
+  listAccounts(): Promise<PlatformAccountItem[]>;
+  createAccount(input: AccountCreateInput): Promise<void>;
+  updateAccount(
+    selfUrl: string,
+    expectedRevision: number,
+    input: AccountUpdateInput,
+  ): Promise<void>;
+  deleteAccount(selfUrl: string, expectedRevision: number): Promise<void>;
   listRequirements(): Promise<RequirementListPage>;
   listWorkers(): Promise<WorkerFleetOverview>;
   connectWorker(
@@ -257,10 +295,51 @@ const requirementStatuses = [
 ] as const;
 const sessionResponseSchema = z
   .object({
-    data: z.object({ actorName: z.string().trim().min(2).max(100) }).strict(),
+    data: z
+      .object({
+        actorName: z.string().trim().min(2).max(100),
+        username: z.string().trim().min(3).max(64),
+        roles: z
+          .array(
+            z.enum([
+              "product_owner",
+              "requirement_analyst",
+              "developer",
+              "administrator",
+            ]),
+          )
+          .min(1)
+          .max(4),
+      })
+      .strict(),
   })
   .strict();
-const accessTokenPattern = /^[A-Za-z0-9._~-]{24,512}$/u;
+const usernamePattern = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u;
+const accountSelfPattern =
+  /^\/api\/v1\/accounts\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const platformAccountSchema = z
+  .object({
+    username: z.string().trim().min(3).max(64),
+    actorName: z.string().trim().min(2).max(100),
+    roles: z
+      .array(
+        z.enum([
+          "product_owner",
+          "requirement_analyst",
+          "developer",
+          "administrator",
+        ]),
+      )
+      .min(1)
+      .max(4),
+    enabled: z.boolean(),
+    revision: z.number().int().positive(),
+    links: z.object({ self: z.string().regex(accountSelfPattern) }).strict(),
+  })
+  .strict();
+const accountListResponseSchema = z
+  .object({ data: z.array(platformAccountSchema).max(500) })
+  .strict();
 const requirementSelfPattern =
   /^\/api\/v1\/requirements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const actionSuffixes = {
@@ -936,13 +1015,24 @@ export const createHttpForgeXClient = (
   };
 
   return {
-    startSession: async (token) => {
-      if (!accessTokenPattern.test(token)) {
-        throw new Error("访问令牌格式不正确，请检查后重试");
+    startSession: async (input) => {
+      const username = input.username.trim().toLowerCase();
+      if (
+        username.length < 3 ||
+        username.length > 64 ||
+        !usernamePattern.test(username) ||
+        input.password.length < 12 ||
+        input.password.length > 128
+      ) {
+        throw new Error("账号或密码格式不正确，请检查后重试");
       }
       const response = await request("/api/v1/session", {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          username,
+          password: input.password,
+        }),
       });
       const parsed = sessionResponseSchema.safeParse(await response.json());
       if (!parsed.success) {
@@ -960,6 +1050,42 @@ export const createHttpForgeXClient = (
     },
     endSession: async () => {
       await request("/api/v1/session", { method: "DELETE" });
+    },
+    listAccounts: async () => {
+      const response = await request("/api/v1/accounts");
+      const parsed = accountListResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        throw new Error("账号列表格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
+    },
+    createAccount: async (input) => {
+      await request("/api/v1/accounts", {
+        method: "POST",
+        body: JSON.stringify({ schemaVersion: 1, ...input }),
+      });
+    },
+    updateAccount: async (selfUrl, expectedRevision, input) => {
+      if (!accountSelfPattern.test(selfUrl)) {
+        throw new Error("账号编辑入口已经失效，请刷新后重试");
+      }
+      await request(selfUrl, {
+        method: "PATCH",
+        body: JSON.stringify({
+          schemaVersion: 1,
+          expectedRevision,
+          ...input,
+        }),
+      });
+    },
+    deleteAccount: async (selfUrl, expectedRevision) => {
+      if (!accountSelfPattern.test(selfUrl)) {
+        throw new Error("账号删除入口已经失效，请刷新后重试");
+      }
+      await request(selfUrl, {
+        method: "DELETE",
+        body: JSON.stringify({ schemaVersion: 1, expectedRevision }),
+      });
     },
     listRequirements: async () => {
       const response = await request("/api/v1/requirements?limit=100");

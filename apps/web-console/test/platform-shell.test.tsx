@@ -59,7 +59,9 @@ const createClient = (): ForgeXClient =>
         actorName: "超级管理员",
         roles: ["administrator"],
         enabled: true,
-        links: { self: "/api/v1/accounts/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+        links: {
+          self: "/api/v1/accounts/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
       },
     ]),
     createAccount: vi.fn(),
@@ -110,7 +112,9 @@ describe("ForgeX 控制台框架", () => {
     expect(screen.getByText("平台运行正常")).toBeInTheDocument();
     expect(screen.getByText("super.admin")).toBeInTheDocument();
     expect(screen.getByText("超级管理员")).toBeInTheDocument();
-    expect(document.querySelectorAll(".dashboard-card .icon").length).toBeGreaterThan(2);
+    expect(
+      document.querySelectorAll(".dashboard-card .icon").length,
+    ).toBeGreaterThan(2);
   });
 
   it("菜单按业务和平台分组，并将前进后退与地址栏同步", async () => {
@@ -128,9 +132,10 @@ describe("ForgeX 控制台框架", () => {
 
     await userEvent.click(screen.getByRole("link", { name: "需求管理" }));
     expect(window.location.pathname).toBe("/requirements");
-    expect(
-      screen.getByRole("link", { name: "需求管理" }),
-    ).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "需求管理" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
 
     await userEvent.click(screen.getByRole("link", { name: "设备与 Agent" }));
     expect(window.location.pathname).toBe("/agents");
@@ -139,9 +144,10 @@ describe("ForgeX 控制台框架", () => {
     window.history.back();
     window.dispatchEvent(new PopStateEvent("popstate"));
     await waitFor(() => expect(window.location.pathname).toBe("/requirements"));
-    expect(
-      screen.getByRole("link", { name: "需求管理" }),
-    ).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "需求管理" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   it("超级管理员可进入账号管理并看到完整 CRUD 入口", async () => {
@@ -157,10 +163,37 @@ describe("ForgeX 控制台框架", () => {
 
     await userEvent.click(screen.getByRole("link", { name: "账号管理" }));
     expect(window.location.pathname).toBe("/platform/accounts");
-    expect(await screen.findByText("super.admin")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新建账号" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "编辑 super.admin" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "删除 super.admin" })).toBeInTheDocument();
+    expect(
+      (await screen.findAllByText("super.admin")).length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      screen.getByRole("button", { name: "新建账号" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "编辑 super.admin" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "删除 super.admin" }),
+    ).toBeInTheDocument();
     expect(client.listAccounts).toHaveBeenCalledOnce();
+  });
+
+  it("普通账号看不到账号管理且不能通过地址直接进入", async () => {
+    window.history.replaceState(null, "", "/platform/accounts");
+    const client = createClient();
+    render(
+      <RequirementWorkbench
+        client={client}
+        actorName="产品负责人"
+        actorUsername="product.owner"
+        roles={["product_owner"]}
+      />,
+    );
+
+    await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+    expect(
+      screen.queryByRole("link", { name: "账号管理" }),
+    ).not.toBeInTheDocument();
+    expect(client.listAccounts).not.toHaveBeenCalled();
   });
 });

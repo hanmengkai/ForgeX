@@ -1,4 +1,6 @@
 import {
+  AccountAdministrationService,
+  InMemoryAccountRepository,
   InMemoryExtensionCatalogRepository,
   InMemoryKnowledgeBaseRepository,
   InMemoryMcpInputSchemaStore,
@@ -21,11 +23,27 @@ import { buildControlPlaneApi } from "../../apps/control-plane-api/dist/index.js
 const token = "e2e-access-token-with-enough-entropy";
 const principal = {
   actorKey: "44444444-4444-4444-8444-444444444444",
-  actorName: "端到端产品负责人",
+  actorName: "端到端超级管理员",
+  username: "e2e.admin",
   tenantKey: "11111111-1111-4111-8111-111111111111",
   roles: ["product_owner", "requirement_analyst", "administrator"],
 };
+const accountService = new AccountAdministrationService(
+  new InMemoryAccountRepository([
+    {
+      accountKey: principal.actorKey,
+      tenantKey: principal.tenantKey,
+      username: principal.username,
+      actorName: principal.actorName,
+      roles: principal.roles,
+      enabled: true,
+      revision: 1,
+      password: "E2E-Password-2026!",
+    },
+  ]),
+);
 const app = buildControlPlaneApi({
+  accountService,
   authenticator: {
     authenticate: async (authorization) =>
       authorization === `Bearer ${token}` ? structuredClone(principal) : null,
