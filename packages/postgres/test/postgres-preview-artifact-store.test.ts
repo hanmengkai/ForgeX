@@ -114,6 +114,7 @@ describe("PostgresPreviewArtifactStore", () => {
       "0014_browser_sessions.sql",
       "0015_worker_enrollments.sql",
       "0016_requirement_revisions.sql",
+      "0017_delivery_skills.sql",
     ];
 
     const sequenceStart = readme.indexOf("当前完整顺序为");

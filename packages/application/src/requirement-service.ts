@@ -21,12 +21,14 @@ import {
   canPerformRequirementAction,
   type RequirementAuthorizedAction,
 } from "./requirement-authorization.js";
-import type {
-  DeliveryDispatchRecord,
-  RequirementAuditAction,
-  RequirementRecord,
-  RequirementRepository,
-  RequirementTransaction,
+import {
+  DeliverySkillBindingsSchema,
+  type DeliverySkillBinding,
+  type DeliveryDispatchRecord,
+  type RequirementAuditAction,
+  type RequirementRecord,
+  type RequirementRepository,
+  type RequirementTransaction,
 } from "./requirement-repository.js";
 import type { PreviewArtifactReference } from "./preview-artifact-store.js";
 
@@ -273,6 +275,7 @@ export class RequirementApplicationService {
     principal: AuthenticatedPrincipal,
     requirementKey: string,
     input: StartDeliveryCommandPayload,
+    skills: DeliverySkillBinding[] = [],
   ): Promise<DeliveryDispatchRecord> {
     this.#requireAction(principal, "startDelivery");
     const command = StartDeliveryCommandSchema.safeParse(input);
@@ -282,6 +285,16 @@ export class RequirementApplicationService {
         "invalid_delivery_command",
         "交付安排需要调整",
       );
+    }
+    const parsedSkills = DeliverySkillBindingsSchema.safeParse(skills);
+    if (
+      !parsedSkills.success ||
+      parsedSkills.data.length !== (command.data.skillKeys?.length ?? 0) ||
+      parsedSkills.data.some(
+        (skill, index) => skill.skillKey !== command.data.skillKeys?.[index],
+      )
+    ) {
+      throw new Error("交付 Skill 绑定必须与已校验的交付命令完全一致");
     }
     return this.#repository.transaction(
       principal.tenantKey,
@@ -316,6 +329,7 @@ export class RequirementApplicationService {
           requirementRevision: record.workflow.currentRevision,
           title: record.spec.title,
           requiredCapabilities: [...command.data.requiredCapabilities],
+          skills: parsedSkills.data.map((skill) => ({ ...skill })),
           requestedAt: this.#nowIso(),
           dispatchedAt: null,
         };
@@ -325,6 +339,7 @@ export class RequirementApplicationService {
         return {
           ...dispatch,
           requiredCapabilities: [...dispatch.requiredCapabilities],
+          skills: dispatch.skills.map((skill) => ({ ...skill })),
         };
       },
     );

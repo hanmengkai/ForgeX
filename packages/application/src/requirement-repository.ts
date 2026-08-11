@@ -23,6 +23,11 @@ export type RequirementAuditAction =
   | "verification.failed"
   | "verification.completed";
 
+const deliveryInternalKey = z
+  .string()
+  .uuid()
+  .transform((value) => value.toLowerCase());
+
 export interface DeliveryDispatchRecord {
   dispatchKey: string;
   tenantKey: string;
@@ -32,14 +37,36 @@ export interface DeliveryDispatchRecord {
   requirementRevision: number;
   title: string;
   requiredCapabilities: string[];
+  skills: DeliverySkillBinding[];
   requestedAt: string;
   dispatchedAt: string | null;
 }
 
-const deliveryInternalKey = z
-  .string()
-  .uuid()
-  .transform((value) => value.toLowerCase());
+export const DeliverySkillBindingSchema = z
+  .object({
+    skillKey: deliveryInternalKey,
+    version: z
+      .string()
+      .regex(/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u),
+    artifactHashAlgorithm: z.literal("sha256"),
+    artifactHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+
+export const DeliverySkillBindingsSchema = z
+  .array(DeliverySkillBindingSchema)
+  .max(10)
+  .superRefine((skills, context) => {
+    if (new Set(skills.map((skill) => skill.skillKey)).size !== skills.length) {
+      context.addIssue({
+        code: "custom",
+        message: "交付 Skill 绑定不能重复",
+      });
+    }
+  });
+
+export type DeliverySkillBinding = z.infer<typeof DeliverySkillBindingSchema>;
+
 const sha1Pattern = /^[a-f0-9]{40}$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
 

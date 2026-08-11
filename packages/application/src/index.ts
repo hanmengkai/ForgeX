@@ -41,6 +41,7 @@ export {
   type McpRegistryTransaction,
 } from "./mcp-registry-repository.js";
 export {
+  assertMcpManifestContainsNoCredential,
   McpRegistryApplicationService,
   type McpRegistryApplicationServiceOptions,
 } from "./mcp-registry-service.js";
@@ -115,8 +116,13 @@ export {
   type RequirementListQuery,
   type RequirementListResult,
 } from "./requirement-service.js";
+export {
+  DeliverySkillBindingSchema,
+  DeliverySkillBindingsSchema,
+} from "./requirement-repository.js";
 export type {
   DeliveryDispatchRecord,
+  DeliverySkillBinding,
   DeliveryRunResult,
   VerificationFailureRecord,
   RequirementAuditAction,

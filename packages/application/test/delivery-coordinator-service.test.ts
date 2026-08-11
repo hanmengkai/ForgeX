@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
+
+import { describe, expect, it, vi } from "vitest";
 
 import {
   WORKER_REQUIREMENT_COMPLETION_SUMMARY,
   type RequirementSpec,
 } from "@forgex/contracts";
+import { SkillPackageCodec } from "@forgex/extensions";
 
 import {
   DeliveryCoordinatorService,
@@ -84,6 +87,176 @@ class FailFirstDispatchMarkRepository implements RequirementRepository {
 }
 
 describe("DeliveryCoordinatorService", () => {
+  it("无交付权限的身份在读取任何 Skill 制品前被拒绝", async () => {
+    const getActiveForExecution = vi.fn();
+    const requirementRepository = new InMemoryRequirementRepository();
+    const coordinator = new DeliveryCoordinatorService({
+      requirements: new RequirementApplicationService({
+        repository: requirementRepository,
+        projectKey,
+        repositoryKey,
+      }),
+      requirementRepository,
+      workers: new WorkerFleetService({
+        repository: new InMemoryWorkerFleetRepository(),
+      }),
+      projectKey,
+      skillDirectory: {
+        getActiveForExecution,
+        getVersionForExecution: vi.fn(),
+      },
+    });
+    const developer: AuthenticatedPrincipal = {
+      ...principal,
+      roles: ["developer"],
+    };
+
+    await expect(
+      coordinator.requestDelivery(developer, randomUUID(), {
+        schemaVersion: 1,
+        requiredCapabilities: [],
+        skillKeys: Array.from({ length: 10 }, () => randomUUID()),
+      }),
+    ).rejects.toMatchObject({ statusCode: 403, code: "permission_denied" });
+    expect(getActiveForExecution).not.toHaveBeenCalled();
+  });
+
+  it("把本次交付选择的已激活团队能力绑定进设备执行信封", async () => {
+    const skillKey = "55555555-5555-4555-8555-555555555555";
+    const bytes = SkillPackageCodec.encode({
+      schemaVersion: 1,
+      instructions:
+        "# 团队代码审查规范\n\n修改前先确认边界，完成后检查错误处理与可维护性。",
+      resources: [
+        {
+          path: "references/review-policy.md",
+          mediaType: "text/markdown",
+          encoding: "utf8",
+          content: "# 审查政策\n\n所有外部输入都必须在边界处完成校验。",
+        },
+      ],
+    });
+    const nextBytes = SkillPackageCodec.encode({
+      schemaVersion: 1,
+      instructions:
+        "# 下一版团队规范\n\n这一版在交付排队后才激活，不能静默替换已经确认的能力。",
+      resources: [],
+    });
+    const manifest = {
+      schemaVersion: 1 as const,
+      skillKey,
+      tenantKey,
+      projectKey,
+      version: "1.0.0",
+      name: "团队代码审查规范",
+      summary: "在交付过程中应用团队代码审查规范",
+      artifactHashAlgorithm: "sha256" as const,
+      artifactHash: createHash("sha256").update(bytes).digest("hex"),
+      artifactSizeBytes: bytes.byteLength,
+      entrypoint: "SKILL.md" as const,
+      compatibleBlueprints: ["Web 应用"],
+      requiredCapabilities: ["读取项目文件"],
+      permissions: {
+        workspace: "read_only" as const,
+        network: "none" as const,
+        commands: "none" as const,
+      },
+      createdAt: "2026-08-10T04:00:00.000Z",
+    };
+    const nextManifest = {
+      ...manifest,
+      version: "2.0.0",
+      artifactHash: createHash("sha256").update(nextBytes).digest("hex"),
+      artifactSizeBytes: nextBytes.byteLength,
+      createdAt: "2026-08-10T05:00:00.000Z",
+    };
+    let active = { manifest, bytes };
+    const requirementRepository = new InMemoryRequirementRepository();
+    const requirements = new RequirementApplicationService({
+      repository: requirementRepository,
+      projectKey,
+      repositoryKey,
+    });
+    const workers = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+    });
+    const coordinator = new DeliveryCoordinatorService({
+      requirements,
+      requirementRepository,
+      workers,
+      projectKey,
+      skillDirectory: {
+        getActiveForExecution: async (
+          _tenant,
+          selectedProjectKey,
+          selectedSkillKey,
+        ) =>
+          selectedProjectKey === projectKey && selectedSkillKey === skillKey
+            ? active
+            : null,
+        getVersionForExecution: async (
+          _tenant,
+          selectedProjectKey,
+          selectedSkillKey,
+          version,
+        ) =>
+          selectedProjectKey === projectKey &&
+          selectedSkillKey === skillKey &&
+          version === manifest.version
+            ? { manifest, bytes }
+            : null,
+      },
+    });
+    const connection = (
+      await workers.connect(principal, {
+        schemaVersion: 1,
+        deviceName: "研发电脑",
+        accountName: "Codex 账户",
+        accountFingerprint: "c".repeat(64),
+        capabilities: [],
+      })
+    ).connection;
+    const created = await requirements.create(principal, spec);
+    await requirements.submitForConfirmation(principal, created.requirementKey);
+    await requirements.confirm(principal, created.requirementKey);
+    await coordinator.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+      skillKeys: [skillKey],
+    });
+    active = { manifest: nextManifest, bytes: nextBytes };
+    const assignment = (await workers.poll(connection)).assignment!;
+
+    await expect(
+      coordinator.executionForWorker(tenantKey, {
+        workKind: "requirement_delivery",
+        projectKey,
+        requirementKey: created.requirementKey,
+        requirementRevision: 1,
+        title: spec.title,
+      }),
+    ).resolves.toMatchObject({
+      skills: [
+        {
+          skillKey,
+          version: "1.0.0",
+          name: "团队代码审查规范",
+          artifactHashAlgorithm: "sha256",
+          artifactHash: createHash("sha256").update(bytes).digest("hex"),
+          instructions: expect.stringContaining("检查错误处理"),
+          resources: [
+            {
+              path: "references/review-policy.md",
+              mediaType: "text/markdown",
+              content: expect.stringContaining("外部输入"),
+            },
+          ],
+        },
+      ],
+    });
+    expect(assignment.requirementKey).toBe(created.requirementKey);
+  });
+
   it("派发后标记失败时由 outbox 重试，且同一版本只进入队列一次", async () => {
     const requirementRepository = new FailFirstDispatchMarkRepository();
     const requirements = new RequirementApplicationService({
@@ -98,6 +271,7 @@ describe("DeliveryCoordinatorService", () => {
       requirements,
       requirementRepository,
       workers,
+      projectKey,
     });
     const connection = (
       await workers.connect(principal, {
@@ -176,6 +350,7 @@ describe("DeliveryCoordinatorService", () => {
       requirements,
       requirementRepository,
       workers,
+      projectKey,
     });
     const created = await requirements.create(principal, spec);
     await requirements.submitForConfirmation(principal, created.requirementKey);
@@ -216,6 +391,7 @@ describe("DeliveryCoordinatorService", () => {
       requirements,
       requirementRepository,
       workers,
+      projectKey,
       clock: () => new Date(now),
     });
     const connection = (

@@ -15,6 +15,7 @@ import {
 } from "@forgex/extensions";
 
 import type { AuthenticatedPrincipal } from "./auth.js";
+import { containsLikelyPlaintextCredential } from "./credential-safety.js";
 import { ApplicationError } from "./errors.js";
 import type {
   McpEnableAuditEvent,
@@ -31,6 +32,28 @@ export interface McpRegistryApplicationServiceOptions {
 
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const manifestTextValues = (manifest: McpServerManifest): string[] => [
+  manifest.name,
+  manifest.summary,
+  ...manifest.tools.flatMap((tool) => [
+    tool.technicalName,
+    tool.displayName,
+    tool.description,
+  ]),
+];
+
+export const assertMcpManifestContainsNoCredential = (
+  manifest: McpServerManifest,
+): void => {
+  if (manifestTextValues(manifest).some(containsLikelyPlaintextCredential)) {
+    throw new ApplicationError(
+      422,
+      "mcp_credential_detected",
+      "MCP 清单不能包含明文凭据，认证只能使用客户设备上的本地连接绑定",
+    );
+  }
+};
 
 export class McpRegistryApplicationService {
   readonly #repository: McpRegistryRepository;
@@ -54,6 +77,7 @@ export class McpRegistryApplicationService {
   ): Promise<void> {
     this.#assertAdministrator(principal);
     const parsed = McpServerManifestSchema.parse(manifest);
+    assertMcpManifestContainsNoCredential(parsed);
     if (
       parsed.tenantKey !== principal.tenantKey ||
       parsed.projectKey !== this.#projectKey

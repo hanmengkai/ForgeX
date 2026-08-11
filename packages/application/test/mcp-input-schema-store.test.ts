@@ -326,4 +326,30 @@ describe("MCP 输入 Schema 制品", () => {
       validateMcpToolArguments(inputSchema, { branchName: "feature/retry" }),
     ).not.toThrow();
   });
+
+  it("拒绝在 Schema 文案、默认值和可选值中夹带明文凭据", () => {
+    const secret = 'password = "correct horse battery staple"';
+    for (const fragment of [
+      { description: secret },
+      { default: secret },
+      { examples: [secret] },
+      { enum: [secret] },
+      { const: secret },
+    ]) {
+      expect(() =>
+        canonicalizeMcpInputSchema({
+          type: "object",
+          properties: {
+            endpoint: {
+              type: "string",
+              title: "服务地址",
+              writeOnly: false,
+              ...fragment,
+            },
+          },
+          additionalProperties: false,
+        }),
+      ).toThrow("MCP Schema 不能包含明文凭据");
+    }
+  });
 });

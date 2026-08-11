@@ -86,6 +86,12 @@ export class ExtensionCatalogApplicationService {
           ...(this.#knowledgeDirectory && canManageKnowledgeBases(principal)
             ? { createKnowledge: "/api/v1/knowledge-bases" }
             : {}),
+          ...(principal.roles.includes("administrator")
+            ? {
+                publishSkill: "/api/v1/extensions/skills",
+                publishMcp: "/api/v1/extensions/mcp",
+              }
+            : {}),
         },
       },
     };

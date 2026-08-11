@@ -1,19 +1,27 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   RequirementExecutionEnvelopeSchema,
+  StartDeliveryCommandSchema,
   WorkerRequirementCompletionSchema,
   type RequirementExecutionEnvelope,
   type StartDeliveryCommandPayload,
   type WorkerRequirementCompletionPayload,
 } from "@forgex/contracts";
+import {
+  SkillPackageCodec,
+  type SkillPackageManifest,
+} from "@forgex/extensions";
 
 import type { AuthenticatedPrincipal } from "./auth.js";
+import { containsLikelyPlaintextCredential } from "./credential-safety.js";
 import { requirementCompletionDigest } from "./delivery-completion.js";
 import { ApplicationError } from "./errors.js";
+import { canPerformRequirementAction } from "./requirement-authorization.js";
 import type {
   DeliveryDispatchRecord,
   DeliveryRunResult,
+  DeliverySkillBinding,
   RequirementRepository,
 } from "./requirement-repository.js";
 import type { RequirementApplicationService } from "./requirement-service.js";
@@ -23,19 +31,63 @@ export interface DeliveryCoordinatorServiceOptions {
   requirements: RequirementApplicationService;
   requirementRepository: RequirementRepository;
   workers: WorkerFleetService;
+  projectKey: string;
+  skillDirectory?: DeliverySkillDirectory;
   clock?: () => Date;
 }
+
+export interface DeliverySkillDirectory {
+  getActiveForExecution(
+    tenantKey: string,
+    projectKey: string,
+    skillKey: string,
+  ): Promise<{ manifest: SkillPackageManifest; bytes: Uint8Array } | null>;
+  getVersionForExecution(
+    tenantKey: string,
+    projectKey: string,
+    skillKey: string,
+    version: string,
+  ): Promise<{ manifest: SkillPackageManifest; bytes: Uint8Array } | null>;
+}
+
+const deliveryResourceMediaTypes = new Set([
+  "text/markdown",
+  "text/plain",
+  "application/json",
+]);
+
+const deliveryResourceContent = (resource: {
+  encoding: "utf8" | "base64";
+  content: string;
+}): string => {
+  if (resource.encoding === "utf8") return resource.content;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      Buffer.from(resource.content, "base64"),
+    );
+  } catch {
+    throw new ApplicationError(
+      409,
+      "delivery_skill_resource_unsupported",
+      "本次交付绑定的团队能力包含无法安全读取的资源",
+    );
+  }
+};
 
 export class DeliveryCoordinatorService {
   readonly #requirements: RequirementApplicationService;
   readonly #requirementRepository: RequirementRepository;
   readonly #workers: WorkerFleetService;
+  readonly #projectKey: string;
+  readonly #skillDirectory: DeliverySkillDirectory | null;
   readonly #clock: () => Date;
 
   constructor(options: DeliveryCoordinatorServiceOptions) {
     this.#requirements = options.requirements;
     this.#requirementRepository = options.requirementRepository;
     this.#workers = options.workers;
+    this.#projectKey = options.projectKey.toLowerCase();
+    this.#skillDirectory = options.skillDirectory ?? null;
     this.#clock = options.clock ?? (() => new Date());
   }
 
@@ -48,10 +100,38 @@ export class DeliveryCoordinatorService {
     requirementRevision: number;
     status: "等待空闲设备" | "已经完成";
   }> {
+    if (!canPerformRequirementAction(principal, "startDelivery")) {
+      throw new ApplicationError(
+        403,
+        "permission_denied",
+        "当前账号没有执行此操作的权限",
+      );
+    }
+    const parsedCommand = StartDeliveryCommandSchema.safeParse(command);
+    if (!parsedCommand.success) {
+      throw new ApplicationError(
+        422,
+        "invalid_delivery_command",
+        "交付安排需要调整",
+      );
+    }
+    const skills = await this.#resolveSkills(
+      principal.tenantKey,
+      this.#projectKey,
+      parsedCommand.data.skillKeys ?? [],
+    );
     const dispatch = await this.#requirements.requestDelivery(
       principal,
       requirementKey,
-      command,
+      parsedCommand.data,
+      skills.map(
+        ({ skillKey, version, artifactHashAlgorithm, artifactHash }) => ({
+          skillKey,
+          version,
+          artifactHashAlgorithm,
+          artifactHash,
+        }),
+      ),
     );
     let result: Awaited<ReturnType<WorkerFleetService["enqueueDispatch"]>>;
     try {
@@ -107,7 +187,7 @@ export class DeliveryCoordinatorService {
       title: string;
     },
   ): Promise<RequirementExecutionEnvelope> {
-    return this.#requirementRepository.transaction(
+    const authority = await this.#requirementRepository.transaction(
       tenantKey,
       assignment.projectKey,
       async (transaction) => {
@@ -135,23 +215,182 @@ export class DeliveryCoordinatorService {
           );
         }
         record.workflow.assertSpecIntegrity(record.spec);
-        return RequirementExecutionEnvelopeSchema.parse({
-          schemaVersion: 1,
-          taskType: "requirement_delivery",
-          projectKey: record.projectKey,
-          repositoryKey: dispatch.repositoryKey,
-          requirementKey: record.requirementKey,
-          requirementRevision: record.workflow.currentRevision,
-          spec: structuredClone(record.spec),
-          executionPolicy: {
-            workspaceIsolation: "dedicated_worktree",
-            productionAccess: "denied",
-            credentialHandling: "device_local_only",
-            completionEvidence: "independent_runner_required",
+        return {
+          skills: dispatch.skills.map((skill) => ({ ...skill })),
+          envelope: {
+            schemaVersion: 1,
+            taskType: "requirement_delivery",
+            projectKey: record.projectKey,
+            repositoryKey: dispatch.repositoryKey,
+            requirementKey: record.requirementKey,
+            requirementRevision: record.workflow.currentRevision,
+            spec: structuredClone(record.spec),
+            executionPolicy: {
+              workspaceIsolation: "dedicated_worktree",
+              productionAccess: "denied",
+              credentialHandling: "device_local_only",
+              completionEvidence: "independent_runner_required",
+            },
           },
-        });
+        };
       },
     );
+    const skills = await this.#resolveSkills(
+      tenantKey,
+      assignment.projectKey,
+      authority.skills,
+    );
+    return RequirementExecutionEnvelopeSchema.parse({
+      ...authority.envelope,
+      ...(skills.length > 0 ? { skills } : {}),
+    });
+  }
+
+  async #resolveSkills(
+    tenantKey: string,
+    projectKey: string,
+    selection: string[] | DeliverySkillBinding[],
+  ): Promise<NonNullable<RequirementExecutionEnvelope["skills"]>> {
+    if (selection.length === 0) return [];
+    if (!this.#skillDirectory) {
+      throw new ApplicationError(
+        409,
+        "delivery_skill_unavailable",
+        "当前控制面没有接入可信 Skill 目录",
+      );
+    }
+    const resolved: NonNullable<RequirementExecutionEnvelope["skills"]> = [];
+    let totalInstructionBytes = 0;
+    for (const selected of selection) {
+      const skillKey =
+        typeof selected === "string" ? selected : selected.skillKey;
+      const active =
+        typeof selected === "string"
+          ? await this.#skillDirectory.getActiveForExecution(
+              tenantKey,
+              projectKey,
+              skillKey,
+            )
+          : await this.#skillDirectory.getVersionForExecution(
+              tenantKey,
+              projectKey,
+              skillKey,
+              selected.version,
+            );
+      if (!active) {
+        throw new ApplicationError(
+          409,
+          "delivery_skill_unavailable",
+          "本次交付选择的团队能力已经不可用",
+        );
+      }
+      if (
+        active.manifest.tenantKey !== tenantKey.toLowerCase() ||
+        active.manifest.projectKey !== projectKey.toLowerCase() ||
+        active.manifest.skillKey !== skillKey
+      ) {
+        throw new ApplicationError(
+          409,
+          "delivery_skill_changed",
+          "本次交付选择的团队能力与可信目录范围不一致，请重新安排交付",
+        );
+      }
+      if (
+        typeof selected !== "string" &&
+        (active.manifest.version !== selected.version ||
+          active.manifest.artifactHashAlgorithm !==
+            selected.artifactHashAlgorithm ||
+          active.manifest.artifactHash !== selected.artifactHash)
+      ) {
+        throw new ApplicationError(
+          409,
+          "delivery_skill_changed",
+          "本次交付选择的团队能力版本已经变化，请重新安排交付",
+        );
+      }
+      if (
+        active.manifest.permissions.workspace !== "read_only" ||
+        active.manifest.permissions.network !== "none" ||
+        active.manifest.permissions.commands !== "none"
+      ) {
+        throw new ApplicationError(
+          409,
+          "delivery_skill_not_safe",
+          "设备交付只接受只读、无网络且不执行命令的团队能力",
+        );
+      }
+      const content = SkillPackageCodec.decode(active.bytes);
+      const unsupportedResource = content.resources.find(
+        (resource) =>
+          !deliveryResourceMediaTypes.has(resource.mediaType) ||
+          resource.path.startsWith("scripts/"),
+      );
+      if (unsupportedResource) {
+        throw new ApplicationError(
+          409,
+          "delivery_skill_resource_unsupported",
+          "本次交付绑定的团队能力包含不受支持的可执行或二进制资源",
+        );
+      }
+      const resources = content.resources.map((resource) => ({
+        path: resource.path,
+        mediaType: resource.mediaType as
+          "text/markdown" | "text/plain" | "application/json",
+        content: deliveryResourceContent(resource),
+      }));
+      if (
+        containsLikelyPlaintextCredential(content.instructions) ||
+        resources.some((resource) =>
+          containsLikelyPlaintextCredential(resource.content),
+        )
+      ) {
+        throw new ApplicationError(
+          409,
+          "delivery_skill_credential_detected",
+          "本次交付绑定的团队能力包含明文凭据，不能下发到设备",
+        );
+      }
+      if (
+        active.manifest.artifactSizeBytes !== active.bytes.byteLength ||
+        active.manifest.artifactHash !==
+          createHash("sha256").update(active.bytes).digest("hex")
+      ) {
+        throw new Error("已激活 Skill 的制品与可信清单不一致");
+      }
+      const instructionBytes = new TextEncoder().encode(
+        content.instructions,
+      ).byteLength;
+      const resourceBytes = resources.reduce(
+        (total, resource) =>
+          total + new TextEncoder().encode(resource.content).byteLength,
+        0,
+      );
+      totalInstructionBytes += instructionBytes + resourceBytes;
+      if (
+        instructionBytes > 40_000 ||
+        resources.some(
+          (resource) =>
+            new TextEncoder().encode(resource.content).byteLength > 40_000,
+        ) ||
+        totalInstructionBytes > 100_000
+      ) {
+        throw new ApplicationError(
+          409,
+          "delivery_skill_too_large",
+          "本次交付选择的团队能力说明超过设备安全上限",
+        );
+      }
+      resolved.push({
+        skillKey: active.manifest.skillKey,
+        version: active.manifest.version,
+        name: active.manifest.name,
+        artifactHashAlgorithm: active.manifest.artifactHashAlgorithm,
+        artifactHash: active.manifest.artifactHash,
+        instructions: content.instructions,
+        resources,
+      });
+    }
+    return resolved;
   }
 
   async submitExecutionResult(

@@ -47,6 +47,7 @@ const enqueue = (
     requirementRevision: input.requirementRevision ?? 1,
     title: input.title,
     requiredCapabilities: input.requiredCapabilities,
+    skills: [],
     requestedAt: "2026-08-10T05:00:00.000Z",
     dispatchedAt: null,
   });

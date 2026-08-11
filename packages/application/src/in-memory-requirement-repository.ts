@@ -551,6 +551,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     return {
       ...record,
       requiredCapabilities: [...record.requiredCapabilities],
+      skills: record.skills.map((skill) => ({ ...skill })),
     };
   }
 

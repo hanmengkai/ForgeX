@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   SignedSkillEvaluationSchema,
   SkillPackageManifestSchema,
+  SkillPackageCodec,
   SkillRegistry,
   type SignedSkillEvaluation,
   type SkillEvaluationAuthority,
@@ -13,8 +14,12 @@ import {
 } from "@forgex/extensions";
 
 import type { AuthenticatedPrincipal } from "./auth.js";
+import { containsLikelyPlaintextCredential } from "./credential-safety.js";
 import { ApplicationError } from "./errors.js";
-import type { SkillArtifactStore } from "./skill-artifact-store.js";
+import {
+  verifySkillArtifactBytes,
+  type SkillArtifactStore,
+} from "./skill-artifact-store.js";
 import type {
   SkillActivationAuditEvent,
   SkillRegistryRepository,
@@ -31,6 +36,29 @@ export interface SkillRegistryApplicationServiceOptions {
 
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const deliveryResourceMediaTypes = new Set([
+  "text/markdown",
+  "text/plain",
+  "application/json",
+]);
+
+const textResourceContent = (resource: {
+  encoding: "utf8" | "base64";
+  content: string;
+}): string => {
+  if (resource.encoding === "utf8") return resource.content;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      Buffer.from(resource.content, "base64"),
+    );
+  } catch {
+    throw new ApplicationError(
+      422,
+      "skill_resource_unsupported",
+      "Skill 资源必须是可安全检查的 UTF-8 文本",
+    );
+  }
+};
 
 export class SkillRegistryApplicationService {
   readonly #repository: SkillRegistryRepository;
@@ -67,7 +95,44 @@ export class SkillRegistryApplicationService {
         "Skill 包不属于当前租户或项目",
       );
     }
-    await this.#artifactStore.put(parsedManifest, artifactBytes);
+    const verifiedBytes = verifySkillArtifactBytes(
+      parsedManifest,
+      artifactBytes,
+    );
+    const content = SkillPackageCodec.decode(verifiedBytes);
+    const visibleManifestText = [
+      parsedManifest.name,
+      parsedManifest.summary,
+      ...parsedManifest.compatibleBlueprints,
+      ...parsedManifest.requiredCapabilities,
+    ].join("\n");
+    const unsupportedResource = content.resources.find(
+      (resource) =>
+        !deliveryResourceMediaTypes.has(resource.mediaType) ||
+        resource.path.startsWith("scripts/"),
+    );
+    if (unsupportedResource) {
+      throw new ApplicationError(
+        422,
+        "skill_resource_unsupported",
+        "当前交付只接受 references 或 assets 下的 Markdown、纯文本和 JSON 资源",
+      );
+    }
+    const unsafeResource = content.resources.find((resource) =>
+      containsLikelyPlaintextCredential(textResourceContent(resource)),
+    );
+    if (
+      unsafeResource ||
+      containsLikelyPlaintextCredential(visibleManifestText) ||
+      containsLikelyPlaintextCredential(content.instructions)
+    ) {
+      throw new ApplicationError(
+        422,
+        "skill_credential_detected",
+        "Skill 中检测到凭据或无法检查的二进制资源，请先脱敏；凭据应保留在客户设备本地",
+      );
+    }
+    await this.#artifactStore.put(parsedManifest, verifiedBytes);
     await this.#repository.transaction(
       principal.tenantKey,
       this.#projectKey,
@@ -174,13 +239,17 @@ export class SkillRegistryApplicationService {
 
   async getActiveForExecution(
     tenantKey: string,
+    projectKey: string,
     skillKey: string,
   ): Promise<{ manifest: SkillPackageManifest; bytes: Uint8Array } | null> {
+    const project = this.#normalizedExecutionProject(projectKey);
     const manifest = await this.#repository.transaction(
       tenantKey,
-      this.#projectKey,
+      project,
       (transaction) =>
-        this.#restore(tenantKey, transaction.load()).getActive(skillKey),
+        this.#restore(tenantKey, transaction.load(), project).getActive(
+          skillKey,
+        ),
     );
     if (!manifest) return null;
     const bytes = await this.#artifactStore.get(manifest);
@@ -188,19 +257,49 @@ export class SkillRegistryApplicationService {
     return { manifest, bytes };
   }
 
+  async getVersionForExecution(
+    tenantKey: string,
+    projectKey: string,
+    skillKey: string,
+    version: string,
+  ): Promise<{ manifest: SkillPackageManifest; bytes: Uint8Array } | null> {
+    const project = this.#normalizedExecutionProject(projectKey);
+    const manifest = await this.#repository.transaction(
+      tenantKey,
+      project,
+      (transaction) =>
+        this.#restore(tenantKey, transaction.load(), project).getVersion(
+          skillKey,
+          version,
+        ),
+    );
+    if (!manifest) return null;
+    const bytes = await this.#artifactStore.get(manifest);
+    if (!bytes) throw new Error("交付绑定的 Skill 缺少对应制品");
+    return { manifest, bytes };
+  }
+
   #restore(
     tenantKey: string,
     snapshot: SkillRegistrySnapshot | null,
+    projectKey = this.#projectKey,
   ): SkillRegistry {
     const options = {
       tenantKey,
-      projectKey: this.#projectKey,
+      projectKey,
       evaluationAuthority: this.#evaluationAuthority,
       clock: this.#clock,
     };
     return snapshot
       ? SkillRegistry.fromSnapshot(snapshot, options)
       : new SkillRegistry(options);
+  }
+
+  #normalizedExecutionProject(projectKey: string): string {
+    if (!internalKeyPattern.test(projectKey)) {
+      throw new Error("执行 Skill 的项目范围无效");
+    }
+    return projectKey.toLowerCase();
   }
 
   #assertAdministrator(principal: AuthenticatedPrincipal): void {

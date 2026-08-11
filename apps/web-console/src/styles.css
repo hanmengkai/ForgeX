@@ -1525,6 +1525,45 @@ h1 {
   margin-top: 22px;
 }
 
+.skill-selection-list {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 22px 0 0;
+  border: 0;
+}
+
+.skill-selection-list legend {
+  margin-bottom: 10px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.skill-selection-list label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 13px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.skill-selection-list input {
+  margin-top: 4px;
+}
+
+.skill-selection-list span {
+  display: grid;
+  gap: 4px;
+}
+
+.skill-selection-list small {
+  color: var(--ink-soft);
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 76px minmax(0, 1fr);

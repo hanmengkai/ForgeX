@@ -9,6 +9,7 @@ import {
   type RequirementWorkflowSnapshot,
 } from "@forgex/domain";
 import {
+  DeliverySkillBindingsSchema,
   DeliveryRunResultSchema,
   VerificationEvidenceRecordSchema,
   VerificationFailureRecordSchema,
@@ -192,7 +193,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
           );
           if (pending) return this.#copyDispatch(pending);
           const result = await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
             [tenant, project, requirement, requirementRevision],
           );
           const row = result.rows[0];
@@ -372,7 +373,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       }
       for (const dispatch of pendingDispatches.values()) {
         await client.query(
-          "INSERT INTO forgex_delivery_outbox (dispatch_key, tenant_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)",
+          "INSERT INTO forgex_delivery_outbox (dispatch_key, tenant_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)",
           [
             dispatch.dispatchKey,
             tenant,
@@ -382,6 +383,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
             dispatch.requirementRevision,
             dispatch.title,
             JSON.stringify(dispatch.requiredCapabilities),
+            JSON.stringify(dispatch.skills),
             dispatch.requestedAt,
             dispatch.dispatchedAt,
           ],
@@ -616,11 +618,11 @@ export class PostgresRequirementRepository implements RequirementRepository {
     return this.#withClient(async (client) => {
       const result = project
         ? await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $3",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $3",
             [tenant, project, limit],
           )
         : await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $2",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $2",
             [tenant, limit],
           );
       return result.rows.map((row) => this.#dispatchFromRow(row, tenant));
@@ -765,6 +767,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
     return {
       ...dispatch,
       requiredCapabilities: [...dispatch.requiredCapabilities],
+      skills: dispatch.skills.map((skill) => ({ ...skill })),
     };
   }
 
@@ -832,8 +835,12 @@ export class PostgresRequirementRepository implements RequirementRepository {
     const capabilities = StartDeliveryCommandSchema.safeParse({
       schemaVersion: 1,
       requiredCapabilities: dispatch.requiredCapabilities,
+      skillKeys: dispatch.skills.map((skill) => skill.skillKey),
     });
-    if (!capabilities.success) {
+    if (
+      !capabilities.success ||
+      !DeliverySkillBindingsSchema.safeParse(dispatch.skills).success
+    ) {
       throw new Error("需求事务不能写入无效的设备能力要求");
     }
     if (dispatch.dispatchedAt !== null) {
@@ -852,12 +859,21 @@ export class PostgresRequirementRepository implements RequirementRepository {
     if (!Number.isSafeInteger(revision) || revision < 1) {
       throw new Error("数据库中的交付派发版本无效");
     }
+    const skills = DeliverySkillBindingsSchema.safeParse(row.skills);
     const capabilities = StartDeliveryCommandSchema.safeParse({
       schemaVersion: 1,
       requiredCapabilities: row.required_capabilities,
+      skillKeys: skills.success
+        ? skills.data.map((skill) => skill.skillKey)
+        : undefined,
     });
     const title = typeof row.title === "string" ? row.title.trim() : "";
-    if (!capabilities.success || title.length < 2 || title.length > 150) {
+    if (
+      !skills.success ||
+      !capabilities.success ||
+      title.length < 2 ||
+      title.length > 150
+    ) {
       throw new Error("数据库中的交付派发记录格式无效");
     }
     const requestedAt = parseIsoDate(row.requested_at, "交付请求时间");
@@ -880,6 +896,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       requirementRevision: revision,
       title,
       requiredCapabilities: [...capabilities.data.requiredCapabilities],
+      skills: skills.data.map((skill) => ({ ...skill })),
       requestedAt,
       dispatchedAt,
     };

@@ -157,9 +157,77 @@ describe("SkillRegistryApplicationService", () => {
       }),
     ]);
     await expect(
-      service.getActiveForExecution(tenantKey, skillKey),
+      service.getActiveForExecution(tenantKey, projectKey, skillKey),
     ).resolves.toEqual({
       manifest,
+      bytes: Uint8Array.from(artifactBytes),
+    });
+  });
+
+  it("租户级 Worker 可从当前服务精确读取另一项目绑定的 Skill 版本", async () => {
+    const otherProjectKey = "88888888-8888-4888-8888-888888888888";
+    const repository = new InMemorySkillRegistryRepository();
+    const artifactStore = new InMemorySkillArtifactStore();
+    const sharedAuthority = new SkillEvaluationAuthority({
+      evaluators: [
+        {
+          evaluatorKey,
+          keyId,
+          evaluatorName: "独立 Skill 评测器",
+          publicKeyBase64: publicKey
+            .export({ type: "spki", format: "der" })
+            .toString("base64"),
+          scopes: [
+            { tenantKey, projectKey },
+            { tenantKey, projectKey: otherProjectKey },
+          ],
+        },
+      ],
+      clock: () => new Date(now.getTime()),
+    });
+    const currentProject = new SkillRegistryApplicationService({
+      repository,
+      artifactStore,
+      projectKey,
+      evaluationAuthority: sharedAuthority,
+      clock: () => new Date(now.getTime()),
+    });
+    const otherProject = new SkillRegistryApplicationService({
+      repository,
+      artifactStore,
+      projectKey: otherProjectKey,
+      evaluationAuthority: sharedAuthority,
+      clock: () => new Date(now.getTime()),
+    });
+    const otherManifest = { ...manifest, projectKey: otherProjectKey };
+    const payload = {
+      ...evaluationPayload(),
+      projectKey: otherProjectKey,
+      manifestHash: SkillEvaluationAuthority.manifestHash(otherManifest),
+    };
+    const evaluation = {
+      payload,
+      signature: sign(
+        null,
+        Buffer.from(SkillEvaluationAuthority.canonicalPayload(payload), "utf8"),
+        privateKey,
+      ).toString("base64"),
+    };
+
+    await currentProject.publish(administrator, manifest, artifactBytes);
+    await otherProject.publish(administrator, otherManifest, artifactBytes);
+    await otherProject.recordEvaluation(tenantKey, evaluation);
+    await otherProject.activate(administrator, skillKey, "1.0.0");
+
+    await expect(
+      currentProject.getVersionForExecution(
+        tenantKey,
+        otherProjectKey,
+        skillKey,
+        "1.0.0",
+      ),
+    ).resolves.toEqual({
+      manifest: otherManifest,
       bytes: Uint8Array.from(artifactBytes),
     });
   });
@@ -179,6 +247,86 @@ describe("SkillRegistryApplicationService", () => {
       statusCode: 403,
       code: "skill_admin_required",
     });
+  });
+
+  it("拒绝在 Skill 清单、指令或资源中保存明文凭据", async () => {
+    const { service } = createService();
+    const instructionSecret = SkillPackageCodec.encode({
+      schemaVersion: 1,
+      instructions:
+        '# 团队交付规范\n\n执行前使用 password = "correct horse battery staple" 登录。',
+      resources: [],
+    });
+    const resourceSecret = SkillPackageCodec.encode({
+      schemaVersion: 1,
+      instructions: "# 团队交付规范\n\n执行前阅读项目内的规范资源。",
+      resources: [
+        {
+          path: "references/access.md",
+          mediaType: "text/markdown",
+          encoding: "utf8",
+          content: "api_key = actual-example-production-secret-123456",
+        },
+      ],
+    });
+    const cases = [
+      {
+        bytes: artifactBytes,
+        manifest: {
+          ...manifest,
+          summary:
+            "团队规范 client_secret = actual-example-production-secret-123456",
+        },
+      },
+      { bytes: instructionSecret, manifest },
+      { bytes: resourceSecret, manifest },
+    ].map(({ bytes, manifest: candidate }) => ({
+      bytes,
+      manifest: {
+        ...candidate,
+        artifactHash: createHash("sha256").update(bytes).digest("hex"),
+        artifactSizeBytes: bytes.byteLength,
+      },
+    }));
+
+    for (const candidate of cases) {
+      await expect(
+        service.publish(administrator, candidate.manifest, candidate.bytes),
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        code: "skill_credential_detected",
+      });
+    }
+    const executableResource = SkillPackageCodec.encode({
+      schemaVersion: 1,
+      instructions:
+        "# 团队交付规范\n\n执行前读取包内说明，但不允许直接运行包内脚本。",
+      resources: [
+        {
+          path: "scripts/check.mjs",
+          mediaType: "application/javascript",
+          encoding: "utf8",
+          content: "process.exit(0);",
+        },
+      ],
+    });
+    await expect(
+      service.publish(
+        administrator,
+        {
+          ...manifest,
+          artifactHash: createHash("sha256")
+            .update(executableResource)
+            .digest("hex"),
+          artifactSizeBytes: executableResource.byteLength,
+        },
+        executableResource,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: "skill_resource_unsupported",
+    });
+    await expect(service.listForPeople(developer)).resolves.toEqual([]);
   });
 
   it("同一版本的并发激活保持幂等且只写一条审计", async () => {
@@ -235,7 +383,11 @@ describe("SkillRegistryApplicationService", () => {
       new InMemorySkillArtifactStore(),
     ).service;
     await expect(
-      missingArtifactService.getActiveForExecution(tenantKey, skillKey),
+      missingArtifactService.getActiveForExecution(
+        tenantKey,
+        projectKey,
+        skillKey,
+      ),
     ).rejects.toThrow("已经激活的 Skill 缺少对应制品");
   });
 

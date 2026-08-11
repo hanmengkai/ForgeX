@@ -226,6 +226,7 @@ export const StartDeliveryCommandSchema = z
           .regex(capabilityPattern, "交付能力格式不正确"),
       )
       .max(50),
+    skillKeys: z.array(internalKey).max(10).optional(),
   })
   .strict()
   .superRefine((command, context) => {
@@ -239,6 +240,16 @@ export const StartDeliveryCommandSchema = z
         message: "交付能力不能重复",
       });
     }
+    if (
+      command.skillKeys &&
+      new Set(command.skillKeys).size !== command.skillKeys.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["skillKeys"],
+        message: "交付 Skill 不能重复",
+      });
+    }
   });
 
 export const WorkerLeaseCommandSchema = z
@@ -246,6 +257,18 @@ export const WorkerLeaseCommandSchema = z
     schemaVersion: z.literal(1),
     assignmentKey: internalKey,
     fencingToken: z.number().int().positive(),
+  })
+  .strict();
+
+const DeliverySkillResourceSchema = z
+  .object({
+    path: z
+      .string()
+      .min(3)
+      .max(240)
+      .regex(/^(?:references|assets)\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u),
+    mediaType: z.enum(["text/markdown", "text/plain", "application/json"]),
+    content: z.string().max(40_000),
   })
   .strict();
 
@@ -258,6 +281,39 @@ export const RequirementExecutionEnvelopeSchema = z
     requirementKey: internalKey,
     requirementRevision: z.number().int().positive().max(10_000),
     spec: RequirementSpecSchema,
+    skills: z
+      .array(
+        z
+          .object({
+            skillKey: internalKey,
+            version: z
+              .string()
+              .trim()
+              .min(1)
+              .max(50)
+              .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u),
+            name: z.string().trim().min(2).max(100),
+            artifactHashAlgorithm: z.literal("sha256"),
+            artifactHash: z.string().regex(sha256Pattern),
+            instructions: z.string().trim().min(20).max(40_000),
+            resources: z.array(DeliverySkillResourceSchema).max(100),
+          })
+          .strict()
+          .superRefine((skill, context) => {
+            const paths = skill.resources.map((resource) =>
+              resource.path.toLowerCase(),
+            );
+            if (new Set(paths).size !== paths.length) {
+              context.addIssue({
+                code: "custom",
+                path: ["resources"],
+                message: "交付 Skill 资源路径不能重复",
+              });
+            }
+          }),
+      )
+      .max(10)
+      .optional(),
     executionPolicy: z
       .object({
         workspaceIsolation: z.literal("dedicated_worktree"),
@@ -267,7 +323,37 @@ export const RequirementExecutionEnvelopeSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((envelope, context) => {
+    const skills = envelope.skills ?? [];
+    if (new Set(skills.map((skill) => skill.skillKey)).size !== skills.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["skills"],
+        message: "交付执行信封不能重复绑定 Skill",
+      });
+    }
+    if (
+      skills.reduce(
+        (total, skill) =>
+          total +
+          new TextEncoder().encode(skill.instructions).byteLength +
+          skill.resources.reduce(
+            (resourceTotal, resource) =>
+              resourceTotal +
+              new TextEncoder().encode(resource.content).byteLength,
+            0,
+          ),
+        0,
+      ) > 100_000
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["skills"],
+        message: "交付执行信封中的 Skill 内容总量不能超过 100 KB",
+      });
+    }
+  });
 
 export const WORKER_REQUIREMENT_COMPLETION_SUMMARY =
   "已生成本地提交，等待独立验证" as const;
@@ -377,6 +463,8 @@ export const ExtensionCatalogOverviewForPeopleSchema = z
         actions: z
           .object({
             createKnowledge: z.literal("/api/v1/knowledge-bases").optional(),
+            publishSkill: z.literal("/api/v1/extensions/skills").optional(),
+            publishMcp: z.literal("/api/v1/extensions/mcp").optional(),
           })
           .strict(),
       })

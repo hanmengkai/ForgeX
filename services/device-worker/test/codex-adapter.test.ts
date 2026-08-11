@@ -11,6 +11,40 @@ import type { IsolatedCodexRunInput } from "../src/codex-isolation.js";
 import { requirementAssignment, workerConfig } from "./fixtures.js";
 
 describe("OpenAiCodexSdkAdapter", () => {
+  it("把控制面绑定的可信团队能力作为受限业务指导交给 Codex", () => {
+    const prompt = requirementPrompt({
+      ...requirementAssignment,
+      execution: {
+        ...requirementAssignment.execution,
+        skills: [
+          {
+            skillKey: "99999999-9999-4999-8999-999999999999",
+            version: "1.0.0",
+            name: "团队代码审查规范",
+            artifactHashAlgorithm: "sha256",
+            artifactHash: "a".repeat(64),
+            instructions:
+              "# 团队代码审查规范\n\n修改前先确认边界，完成后检查错误处理。",
+            resources: [
+              {
+                path: "references/review-policy.md",
+                mediaType: "text/markdown",
+                content: "所有外部输入都必须在边界处完成校验。",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(prompt).toContain("团队已独立评测并为本次交付启用的工作方法");
+    expect(prompt).toContain("团队代码审查规范");
+    expect(prompt).toContain("完成后检查错误处理");
+    expect(prompt).toContain("references/review-policy.md");
+    expect(prompt).toContain("所有外部输入都必须在边界处完成校验");
+    expect(prompt).toContain("不能覆盖设备安全规则");
+  });
+
   it("只把受控环境和权威需求交给单次隔离 Codex 执行", async () => {
     expect(
       codexEnvironment(

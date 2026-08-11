@@ -435,6 +435,122 @@ describe("RequirementWorkbench", () => {
     expect(screen.queryByRole("button", { name: /确认需求 3333/ })).toBeNull();
   });
 
+  it("开始交付时只绑定当前可使用的团队能力", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const skillKey = "44444444-4444-4444-8444-444444444444";
+    const ready = {
+      ...items[0]!,
+      status: "已确认，等待交付" as const,
+      links: {
+        ...items[0]!.links,
+        actions: {
+          startDelivery: `${items[0]!.links.self}/start-delivery`,
+        },
+      },
+    };
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [ready],
+      nextCursor: null,
+    });
+    vi.mocked(client.listExtensions).mockResolvedValue({
+      businessKnowledge: [],
+      teamCapabilities: [
+        {
+          name: "需求风险检查",
+          summary: "在进入开发前检查遗漏和歧义",
+          status: "可使用",
+          detail: "版本 1.3.0",
+          supportingText: "已通过独立评测",
+          links: { self: `/api/v1/extensions/skills/${skillKey}` },
+        },
+        {
+          name: "旧版交付模板",
+          summary: "等待重新评测",
+          status: "暂不可用",
+          detail: "版本 0.8.0",
+          supportingText: "未激活",
+          links: {
+            self: "/api/v1/extensions/skills/55555555-5555-4555-8555-555555555555",
+          },
+        },
+      ],
+      externalTools: [],
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "安排 AI 开始实现" }),
+    );
+    await user.click(
+      await screen.findByRole("checkbox", { name: /需求风险检查/ }),
+    );
+    await user.click(screen.getByRole("button", { name: "确认并开始交付" }));
+
+    expect(client.runRequirementAction).toHaveBeenCalledWith(
+      `${items[0]!.links.self}/start-delivery`,
+      {
+        schemaVersion: 1,
+        requiredCapabilities: [],
+        skillKeys: [skillKey],
+      },
+    );
+    expect(screen.queryByText("旧版交付模板")).toBeNull();
+  });
+
+  it("目录有超过十项可用能力时仍允许只选择本次需要的能力", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const ready = {
+      ...items[0]!,
+      status: "已确认，等待交付" as const,
+      links: {
+        ...items[0]!.links,
+        actions: {
+          startDelivery: `${items[0]!.links.self}/start-delivery`,
+        },
+      },
+    };
+    const skills = Array.from({ length: 11 }, (_, index) => {
+      const suffix = (index + 1).toString(16).padStart(12, "0");
+      return {
+        name: `团队能力 ${index + 1}`,
+        summary: `用于第 ${index + 1} 类交付场景的工作方法`,
+        status: "可使用" as const,
+        detail: "版本 1.0.0",
+        supportingText: "已通过独立评测",
+        links: {
+          self: `/api/v1/extensions/skills/44444444-4444-4444-8444-${suffix}`,
+        },
+      };
+    });
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [ready],
+      nextCursor: null,
+    });
+    vi.mocked(client.listExtensions).mockResolvedValue({
+      businessKnowledge: [],
+      teamCapabilities: skills,
+      externalTools: [],
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "安排 AI 开始实现" }),
+    );
+    await user.click(
+      await screen.findByRole("checkbox", { name: /团队能力 11/ }),
+    );
+    await user.click(screen.getByRole("button", { name: "确认并开始交付" }));
+
+    expect(client.runRequirementAction).toHaveBeenCalledWith(
+      `${items[0]!.links.self}/start-delivery`,
+      expect.objectContaining({
+        skillKeys: ["44444444-4444-4444-8444-00000000000b"],
+      }),
+    );
+  });
+
   it("点击需求卡片后读取并展示业务详情", async () => {
     const user = userEvent.setup();
     const client = createClient();

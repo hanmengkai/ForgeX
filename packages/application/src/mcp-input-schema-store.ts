@@ -8,6 +8,7 @@ import {
 } from "ajv";
 
 import { ApplicationError, type ApplicationErrorDetail } from "./errors.js";
+import { containsLikelyPlaintextCredential } from "./credential-safety.js";
 
 export interface McpInputSchemaReference {
   tenantKey: string;
@@ -258,6 +259,25 @@ const assertSupportedSchemaNode = (value: unknown): void => {
   }
 };
 
+const assertNoPlaintextCredentials = (value: unknown): void => {
+  if (typeof value === "string") {
+    if (containsLikelyPlaintextCredential(value)) {
+      throw new ApplicationError(
+        422,
+        "mcp_credential_detected",
+        "MCP Schema 不能包含明文凭据，认证只能使用客户设备上的本地连接绑定",
+      );
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach(assertNoPlaintextCredentials);
+    return;
+  }
+  if (!isPlainObject(value)) return;
+  Object.values(value).forEach(assertNoPlaintextCredentials);
+};
+
 const validatorFor = (
   hash: string,
   schema: Record<string, unknown>,
@@ -306,6 +326,7 @@ export const canonicalizeMcpInputSchema = (
   if (!isPlainObject(copied) || copied.type !== "object") {
     throw new Error("Schema 根节点必须描述一个对象");
   }
+  assertNoPlaintextCredentials(copied);
   const canonicalJson = JSON.stringify(copied);
   const sizeBytes = Buffer.byteLength(canonicalJson, "utf8");
   if (sizeBytes > MAX_SCHEMA_BYTES) {

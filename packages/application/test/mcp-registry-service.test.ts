@@ -208,6 +208,22 @@ describe("McpRegistryApplicationService", () => {
     ).rejects.toMatchObject({ code: "mcp_scope_mismatch" });
   });
 
+  it("拒绝在 MCP 清单文案中保存明文凭据且仓储保持为空", async () => {
+    const { service } = createService();
+
+    await expect(
+      service.publish(administrator, {
+        ...manifest,
+        summary:
+          '业务连接说明 client_secret = "actual-production-secret-123456"',
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: "mcp_credential_detected",
+    });
+    await expect(service.listForPeople(developer)).resolves.toEqual([]);
+  });
+
   it("失败探测原子停用并审计，只有签回恢复挑战后管理员才能重新启用", async () => {
     const { service, repository } = createService();
     await service.publish(administrator, manifest);

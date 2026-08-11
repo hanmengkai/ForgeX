@@ -18,6 +18,7 @@ import { CreateRequirementDialog } from "./create-requirement-dialog.js";
 import { ExtensionCenter } from "./extension-center.js";
 import { ArrowIcon, CheckIcon, PlusIcon, SparkIcon } from "./icons.js";
 import { McpInvocationCenter } from "./mcp-invocation-center.js";
+import { SkillSelectionDialog } from "./skill-selection-dialog.js";
 import { WorkerCenter } from "./worker-center.js";
 
 interface RequirementWorkbenchProps {
@@ -740,6 +741,13 @@ export function RequirementWorkbench({
     "workbench" | "workers" | "extensions" | "approvals"
   >("workbench");
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [pendingDelivery, setPendingDelivery] = useState<{
+    actionUrl: string;
+    body: Record<string, unknown>;
+    skills: Awaited<
+      ReturnType<ForgeXClient["listExtensions"]>
+    >["teamCapabilities"];
+  } | null>(null);
   const [expandedDetail, setExpandedDetail] = useState<string | null>(null);
   const [detail, setDetail] = useState<RequirementDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -798,20 +806,53 @@ export function RequirementWorkbench({
     [items],
   );
 
-  const runAction = async (
+  const executeAction = async (
     actionUrl: string,
     body: Record<string, unknown>,
-  ) => {
-    if (actionActiveRef.current) return;
+  ): Promise<boolean> => {
+    if (actionActiveRef.current) return false;
     actionActiveRef.current = true;
     setBusyAction(actionUrl);
     setError(null);
     try {
       await client.runRequirementAction(actionUrl, body);
       await load();
+      return true;
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "操作没有完成，请重试",
+      );
+      return false;
+    } finally {
+      actionActiveRef.current = false;
+      if (mountedRef.current) setBusyAction(null);
+    }
+  };
+
+  const runAction = async (
+    actionUrl: string,
+    body: Record<string, unknown>,
+  ) => {
+    if (!actionUrl.endsWith("/start-delivery")) {
+      await executeAction(actionUrl, body);
+      return;
+    }
+    if (actionActiveRef.current) return;
+    actionActiveRef.current = true;
+    setBusyAction(actionUrl);
+    setError(null);
+    try {
+      const extensions = await client.listExtensions();
+      setPendingDelivery({
+        actionUrl,
+        body,
+        skills: extensions.teamCapabilities.filter(
+          (item) => item.status === "可使用",
+        ),
+      });
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "暂时无法读取团队能力",
       );
     } finally {
       actionActiveRef.current = false;
@@ -1108,6 +1149,19 @@ export function RequirementWorkbench({
           client={client}
           onClose={() => setCreating(false)}
           onCreated={load}
+        />
+      ) : null}
+      {pendingDelivery ? (
+        <SkillSelectionDialog
+          skills={pendingDelivery.skills}
+          busy={busyAction === pendingDelivery.actionUrl}
+          onClose={() => setPendingDelivery(null)}
+          onConfirm={(skillKeys) =>
+            executeAction(pendingDelivery.actionUrl, {
+              ...pendingDelivery.body,
+              skillKeys,
+            })
+          }
         />
       ) : null}
     </div>

@@ -175,6 +175,7 @@ describe("PostgresRequirementRepository", () => {
         requirementRevision: 1,
         title: spec.title,
         requiredCapabilities: ["typescript"],
+        skills: [],
         requestedAt: now,
         dispatchedAt: null,
       });
@@ -331,6 +332,7 @@ describe("PostgresRequirementRepository", () => {
                 requirement_revision: 1,
                 title: spec.title,
                 required_capabilities: ["typescript"],
+                skills: [],
                 requested_at: now,
                 dispatched_at: null,
               },
@@ -555,6 +557,17 @@ describe("PostgresRequirementRepository", () => {
     expect(migration).toContain("DROP CONSTRAINT IF EXISTS");
     expect(migration).toContain("'requirement.revised'");
     expect(migration).toContain("ADD CONSTRAINT");
+  });
+
+  it("交付 Skill 迁移为派发记录增加有界选择", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0017_delivery_skills.sql", import.meta.url),
+      "utf8",
+    );
+
+    expect(migration).toContain("ADD COLUMN IF NOT EXISTS skills jsonb");
+    expect(migration).toContain("jsonb_typeof(skills) = 'array'");
+    expect(migration).toContain("jsonb_array_length(skills) <= 10");
   });
 
   it("在需求事务内持久化证据防重放记录", async () => {

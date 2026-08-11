@@ -105,6 +105,7 @@ const createTestApp = (
     readiness?: () => Promise<void>;
     serviceVersion?: string;
     sessionCookieSecure?: boolean;
+    skillEvaluationAuthority?: SkillEvaluationAuthority;
   } = {},
 ) => {
   const repository = new InMemoryRequirementRepository();
@@ -115,9 +116,9 @@ const createTestApp = (
   const mcpInvocationRepository = new InMemoryMcpInvocationRepository();
   const skillRegistryRepository = new InMemorySkillRegistryRepository();
   const skillArtifactStore = new InMemorySkillArtifactStore();
-  const skillEvaluationAuthority = new SkillEvaluationAuthority({
-    evaluators: [],
-  });
+  const skillEvaluationAuthority =
+    runtime.skillEvaluationAuthority ??
+    new SkillEvaluationAuthority({ evaluators: [] });
   const previewArtifactStore = new InMemoryPreviewArtifactStore();
   const sessions = new Map<string, AuthenticatedPrincipal>([
     ["product-session", productOwner],
@@ -152,7 +153,13 @@ const createTestApp = (
     projectKey,
     repositoryKey: projectKey,
     clock: () => new Date("2026-08-10T03:00:00.000Z"),
-    ...runtime,
+    ...(runtime.readiness ? { readiness: runtime.readiness } : {}),
+    ...(runtime.serviceVersion
+      ? { serviceVersion: runtime.serviceVersion }
+      : {}),
+    ...(runtime.sessionCookieSecure !== undefined
+      ? { sessionCookieSecure: runtime.sessionCookieSecure }
+      : {}),
   });
   return {
     app,
@@ -437,6 +444,330 @@ describe("需求 API", () => {
     });
     await app.close();
   });
+
+  it("管理员可从空注册表发布并激活可信 Skill 与 MCP", async () => {
+    const { privateKey: evaluatorPrivateKey, publicKey: evaluatorPublicKey } =
+      generateKeyPairSync("ed25519");
+    const { privateKey: verifierPrivateKey, publicKey: verifierPublicKey } =
+      generateKeyPairSync("ed25519");
+    const evaluatorKey = "a1000000-0000-4000-8000-000000000001";
+    const evaluatorKeyId = "a2000000-0000-4000-8000-000000000002";
+    const verifierKey = "a3000000-0000-4000-8000-000000000003";
+    const verifierKeyId = "a4000000-0000-4000-8000-000000000004";
+    const skillEvaluationAuthority = new SkillEvaluationAuthority({
+      evaluators: [
+        {
+          evaluatorKey,
+          keyId: evaluatorKeyId,
+          evaluatorName: "独立 Skill 评测器",
+          publicKeyBase64: evaluatorPublicKey
+            .export({ type: "spki", format: "der" })
+            .toString("base64"),
+          scopes: [{ tenantKey, projectKey }],
+        },
+      ],
+      clock: () => new Date("2026-08-10T03:00:00.000Z"),
+    });
+    const mcpHealthAuthority = new McpHealthAuthority({
+      verifiers: [
+        {
+          verifierKey,
+          keyId: verifierKeyId,
+          verifierName: "独立 MCP 探测器",
+          publicKeyBase64: verifierPublicKey
+            .export({ type: "spki", format: "der" })
+            .toString("base64"),
+          scopes: [{ tenantKey, projectKey }],
+        },
+      ],
+      clock: () => new Date("2026-08-10T03:00:00.000Z"),
+    });
+    const { app } = createTestApp(mcpHealthAuthority, {
+      skillEvaluationAuthority,
+    });
+
+    const skillKey = "a5000000-0000-4000-8000-000000000005";
+    const artifactBytes = SkillPackageCodec.encode({
+      schemaVersion: 1,
+      instructions:
+        "# 需求风险检查\n\n在开始实现前检查歧义、遗漏和高风险变更。",
+      resources: [],
+    });
+    const skillManifest = {
+      schemaVersion: 1 as const,
+      skillKey,
+      tenantKey,
+      projectKey,
+      version: "1.0.0",
+      name: "需求风险检查",
+      summary: "在进入开发前检查遗漏、歧义和高风险变更",
+      artifactHashAlgorithm: "sha256" as const,
+      artifactHash: createHash("sha256").update(artifactBytes).digest("hex"),
+      artifactSizeBytes: artifactBytes.byteLength,
+      entrypoint: "SKILL.md" as const,
+      compatibleBlueprints: ["Web 应用"],
+      requiredCapabilities: ["读取项目文件"],
+      permissions: {
+        workspace: "read_only" as const,
+        network: "none" as const,
+        commands: "none" as const,
+      },
+      createdAt: "2026-08-10T02:00:00.000Z",
+    };
+    const deniedSkillPublish = await app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/skills",
+      headers: { authorization: "Bearer developer-session" },
+      payload: {
+        schemaVersion: 1,
+        manifest: skillManifest,
+        artifactContentBase64: Buffer.from(artifactBytes).toString("base64"),
+      },
+    });
+    expect(deniedSkillPublish.statusCode).toBe(403);
+
+    const secretArtifactBytes = SkillPackageCodec.encode({
+      schemaVersion: 1,
+      instructions:
+        '# 需求风险检查\n\n执行前使用 password = "correct horse battery staple" 登录。',
+      resources: [],
+    });
+    const rejectedSecret = await app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/skills",
+      headers: { authorization: "Bearer admin-session" },
+      payload: {
+        schemaVersion: 1,
+        manifest: {
+          ...skillManifest,
+          artifactHash: createHash("sha256")
+            .update(secretArtifactBytes)
+            .digest("hex"),
+          artifactSizeBytes: secretArtifactBytes.byteLength,
+        },
+        artifactContentBase64:
+          Buffer.from(secretArtifactBytes).toString("base64"),
+      },
+    });
+    expect(rejectedSecret.statusCode).toBe(422);
+    expect(rejectedSecret.json().error.code).toBe("skill_credential_detected");
+
+    const skillPublish = await app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/skills",
+      headers: { authorization: "Bearer admin-session" },
+      payload: {
+        schemaVersion: 1,
+        manifest: skillManifest,
+        artifactContentBase64: Buffer.from(artifactBytes).toString("base64"),
+      },
+    });
+    expect(skillPublish.statusCode).toBe(201);
+    expect(skillPublish.headers["cache-control"]).toBe("no-store");
+
+    const evaluationPayload = {
+      schemaVersion: 1 as const,
+      evaluationKey: "a6000000-0000-4000-8000-000000000006",
+      tenantKey,
+      projectKey,
+      skillKey,
+      skillVersion: "1.0.0",
+      artifactHashAlgorithm: "sha256" as const,
+      artifactHash: skillManifest.artifactHash,
+      manifestHashAlgorithm: "sha256" as const,
+      manifestHash: SkillEvaluationAuthority.manifestHash(skillManifest),
+      evaluatorKey,
+      keyId: evaluatorKeyId,
+      suiteName: "ForgeX 基础交付评测",
+      suiteRevision: 1,
+      producedAt: "2026-08-10T02:30:00.000Z",
+      outcome: "passed" as const,
+      score: 96,
+      scenarioCount: 8,
+      passedScenarioCount: 8,
+      criticalFailureCount: 0,
+    };
+    const evaluation = {
+      payload: evaluationPayload,
+      signature: signPayload(
+        null,
+        Buffer.from(
+          SkillEvaluationAuthority.canonicalPayload(evaluationPayload),
+          "utf8",
+        ),
+        evaluatorPrivateKey,
+      ).toString("base64"),
+    };
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/extensions/skills/${skillKey}/evaluations`,
+          headers: { authorization: "Bearer admin-session" },
+          payload: { schemaVersion: 1, evaluation },
+        })
+      ).statusCode,
+    ).toBe(204);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/extensions/skills/${skillKey}/versions/1.0.0/activate`,
+          headers: { authorization: "Bearer admin-session" },
+          payload: { schemaVersion: 1 },
+        })
+      ).statusCode,
+    ).toBe(204);
+
+    const serverKey = "a7000000-0000-4000-8000-000000000007";
+    const toolKey = "a8000000-0000-4000-8000-000000000008";
+    const inputSchema = {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          title: "检索条件",
+          writeOnly: false,
+          minLength: 1,
+          maxLength: 100,
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    };
+    const inputSchemaHash = canonicalizeMcpInputSchema(inputSchema).hash;
+    const mcpManifest = {
+      schemaVersion: 1 as const,
+      serverKey,
+      tenantKey,
+      projectKey,
+      revision: 1,
+      name: "业务资料检索",
+      summary: "通过设备本地连接检索业务资料",
+      transport: "stdio" as const,
+      connectionBindingKey: "a9000000-0000-4000-8000-000000000009",
+      protocolVersion: "2025-06-18",
+      tools: [
+        {
+          toolKey,
+          technicalName: "knowledge.search",
+          displayName: "检索业务资料",
+          description: "按明确条件检索业务资料",
+          effect: "read" as const,
+          approval: "automatic" as const,
+          inputSchemaHashAlgorithm: "sha256" as const,
+          inputSchemaHash,
+        },
+      ],
+      publishedAt: "2026-08-10T02:00:00.000Z",
+    };
+    const rejectedMcpPublish = await app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/mcp",
+      headers: { authorization: "Bearer admin-session" },
+      payload: {
+        schemaVersion: 1,
+        manifest: {
+          ...mcpManifest,
+          summary: '业务连接说明 api_key = "actual-production-secret-123456"',
+        },
+        inputSchemas: [{ toolKey, schema: inputSchema }],
+      },
+    });
+    expect(rejectedMcpPublish.statusCode).toBe(422);
+    expect(rejectedMcpPublish.json().error.code).toBe(
+      "mcp_credential_detected",
+    );
+    const mcpPublish = await app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/mcp",
+      headers: { authorization: "Bearer admin-session" },
+      payload: {
+        schemaVersion: 1,
+        manifest: mcpManifest,
+        inputSchemas: [{ toolKey, schema: inputSchema }],
+      },
+    });
+    expect(mcpPublish.statusCode).toBe(201);
+
+    const healthPayload = {
+      schemaVersion: 1 as const,
+      attestationKey: "aa000000-0000-4000-8000-000000000010",
+      probeSequence: 1,
+      previousAttestationKey: null,
+      tenantKey,
+      projectKey,
+      serverKey,
+      serverRevision: 1,
+      manifestHashAlgorithm: "sha256" as const,
+      manifestHash: McpHealthAuthority.manifestHash(mcpManifest),
+      verifierKey,
+      keyId: verifierKeyId,
+      serverIdentityHashAlgorithm: "sha256" as const,
+      serverIdentityHash: "b".repeat(64),
+      protocolVersion: mcpManifest.protocolVersion,
+      observedTools: [
+        {
+          technicalName: "knowledge.search",
+          inputSchemaHashAlgorithm: "sha256" as const,
+          inputSchemaHash,
+        },
+      ],
+      status: "healthy" as const,
+      recoveryChallengeKey: null,
+      producedAt: "2026-08-10T02:30:00.000Z",
+    };
+    const health = {
+      payload: healthPayload,
+      signature: signPayload(
+        null,
+        Buffer.from(McpHealthAuthority.canonicalPayload(healthPayload), "utf8"),
+        verifierPrivateKey,
+      ).toString("base64"),
+    };
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/extensions/mcp/${serverKey}/health`,
+          headers: { authorization: "Bearer admin-session" },
+          payload: { schemaVersion: 1, health },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/extensions/mcp/${serverKey}/revisions/1/enable`,
+          headers: { authorization: "Bearer admin-session" },
+          payload: { schemaVersion: 1 },
+        })
+      ).statusCode,
+    ).toBe(204);
+
+    const overview = await app.inject({
+      method: "GET",
+      url: "/api/v1/extensions",
+      headers: { authorization: "Bearer admin-session" },
+    });
+    expect(overview.statusCode).toBe(200);
+    expect(overview.json().data).toMatchObject({
+      teamCapabilities: [
+        expect.objectContaining({ name: "需求风险检查", status: "可使用" }),
+      ],
+      externalTools: [
+        expect.objectContaining({ name: "业务资料检索", status: "可使用" }),
+      ],
+      links: {
+        actions: {
+          publishSkill: "/api/v1/extensions/skills",
+          publishMcp: "/api/v1/extensions/mcp",
+        },
+      },
+    });
+    await app.close();
+  }, 15_000);
 
   it("MCP 调用从可信能力和内容寻址 Schema 创建，写入操作只向产品负责人提供确认入口", async () => {
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");

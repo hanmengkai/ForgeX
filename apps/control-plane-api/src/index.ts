@@ -23,6 +23,8 @@ import {
   VerificationCoordinatorService,
   SkillRegistryApplicationService,
   WorkerFleetService,
+  canonicalizeMcpInputSchema,
+  assertMcpManifestContainsNoCredential,
   canConnectWorker,
   canPerformRequirementAction,
   requirementCompletionDigest,
@@ -60,9 +62,14 @@ import type {
   EvidenceAuthority,
   RequirementAllowedAction,
 } from "@forgex/domain";
-import type {
-  McpHealthAuthority,
-  SkillEvaluationAuthority,
+import {
+  McpServerManifestSchema,
+  SignedMcpHealthAttestationSchema,
+  SignedSkillEvaluationSchema,
+  SkillPackageCodec,
+  SkillPackageManifestSchema,
+  type McpHealthAuthority,
+  type SkillEvaluationAuthority,
 } from "@forgex/extensions";
 
 import {
@@ -166,6 +173,16 @@ const skillExtensionParamsSchema = z
       .transform((value) => value.toLowerCase()),
   })
   .strict();
+const skillVersionParamsSchema = skillExtensionParamsSchema
+  .extend({
+    version: z
+      .string()
+      .trim()
+      .min(1)
+      .max(50)
+      .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u),
+  })
+  .strict();
 const mcpInvocationParamsSchema = z
   .object({
     invocationKey: z
@@ -182,6 +199,72 @@ const mcpExtensionParamsSchema = z
       .transform((value) => value.toLowerCase()),
   })
   .strict();
+const mcpRevisionParamsSchema = mcpExtensionParamsSchema
+  .extend({ revision: z.coerce.number().int().positive() })
+  .strict();
+const MAX_SKILL_PACKAGE_BYTES = 20 * 1024 * 1024;
+const SKILL_PACKAGE_BODY_LIMIT_BYTES = 29 * 1024 * 1024;
+const MCP_MANIFEST_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
+const extensionCanonicalBase64Pattern =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const skillPublishCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    manifest: SkillPackageManifestSchema,
+    artifactContentBase64: z
+      .string()
+      .min(1)
+      .max(Math.ceil(MAX_SKILL_PACKAGE_BYTES / 3) * 4)
+      .regex(extensionCanonicalBase64Pattern),
+  })
+  .strict();
+const skillEvaluationCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    evaluation: SignedSkillEvaluationSchema,
+  })
+  .strict();
+const mcpPublishCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    manifest: McpServerManifestSchema,
+    inputSchemas: z
+      .array(
+        z
+          .object({
+            toolKey: z
+              .string()
+              .uuid()
+              .transform((value) => value.toLowerCase()),
+            schema: z.unknown(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50),
+  })
+  .strict()
+  .superRefine((command, context) => {
+    if (
+      new Set(command.inputSchemas.map((item) => item.toolKey)).size !==
+      command.inputSchemas.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["inputSchemas"],
+        message: "MCP 工具 Schema 不能重复",
+      });
+    }
+  });
+const mcpHealthCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    health: SignedMcpHealthAttestationSchema,
+  })
+  .strict();
+const revisionActionCommandSchema = z
+  .object({ schemaVersion: z.literal(1) })
+  .strict();
 const emptyCommandSchema = z.object({}).strict();
 const requirementListQuerySchema = z
   .object({
@@ -194,6 +277,18 @@ const runnerVerificationListQuerySchema = z
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })
   .strict();
+
+const requireExtensionAdministrator = (
+  principal: AuthenticatedPrincipal,
+): void => {
+  if (!principal.roles.includes("administrator")) {
+    throw new ApplicationError(
+      403,
+      "extension_admin_required",
+      "只有平台管理员可以管理团队能力或外部工具",
+    );
+  }
+};
 const PREVIEW_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 const PREVIEW_ARTIFACT_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
 const MAX_PREVIEW_BASE64_LENGTH = Math.ceil(PREVIEW_MAX_ARTIFACT_BYTES / 3) * 4;
@@ -552,6 +647,8 @@ export const buildControlPlaneApi = (
     requirements,
     requirementRepository: options.requirementRepository,
     workers,
+    projectKey: options.projectKey,
+    skillDirectory: skills,
     ...(options.clock ? { clock: options.clock } : {}),
   });
   const verifications = new VerificationCoordinatorService({
@@ -1042,6 +1139,303 @@ export const buildControlPlaneApi = (
       data: await extensions.overviewForPeople(principal),
     });
   });
+
+  app.post(
+    "/api/v1/extensions/skills",
+    { bodyLimit: SKILL_PACKAGE_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const command = skillPublishCommandSchema.safeParse(request.body);
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "Skill 发布内容需要调整",
+          validationDetails(command.error),
+        );
+      }
+      const bytes = Uint8Array.from(
+        Buffer.from(command.data.artifactContentBase64, "base64"),
+      );
+      try {
+        SkillPackageCodec.decode(bytes);
+      } catch {
+        throw new ApplicationError(
+          422,
+          "invalid_skill_package",
+          "Skill 制品不是规范的可信包",
+        );
+      }
+      if (
+        command.data.manifest.artifactSizeBytes !== bytes.byteLength ||
+        command.data.manifest.artifactHash !==
+          createHash("sha256").update(bytes).digest("hex")
+      ) {
+        throw new ApplicationError(
+          422,
+          "invalid_skill_package",
+          "Skill 制品与清单摘要不一致",
+        );
+      }
+      await skills.publish(principal, command.data.manifest, bytes);
+      const self = `/api/v1/extensions/skills/${command.data.manifest.skillKey}`;
+      return reply
+        .code(201)
+        .header("Location", self)
+        .send({ data: { status: "已发布", links: { self } } });
+    },
+  );
+
+  app.post(
+    "/api/v1/extensions/skills/:skillKey/evaluations",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const params = skillExtensionParamsSchema.safeParse(request.params);
+      const command = skillEvaluationCommandSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "Skill 评测内容需要调整",
+          !params.success
+            ? validationDetails(params.error)
+            : validationDetails(command.error!),
+        );
+      }
+      if (command.data.evaluation.payload.skillKey !== params.data.skillKey) {
+        throw new ApplicationError(
+          422,
+          "skill_evaluation_mismatch",
+          "Skill 评测没有绑定当前能力",
+        );
+      }
+      try {
+        options.skillEvaluationAuthority.verify(command.data.evaluation);
+      } catch {
+        throw new ApplicationError(
+          422,
+          "invalid_skill_evaluation",
+          "Skill 独立评测未通过可信校验",
+        );
+      }
+      await skills.recordEvaluation(
+        principal.tenantKey,
+        command.data.evaluation,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    "/api/v1/extensions/skills/:skillKey/versions/:version/activate",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const params = skillVersionParamsSchema.safeParse(request.params);
+      const command = revisionActionCommandSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "Skill 激活内容需要调整",
+          !params.success
+            ? validationDetails(params.error)
+            : validationDetails(command.error!),
+        );
+      }
+      await skills.activate(
+        principal,
+        params.data.skillKey,
+        params.data.version,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    "/api/v1/extensions/mcp",
+    { bodyLimit: MCP_MANIFEST_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const command = mcpPublishCommandSchema.safeParse(request.body);
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "MCP 发布内容需要调整",
+          validationDetails(command.error),
+        );
+      }
+      const { manifest } = command.data;
+      if (
+        manifest.tenantKey !== principal.tenantKey ||
+        manifest.projectKey !== options.projectKey.toLowerCase()
+      ) {
+        throw new ApplicationError(
+          422,
+          "mcp_scope_mismatch",
+          "MCP 服务器不属于当前租户或项目",
+        );
+      }
+      assertMcpManifestContainsNoCredential(manifest);
+      const schemas = new Map(
+        command.data.inputSchemas.map((item) => [item.toolKey, item.schema]),
+      );
+      if (
+        schemas.size !== manifest.tools.length ||
+        manifest.tools.some((tool) => !schemas.has(tool.toolKey))
+      ) {
+        throw new ApplicationError(
+          422,
+          "mcp_schema_mismatch",
+          "MCP 发布必须逐项提供工具输入 Schema",
+        );
+      }
+      const canonicalSchemas: Array<{
+        toolKey: string;
+        schema: Record<string, unknown>;
+        hash: string;
+      }> = [];
+      try {
+        for (const tool of manifest.tools) {
+          const canonical = canonicalizeMcpInputSchema(
+            schemas.get(tool.toolKey),
+          );
+          if (canonical.hash !== tool.inputSchemaHash) {
+            throw new Error("schema_hash_mismatch");
+          }
+          canonicalSchemas.push({
+            toolKey: tool.toolKey,
+            schema: canonical.schema,
+            hash: canonical.hash,
+          });
+        }
+      } catch (error) {
+        if (error instanceof ApplicationError) throw error;
+        throw new ApplicationError(
+          422,
+          "mcp_schema_mismatch",
+          "MCP 工具 Schema 与清单摘要不一致",
+        );
+      }
+      for (const schema of canonicalSchemas) {
+        await options.mcpInputSchemaStore.put(
+          {
+            tenantKey: principal.tenantKey,
+            projectKey: options.projectKey,
+            hashAlgorithm: "sha256",
+            hash: schema.hash,
+          },
+          schema.schema,
+        );
+      }
+      await mcpServers.publish(principal, manifest);
+      const self = `/api/v1/extensions/mcp/${manifest.serverKey}`;
+      return reply
+        .code(201)
+        .header("Location", self)
+        .send({ data: { status: "已发布", links: { self } } });
+    },
+  );
+
+  app.post(
+    "/api/v1/extensions/mcp/:serverKey/health",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const params = mcpExtensionParamsSchema.safeParse(request.params);
+      const command = mcpHealthCommandSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "MCP 探测内容需要调整",
+          !params.success
+            ? validationDetails(params.error)
+            : validationDetails(command.error!),
+        );
+      }
+      if (command.data.health.payload.serverKey !== params.data.serverKey) {
+        throw new ApplicationError(
+          422,
+          "mcp_health_mismatch",
+          "MCP 探测没有绑定当前服务器",
+        );
+      }
+      try {
+        options.mcpHealthAuthority.verify(command.data.health);
+      } catch {
+        throw new ApplicationError(
+          422,
+          "invalid_mcp_health",
+          "MCP 独立探测未通过可信校验",
+        );
+      }
+      const outcome = await mcpServers.recordHealth(
+        principal.tenantKey,
+        command.data.health,
+      );
+      return reply.send({ data: outcome });
+    },
+  );
+
+  app.post(
+    "/api/v1/extensions/mcp/:serverKey/revisions/:revision/enable",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const params = mcpRevisionParamsSchema.safeParse(request.params);
+      const command = revisionActionCommandSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "MCP 启用内容需要调整",
+          !params.success
+            ? validationDetails(params.error)
+            : validationDetails(command.error!),
+        );
+      }
+      await mcpServers.enable(
+        principal,
+        params.data.serverKey,
+        params.data.revision,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    "/api/v1/extensions/mcp/:serverKey/disable",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      requireExtensionAdministrator(principal);
+      reply.header("Cache-Control", "no-store");
+      const params = mcpExtensionParamsSchema.safeParse(request.params);
+      const command = revisionActionCommandSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "MCP 停用内容需要调整",
+          !params.success
+            ? validationDetails(params.error)
+            : validationDetails(command.error!),
+        );
+      }
+      await mcpServers.disable(principal, params.data.serverKey);
+      return reply.code(204).send();
+    },
+  );
 
   app.post("/api/v1/knowledge-bases", async (request, reply) => {
     const principal = principalFrom(request);
