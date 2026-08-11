@@ -37,6 +37,7 @@ import {
 import { McpInvocationCenter } from "./mcp-invocation-center.js";
 import { PlatformConfigurationCenter } from "./platform-configuration-center.js";
 import { SkillSelectionDialog } from "./skill-selection-dialog.js";
+import { ThemeToggle } from "./theme.js";
 import { WorkerCenter } from "./worker-center.js";
 
 interface RequirementWorkbenchProps {
@@ -1313,6 +1314,7 @@ export function RequirementWorkbench({
             </span>
           </div>
           <div className="workspace-account">
+            <ThemeToggle />
             <span className="account-avatar compact">
               <UserIcon />
             </span>

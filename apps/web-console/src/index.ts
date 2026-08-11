@@ -35,3 +35,4 @@ export { McpInvocationCenter } from "./mcp-invocation-center.js";
 export { AccountManagement } from "./account-management.js";
 export { PlatformConfigurationCenter } from "./platform-configuration-center.js";
 export { IntegrationManagement } from "./integration-management.js";
+export { initializeColorTheme, ThemeToggle, type ColorTheme } from "./theme.js";
