@@ -77,7 +77,10 @@ const createClient = (): ForgeXClient =>
     }),
   }) as unknown as ForgeXClient;
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("平台资源配置", () => {
   it("按客户、项目、多个代码仓库展示 Git 地址和本地路径", async () => {
@@ -122,6 +125,24 @@ describe("平台资源配置", () => {
 });
 
 describe("MCP 与外部工具配置", () => {
+  it("通过公网 HTTP 访问时仍能生成本地连接标识", async () => {
+    const secureCrypto = globalThis.crypto;
+    vi.stubGlobal("crypto", {
+      getRandomValues: secureCrypto.getRandomValues.bind(secureCrypto),
+    });
+
+    render(<IntegrationManagement client={createClient()} />);
+
+    expect(
+      await screen.findByRole("heading", { name: "MCP 与外部工具" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("在浏览器本地生成可信发布输入并给出后续命令", async () => {
     render(<IntegrationManagement client={createClient()} />);
 
