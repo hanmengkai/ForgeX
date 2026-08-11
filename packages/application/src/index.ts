@@ -43,6 +43,21 @@ export {
 } from "./knowledge-base-service.js";
 export { ApplicationError } from "./errors.js";
 export type { ApplicationErrorDetail } from "./errors.js";
+export {
+  InMemoryPlatformConfigurationRepository,
+  PlatformConfigurationService,
+  type PlatformConfigurationDeleteInput,
+  type PlatformConfigurationRepository,
+  type PlatformCustomer,
+  type PlatformCustomerCreateInput,
+  type PlatformCustomerUpdateInput,
+  type PlatformProject,
+  type PlatformProjectCreateInput,
+  type PlatformProjectUpdateInput,
+  type PlatformRepositoryBinding,
+  type PlatformRepositoryCreateInput,
+  type PlatformRepositoryUpdateInput,
+} from "./platform-configuration-service.js";
 export { containsLikelyPlaintextCredential } from "./credential-safety.js";
 export {
   InMemoryMcpRegistryRepository,

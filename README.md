@@ -16,7 +16,7 @@ ForgeX 是一个开源的 AI 软件交付控制面。它把需求澄清、方案
 
 1. 需求而不是聊天记录是交付主线。
 2. 每个阶段产生结构化、版本化的 Artifact。
-3. Codex 登录留在客户设备本地，平台通过租约调度最多五个账户并行工作。
+3. Codex 登录留在客户设备本地，平台通过租约按团队实际规模调度任意数量账户并行工作。
 4. CI 和独立 Runner 产生验证结论，Agent 不能自证通过。
 5. 不可逆操作必须经过明确的人工审批。
 
@@ -174,7 +174,7 @@ Web Console 默认运行在 `http://localhost:4173`，并把 `/api` 转发到本
 
 - 需求控制面：版本化需求、确认审批、租户与项目隔离、分页和审计。
 - 独立证据链：可信 Runner、公钥验签、交付候选绑定、内容寻址的同源 Preview 网关，以及验收快照。
-- Codex 设备网关：最多五个账户、出站心跳、定向轮询、租约续期、fencing、重连回收和幂等完成。
+- Codex 设备网关：账户数量不设产品上限，支持出站心跳、定向轮询、租约续期、fencing、重连回收和幂等完成。
 - Codex 设备 Worker：使用官方 TypeScript Codex SDK，在仓库外独立 worktree 中执行已确认需求；仓库身份、需求版本、基线提交、新提交、分支和永久完成证明形成可恢复审计链，开发测试不能替代独立验收证据。
 - 扩展控制面：按“业务资料、团队能力、外部工具”管理知识库、Skills 和 MCP 元数据，页面不暴露传输方式、凭据或内部标识。
 - 引用优先的业务知识库：需求分析师可发布和归档纯文本或 Markdown 资料，系统保留内容摘要与版本审计，并以带资料名、版本和段落的引用返回检索结果；资料内容始终按参考信息处理，不能覆盖平台指令或审批边界。
@@ -182,12 +182,12 @@ Web Console 默认运行在 `http://localhost:4173`，并把 `/api` 转发到本
 - 可信 MCP 注册：设备本地连接绑定、独立 Ed25519 身份与能力探测、只读自动/变更确认策略、可验证回滚与 PostgreSQL 审计；页面不展示连接或工具编码。
 - MCP 调用控制：内容寻址的输入 Schema、严格参数校验、只读自动排队、写入与外部动作由产品负责人确认，并把能力版本、参数摘要和审批记录固化到审计链；设备 Worker 已通过官方 MCP SDK 按本地连接精确执行并支持崩溃恢复，控制面不接收明文凭据。
 - 共享持久化边界：测试/单机开发使用内存仓储；生产需求主线、审计、交付 outbox、Preview 制品和设备舰队均使用 PostgreSQL 事务仓储。
-- 人性化 Web 工作台：使用业务语言展示需求状态、下一步和验收标准，支持录入用户故事与待澄清问题、修订完整规格、查看逐版差异，并由服务端 HATEOAS 与角色权限约束操作；设备中心可查看五账户容量、在线忙闲和当前交付，页面已覆盖桌面/移动端、明暗主题和键盘操作。
+- 人性化 Web 工作台：使用业务语言展示需求状态、下一步和验收标准，支持录入用户故事与待澄清问题、修订完整规格、查看逐版差异，并由服务端 HATEOAS 与角色权限约束操作；设备中心可查看不限量账户、在线忙闲和当前交付，平台管理可维护客户、项目、多代码仓库及本地工作路径，并在浏览器本地生成 MCP 与外部工具发布配置。页面已覆盖桌面/移动端、明暗主题和键盘操作。
 
 浏览器使用平台账号和密码调用同源会话入口；服务端以 `scrypt` 校验数据库中的盐值哈希，并交换为随机 opaque 会话。数据库不保存明文密码，只保存密码哈希、会话摘要、服务端到期时间和当前授权配置版本。返回的 `forgex_session` Cookie 使用 `HttpOnly`、`SameSite=Strict`、`Path=/`；除明确用于本机 HTTP 的配置外还必须启用 `Secure`。同一人员重新登录会撤销其旧会话，注销、服务端到期、账号修改或删除以及替换运行配置摘要都会让旧 Cookie 返回 401。Web 不把密码写入 `localStorage`、构建变量或普通日志，成功登录后立即清空输入；Cookie 写请求要求 `X-ForgeX-CSRF: 1`。超级管理员可在“平台管理 / 账号管理”中增删改查本租户所有账号，并为账号重置密码；系统会阻止停用或删除最后一个可用超级管理员。非浏览器客户端仍可使用 `Authorization: Bearer ...`。组织级 SSO 可在相同 `SessionAuthenticator` 边界接入。
 
-生产接入前必须运行 `npm run db:migrate`。统一迁移器会按编号校验并执行从 [0001_worker_fleet.sql](packages/postgres/migrations/0001_worker_fleet.sql) 到 [0018_platform_accounts.sql](packages/postgres/migrations/0018_platform_accounts.sql) 的完整迁移链，禁止改写已登记迁移或跳过中间版本；Control Plane 的 readiness 也会核对名称与 SHA-256，不完整或漂移时返回 503。所有 API 副本必须连接同一数据库，并使用稳定且与设备端一致的 `projectKey`、`repositoryKey`。需求、Runner、Skill 与 MCP 的验证器必须保留历史公钥，并把退役密钥设置为仅核验历史记录。当前仍是预发布版本，不应直接用于生产交付。
+生产接入前必须运行 `npm run db:migrate`。统一迁移器会按编号校验并执行从 [0001_worker_fleet.sql](packages/postgres/migrations/0001_worker_fleet.sql) 到 [0019_platform_configuration.sql](packages/postgres/migrations/0019_platform_configuration.sql) 的完整迁移链，禁止改写已登记迁移或跳过中间版本；Control Plane 的 readiness 也会核对名称与 SHA-256，不完整或漂移时返回 503。所有 API 副本必须连接同一数据库，并使用稳定且与设备端一致的 `projectKey`、`repositoryKey`。需求、Runner、Skill 与 MCP 的验证器必须保留历史公钥，并把退役密钥设置为仅核验历史记录。当前仍是预发布版本，不应直接用于生产交付。
 
-当前完整顺序为 `0001_worker_fleet.sql`、`0002_requirement_control_plane.sql`、`0003_requirement_acceptance_audit.sql`、`0004_preview_artifacts.sql`、`0005_extension_catalog.sql`、`0006_skill_registry.sql`、`0007_mcp_registry.sql`、`0008_mcp_invocations.sql`、`0009_worker_work_kinds.sql`、`0010_knowledge_bases.sql`、`0011_delivery_runs.sql`、`0012_runner_verification.sql`、`0013_verification_failures.sql`、`0014_browser_sessions.sql`、`0015_worker_enrollments.sql`、`0016_requirement_revisions.sql`、`0017_delivery_skills.sql`、`0018_platform_accounts.sql`。生产装配共享 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository`、`PostgresPreviewArtifactStore`、`PostgresExtensionCatalogRepository`、`PostgresSkillRegistryRepository`、`PostgresSkillArtifactStore`、`PostgresMcpRegistryRepository`、`PostgresMcpInputSchemaStore`、`PostgresMcpInvocationRepository`、`PostgresKnowledgeBaseRepository` 与 `PostgresAccountRepository`，并由 `PostgresBrowserSessionManager` 保存有界、可撤销的浏览器会话摘要，由 `PostgresWorkerEnrollmentManager` 保存短期且绑定设备身份的接入授权。
+当前完整顺序为 `0001_worker_fleet.sql`、`0002_requirement_control_plane.sql`、`0003_requirement_acceptance_audit.sql`、`0004_preview_artifacts.sql`、`0005_extension_catalog.sql`、`0006_skill_registry.sql`、`0007_mcp_registry.sql`、`0008_mcp_invocations.sql`、`0009_worker_work_kinds.sql`、`0010_knowledge_bases.sql`、`0011_delivery_runs.sql`、`0012_runner_verification.sql`、`0013_verification_failures.sql`、`0014_browser_sessions.sql`、`0015_worker_enrollments.sql`、`0016_requirement_revisions.sql`、`0017_delivery_skills.sql`、`0018_platform_accounts.sql`、`0019_platform_configuration.sql`。生产装配共享 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository`、`PostgresPreviewArtifactStore`、`PostgresExtensionCatalogRepository`、`PostgresSkillRegistryRepository`、`PostgresSkillArtifactStore`、`PostgresMcpRegistryRepository`、`PostgresMcpInputSchemaStore`、`PostgresMcpInvocationRepository`、`PostgresKnowledgeBaseRepository`、`PostgresAccountRepository` 与 `PostgresPlatformConfigurationRepository`，并由 `PostgresBrowserSessionManager` 保存有界、可撤销的浏览器会话摘要，由 `PostgresWorkerEnrollmentManager` 保存短期且绑定设备身份的接入授权。
 
 详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。

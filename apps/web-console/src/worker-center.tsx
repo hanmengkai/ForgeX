@@ -144,7 +144,7 @@ export function WorkerCenter({
           <p>每个账户独立登录在客户设备上，平台只调度任务，不接管登录凭据。</p>
         </div>
         <div className="worker-actions">
-          {overview?.connectAction && overview.capacity.availableSlots > 0 ? (
+          {overview?.connectAction ? (
             <button
               className="button primary"
               type="button"
@@ -344,28 +344,10 @@ export function WorkerCenter({
           <section className="fleet-capacity" aria-label="账户容量">
             <div>
               <span className="eyebrow">当前容量</span>
-              <h2>{`${overview.capacity.connectedAccounts} / ${overview.capacity.maxAccounts} 个账户已连接`}</h2>
-              <p>
-                {overview.capacity.availableSlots > 0
-                  ? `还有 ${overview.capacity.availableSlots} 个可用槽位`
-                  : "五个账户槽位已经全部使用"}
-              </p>
+              <h2>{`${overview.capacity.connectedAccounts} 个账户已连接`}</h2>
+              <p>Agent 数量不设上限，可继续按团队规模连接设备。</p>
             </div>
-            <div className="slot-track" aria-hidden="true">
-              {Array.from(
-                { length: overview.capacity.maxAccounts },
-                (_, index) => (
-                  <span
-                    key={index}
-                    className={
-                      index < overview.capacity.connectedAccounts
-                        ? "filled"
-                        : ""
-                    }
-                  />
-                ),
-              )}
-            </div>
+            <strong className="unlimited-capacity">不限数量</strong>
           </section>
 
           <section className="fleet-summary" aria-label="设备运行概况">

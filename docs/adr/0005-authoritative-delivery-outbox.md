@@ -12,7 +12,7 @@
 
 ## 项目边界
 
-Codex 账户和五账户上限属于租户，设备可以领取租户内不同项目的任务。每份队列任务、租约、完成记录都必须携带 `projectKey` 和 `requirementRevision`，Worker 不能把另一个项目或旧版本当作当前交付。
+Codex 账户舰队属于租户且不设置固定产品数量上限，设备可以领取租户内不同项目的任务。每份队列任务、租约、完成记录都必须携带 `projectKey` 和 `requirementRevision`，Worker 不能把另一个项目或旧版本当作当前交付。
 
 ## 原因
 

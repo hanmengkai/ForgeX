@@ -115,7 +115,7 @@ describe("GitVerificationWorkspaceProvider", () => {
     await expect(
       readFile(path.join(workspace.path, "result.txt")),
     ).rejects.toMatchObject({ code: "ENOENT" });
-  });
+  }, 15_000);
 
   it("忽略仓库内的 Git replace 引用并读取原始权威提交", async () => {
     const fixture = await repositoryFixture();

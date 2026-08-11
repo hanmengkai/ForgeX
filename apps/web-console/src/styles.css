@@ -2331,9 +2331,253 @@ h1 {
 }
 
 .workspace-body {
-  width: min(1280px, 100%);
+  width: 100%;
   padding: 34px 42px 80px;
-  margin: 0 auto;
+  margin: 0;
+}
+
+.unlimited-capacity {
+  color: var(--brand);
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.platform-configuration-center,
+.integration-management {
+  display: grid;
+  gap: 22px;
+}
+
+.platform-resource-editor form,
+.integration-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.platform-resource-editor .dialog-actions,
+.platform-enabled-toggle {
+  grid-column: 1 / -1;
+}
+
+.platform-enabled-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.customer-grid,
+.project-list,
+.repository-list {
+  display: grid;
+  gap: 12px;
+}
+
+.customer-card,
+.project-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.customer-card {
+  padding: 22px;
+  border-top: 2px solid var(--brand);
+}
+
+.project-list {
+  margin: 18px 0 14px;
+}
+
+.project-card {
+  padding: 18px;
+  background: var(--surface-muted);
+}
+
+.platform-resource-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.platform-resource-heading h2,
+.platform-resource-heading h3 {
+  margin: 5px 0 7px;
+}
+
+.platform-resource-heading p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.platform-resource-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.platform-resource-actions button {
+  padding: 6px 8px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--line);
+}
+
+.platform-resource-actions .danger-action {
+  color: var(--danger);
+}
+
+.repository-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 16px;
+  align-items: center;
+  padding: 13px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.repository-row > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.repository-row span,
+.repository-row code {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-branch {
+  padding: 5px 8px;
+  background: var(--brand-soft);
+  border: 1px solid var(--line);
+}
+
+.integration-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  padding: 1px;
+  background: var(--line);
+}
+
+.integration-steps > div {
+  display: grid;
+  gap: 7px;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.integration-steps strong {
+  color: var(--brand);
+  font-size: 12px;
+}
+
+.integration-steps span,
+.local-only-notice,
+.release-command span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.integration-form {
+  display: grid;
+  gap: 16px;
+}
+
+.integration-form > .button {
+  justify-self: start;
+}
+
+.binding-key-panel {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+}
+
+.binding-key-panel span,
+.binding-key-panel button {
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.binding-key-panel code {
+  overflow: hidden;
+  color: var(--brand);
+  text-overflow: ellipsis;
+}
+
+.binding-key-panel button {
+  padding: 6px 8px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--line);
+}
+
+.integration-output textarea {
+  width: 100%;
+  padding: 14px;
+  color: var(--ink);
+  font:
+    11px/1.55 "Cascadia Code",
+    Consolas,
+    monospace;
+  resize: vertical;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+}
+
+.release-command {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  margin-top: 14px;
+  background: var(--surface-muted);
+  border-left: 2px solid var(--brand);
+}
+
+.release-command code {
+  overflow-x: auto;
+  color: var(--brand);
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .platform-resource-editor form,
+  .integration-fields,
+  .integration-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-resource-heading,
+  .repository-row {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .platform-resource-heading {
+    flex-direction: column;
+  }
+
+  .binding-key-panel {
+    grid-template-columns: 1fr;
+  }
 }
 
 .dashboard-overview,

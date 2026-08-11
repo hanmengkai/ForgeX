@@ -38,9 +38,9 @@ describe("WorkerRegistry", () => {
     expect(() => new WorkerRegistry(registryOptions(0))).toThrow(
       "Codex 账户上限必须是正整数",
     );
-    expect(() => new WorkerRegistry(registryOptions(6))).toThrow(
-      "Codex 账户上限不能超过 5 个",
-    );
+    expect(
+      () => new WorkerRegistry(registryOptions(Number.MAX_SAFE_INTEGER + 1)),
+    ).toThrow("Codex 账户上限必须是安全整数");
   });
 
   it("拒绝会让设备永久在线的无效离线阈值", () => {
@@ -55,16 +55,16 @@ describe("WorkerRegistry", () => {
     }
   });
 
-  it("一个租户最多登记五个 Codex 账户", () => {
-    const registry = new WorkerRegistry(registryOptions());
+  it("一个租户可以按团队规模登记任意数量的 Codex 账户", () => {
+    const registry = new WorkerRegistry(registryOptions(100));
 
-    for (let index = 1; index <= 5; index += 1) {
+    for (let index = 1; index <= 12; index += 1) {
       registry.register(worker(index), new Date("2026-08-10T00:00:00Z"));
     }
 
-    expect(() =>
-      registry.register(worker(6), new Date("2026-08-10T00:00:00Z")),
-    ).toThrow("最多可连接 5 个 Codex 账户");
+    expect(
+      registry.listForPeople(new Date("2026-08-10T00:00:01Z")),
+    ).toHaveLength(12);
   });
 
   it("普通视图只展示可读信息，不暴露内部标识和账户指纹", () => {

@@ -89,8 +89,7 @@ export interface WorkerFleetPeopleOverview {
   workers: WorkerPeopleView[];
   capacity: {
     connectedAccounts: number;
-    maxAccounts: number;
-    availableSlots: number;
+    unlimited: true;
   };
 }
 
@@ -110,6 +109,7 @@ export const canConnectWorker = (principal: AuthenticatedPrincipal): boolean =>
 
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UNLIMITED_ACCOUNTS = Number.MAX_SAFE_INTEGER;
 
 export class WorkerFleetService {
   readonly #repository: WorkerFleetRepository;
@@ -125,7 +125,7 @@ export class WorkerFleetService {
   constructor(options: WorkerFleetServiceOptions) {
     this.#repository = options.repository;
     this.#clock = options.clock ?? (() => new Date());
-    this.#maxAccounts = options.maxAccounts ?? 5;
+    this.#maxAccounts = options.maxAccounts ?? UNLIMITED_ACCOUNTS;
     this.#offlineAfterMs = options.offlineAfterMs ?? 30_000;
     this.#leaseDurationMs = options.leaseDurationMs ?? 60_000;
     this.#maxPendingWork = options.maxPendingWork ?? 500;
@@ -133,12 +133,8 @@ export class WorkerFleetService {
       options.maxMcpPendingWork ?? Math.min(100, this.#maxPendingWork);
     this.#completionRetentionMs = options.completionRetentionMs ?? 86_400_000;
     this.#maxCompletionTombstones = options.maxCompletionTombstones ?? 1_000;
-    if (
-      !Number.isSafeInteger(this.#maxAccounts) ||
-      this.#maxAccounts < 1 ||
-      this.#maxAccounts > 5
-    ) {
-      throw new Error("Codex 账户上限必须在 1 到 5 之间");
+    if (!Number.isSafeInteger(this.#maxAccounts) || this.#maxAccounts < 1) {
+      throw new Error("Codex 账户上限必须是正安全整数");
     }
     if (!Number.isFinite(this.#offlineAfterMs) || this.#offlineAfterMs < 1) {
       throw new Error("设备离线时间必须大于零");
@@ -253,8 +249,7 @@ export class WorkerFleetService {
         workers,
         capacity: {
           connectedAccounts: workers.length,
-          maxAccounts: this.#maxAccounts,
-          availableSlots: this.#maxAccounts - workers.length,
+          unlimited: true,
         },
       };
     });
@@ -780,7 +775,11 @@ export class WorkerFleetService {
   ): FleetAggregate {
     if (
       snapshot.registry.tenantKey !== tenantKey.toLowerCase() ||
-      snapshot.registry.maxAccounts !== this.#maxAccounts ||
+      (snapshot.registry.maxAccounts !== this.#maxAccounts &&
+        !(
+          this.#maxAccounts === UNLIMITED_ACCOUNTS &&
+          snapshot.registry.maxAccounts <= 5
+        )) ||
       snapshot.registry.offlineAfterMs !== this.#offlineAfterMs ||
       snapshot.queue.leaseDurationMs !== this.#leaseDurationMs ||
       snapshot.queue.maxPendingWork !== this.#maxPendingWork ||
@@ -792,7 +791,10 @@ export class WorkerFleetService {
     ) {
       throw new Error("Worker 舰队运行参数与持久化配置不一致");
     }
-    const registry = WorkerRegistry.fromSnapshot(snapshot.registry);
+    const registry = WorkerRegistry.fromSnapshot({
+      ...snapshot.registry,
+      maxAccounts: this.#maxAccounts,
+    });
     return {
       registry,
       queue: DeliveryQueue.fromSnapshot(registry, snapshot.queue),

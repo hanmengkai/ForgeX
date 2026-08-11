@@ -11,12 +11,14 @@ import {
   ApplicationError,
   DeliveryCoordinatorService,
   ExtensionCatalogApplicationService,
+  InMemoryPlatformConfigurationRepository,
   KnowledgeBaseApplicationService,
   KnowledgeBaseCreateCommandSchema,
   KnowledgeSearchCommandSchema,
   KnowledgeSourcePublishCommandSchema,
   McpInvocationApplicationService,
   McpRegistryApplicationService,
+  PlatformConfigurationService,
   RequirementApplicationService,
   AuthenticatedRunnerSchema,
   RunnerVerificationFailureCommandSchema,
@@ -37,6 +39,7 @@ import {
   type McpInputSchemaStore,
   type McpInvocationRepository,
   type PlatformRole,
+  type PlatformConfigurationRepository,
   type PreviewArtifactStore,
   type RequirementRepository,
   type RunnerSessionAuthenticator,
@@ -111,6 +114,7 @@ export interface ControlPlaneApiOptions {
   requirementRepository: RequirementRepository;
   previewArtifactStore: PreviewArtifactStore;
   workerFleetRepository: WorkerFleetRepository;
+  platformConfigurationRepository?: PlatformConfigurationRepository;
   projectKey: string;
   repositoryKey: string;
   readiness?: () => Promise<void>;
@@ -410,6 +414,113 @@ const accountParamsSchema = z
       .string()
       .uuid()
       .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const platformCustomerParamsSchema = z
+  .object({
+    customerKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const platformProjectParamsSchema = z
+  .object({
+    projectKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const platformRepositoryParamsSchema = z
+  .object({
+    repositoryKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const platformResourceNameSchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(100)
+  .refine(
+    (value) => !/[\u0000-\u001f\u007f-\u009f]/u.test(value),
+    "名称不能包含控制字符",
+  );
+const platformGitUrlSchema = z
+  .string()
+  .trim()
+  .min(4)
+  .max(1_000)
+  .refine((value) => {
+    if (/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]+$/u.test(value)) return true;
+    try {
+      const url = new URL(value);
+      return (
+        ["https:", "ssh:", "git:"].includes(url.protocol) &&
+        url.password === "" &&
+        url.search === "" &&
+        url.hash === ""
+      );
+    } catch {
+      return false;
+    }
+  }, "Git 地址必须使用 HTTPS、SSH 或 Git 协议，且不能包含密码、查询参数或片段");
+const platformLocalPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1_000)
+  .refine(
+    (value) =>
+      /^(?:[A-Za-z]:[\\/]|\/|\\\\)/u.test(value) &&
+      !/[\u0000\r\n]/u.test(value),
+    "本地路径必须是 Windows、UNC 或 Linux 绝对路径",
+  );
+const platformDefaultBranchSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u)
+  .refine(
+    (value) => !value.includes("..") && !value.includes("@{"),
+    "默认分支格式不正确",
+  );
+const platformResourceCreateSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    name: platformResourceNameSchema,
+    summary: z.string().trim().min(4).max(500),
+  })
+  .strict();
+const platformResourceUpdateSchema = platformResourceCreateSchema
+  .extend({
+    expectedRevision: z.number().int().positive(),
+    enabled: z.boolean(),
+  })
+  .strict();
+const platformRepositoryCreateSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    name: platformResourceNameSchema,
+    gitUrl: platformGitUrlSchema,
+    localPath: platformLocalPathSchema,
+    defaultBranch: platformDefaultBranchSchema,
+  })
+  .strict();
+const platformRepositoryUpdateSchema = platformRepositoryCreateSchema
+  .extend({
+    expectedRevision: z.number().int().positive(),
+    enabled: z.boolean(),
+  })
+  .strict();
+const platformConfigurationDeleteSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    expectedRevision: z.number().int().positive(),
   })
   .strict();
 
@@ -723,6 +834,10 @@ export const buildControlPlaneApi = (
     repository: options.workerFleetRepository,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+  const platformConfiguration = new PlatformConfigurationService(
+    options.platformConfigurationRepository ??
+      new InMemoryPlatformConfigurationRepository(),
+  );
   const deliveries = new DeliveryCoordinatorService({
     requirements,
     requirementRepository: options.requirementRepository,
@@ -965,6 +1080,10 @@ export const buildControlPlaneApi = (
       path.startsWith("/api/v1/workers/") ||
       path === "/api/v1/accounts" ||
       path.startsWith("/api/v1/accounts/") ||
+      path === "/api/v1/platform/customers" ||
+      path.startsWith("/api/v1/platform/customers/") ||
+      path.startsWith("/api/v1/platform/projects/") ||
+      path.startsWith("/api/v1/platform/repositories/") ||
       path === "/api/v1/worker-enrollments"
     ) {
       const credential = requestSessionCredential(request);
@@ -1114,6 +1233,242 @@ export const buildControlPlaneApi = (
     );
     return reply.header("Cache-Control", "no-store").status(204).send();
   });
+
+  const platformRepositoryView = (repository: {
+    repositoryKey: string;
+    name: string;
+    gitUrl: string;
+    localPath: string;
+    defaultBranch: string;
+    enabled: boolean;
+    revision: number;
+  }) => ({
+    name: repository.name,
+    gitUrl: repository.gitUrl,
+    localPath: repository.localPath,
+    defaultBranch: repository.defaultBranch,
+    enabled: repository.enabled,
+    revision: repository.revision,
+    links: {
+      self: `/api/v1/platform/repositories/${repository.repositoryKey}`,
+    },
+  });
+  const platformProjectView = (project: {
+    projectKey: string;
+    name: string;
+    summary: string;
+    enabled: boolean;
+    revision: number;
+    repositories: Array<Parameters<typeof platformRepositoryView>[0]>;
+  }) => ({
+    name: project.name,
+    summary: project.summary,
+    enabled: project.enabled,
+    revision: project.revision,
+    repositories: project.repositories.map(platformRepositoryView),
+    links: {
+      self: `/api/v1/platform/projects/${project.projectKey}`,
+      actions: {
+        createRepository: `/api/v1/platform/projects/${project.projectKey}/repositories`,
+      },
+    },
+  });
+  const platformCustomerView = (customer: {
+    customerKey: string;
+    name: string;
+    summary: string;
+    enabled: boolean;
+    revision: number;
+    projects: Array<Parameters<typeof platformProjectView>[0]>;
+  }) => ({
+    name: customer.name,
+    summary: customer.summary,
+    enabled: customer.enabled,
+    revision: customer.revision,
+    projects: customer.projects.map(platformProjectView),
+    links: {
+      self: `/api/v1/platform/customers/${customer.customerKey}`,
+      actions: {
+        createProject: `/api/v1/platform/customers/${customer.customerKey}/projects`,
+      },
+    },
+  });
+  const platformValidationError = (error: z.ZodError): ApplicationError =>
+    new ApplicationError(
+      422,
+      "validation_error",
+      "平台配置信息需要调整",
+      validationDetails(error),
+    );
+
+  app.get("/api/v1/platform/customers", async (request, reply) => {
+    const customers = await platformConfiguration.list(principalFrom(request));
+    return reply
+      .header("Cache-Control", "no-store")
+      .send({ data: customers.map(platformCustomerView) });
+  });
+
+  app.post("/api/v1/platform/customers", async (request, reply) => {
+    const command = platformResourceCreateSchema.safeParse(request.body);
+    if (!command.success) throw platformValidationError(command.error);
+    const { schemaVersion: _schemaVersion, ...input } = command.data;
+    const customer = await platformConfiguration.createCustomer(
+      principalFrom(request),
+      input,
+    );
+    const view = platformCustomerView(customer);
+    return reply
+      .header("Cache-Control", "no-store")
+      .header("Location", view.links.self)
+      .status(201)
+      .send({ data: view });
+  });
+
+  app.patch(
+    "/api/v1/platform/customers/:customerKey",
+    async (request, reply) => {
+      const params = platformCustomerParamsSchema.safeParse(request.params);
+      const command = platformResourceUpdateSchema.safeParse(request.body);
+      if (!params.success) throw platformValidationError(params.error);
+      if (!command.success) throw platformValidationError(command.error);
+      const { schemaVersion: _schemaVersion, ...input } = command.data;
+      const customer = await platformConfiguration.updateCustomer(
+        principalFrom(request),
+        params.data.customerKey,
+        input,
+      );
+      return reply
+        .header("Cache-Control", "no-store")
+        .send({ data: platformCustomerView(customer) });
+    },
+  );
+
+  app.delete(
+    "/api/v1/platform/customers/:customerKey",
+    async (request, reply) => {
+      const params = platformCustomerParamsSchema.safeParse(request.params);
+      const command = platformConfigurationDeleteSchema.safeParse(request.body);
+      if (!params.success) throw platformValidationError(params.error);
+      if (!command.success) throw platformValidationError(command.error);
+      await platformConfiguration.deleteCustomer(
+        principalFrom(request),
+        params.data.customerKey,
+        { expectedRevision: command.data.expectedRevision },
+      );
+      return reply.header("Cache-Control", "no-store").status(204).send();
+    },
+  );
+
+  app.post(
+    "/api/v1/platform/customers/:customerKey/projects",
+    async (request, reply) => {
+      const params = platformCustomerParamsSchema.safeParse(request.params);
+      const command = platformResourceCreateSchema.safeParse(request.body);
+      if (!params.success) throw platformValidationError(params.error);
+      if (!command.success) throw platformValidationError(command.error);
+      const { schemaVersion: _schemaVersion, ...input } = command.data;
+      const project = await platformConfiguration.createProject(
+        principalFrom(request),
+        params.data.customerKey,
+        input,
+      );
+      const view = platformProjectView(project);
+      return reply
+        .header("Cache-Control", "no-store")
+        .header("Location", view.links.self)
+        .status(201)
+        .send({ data: view });
+    },
+  );
+
+  app.patch("/api/v1/platform/projects/:projectKey", async (request, reply) => {
+    const params = platformProjectParamsSchema.safeParse(request.params);
+    const command = platformResourceUpdateSchema.safeParse(request.body);
+    if (!params.success) throw platformValidationError(params.error);
+    if (!command.success) throw platformValidationError(command.error);
+    const { schemaVersion: _schemaVersion, ...input } = command.data;
+    const project = await platformConfiguration.updateProject(
+      principalFrom(request),
+      params.data.projectKey,
+      input,
+    );
+    return reply
+      .header("Cache-Control", "no-store")
+      .send({ data: platformProjectView(project) });
+  });
+
+  app.delete(
+    "/api/v1/platform/projects/:projectKey",
+    async (request, reply) => {
+      const params = platformProjectParamsSchema.safeParse(request.params);
+      const command = platformConfigurationDeleteSchema.safeParse(request.body);
+      if (!params.success) throw platformValidationError(params.error);
+      if (!command.success) throw platformValidationError(command.error);
+      await platformConfiguration.deleteProject(
+        principalFrom(request),
+        params.data.projectKey,
+        { expectedRevision: command.data.expectedRevision },
+      );
+      return reply.header("Cache-Control", "no-store").status(204).send();
+    },
+  );
+
+  app.post(
+    "/api/v1/platform/projects/:projectKey/repositories",
+    async (request, reply) => {
+      const params = platformProjectParamsSchema.safeParse(request.params);
+      const command = platformRepositoryCreateSchema.safeParse(request.body);
+      if (!params.success) throw platformValidationError(params.error);
+      if (!command.success) throw platformValidationError(command.error);
+      const { schemaVersion: _schemaVersion, ...input } = command.data;
+      const repository = await platformConfiguration.createRepository(
+        principalFrom(request),
+        params.data.projectKey,
+        input,
+      );
+      const view = platformRepositoryView(repository);
+      return reply
+        .header("Cache-Control", "no-store")
+        .header("Location", view.links.self)
+        .status(201)
+        .send({ data: view });
+    },
+  );
+
+  app.patch(
+    "/api/v1/platform/repositories/:repositoryKey",
+    async (request, reply) => {
+      const params = platformRepositoryParamsSchema.safeParse(request.params);
+      const command = platformRepositoryUpdateSchema.safeParse(request.body);
+      if (!params.success) throw platformValidationError(params.error);
+      if (!command.success) throw platformValidationError(command.error);
+      const { schemaVersion: _schemaVersion, ...input } = command.data;
+      const repository = await platformConfiguration.updateRepository(
+        principalFrom(request),
+        params.data.repositoryKey,
+        input,
+      );
+      return reply
+        .header("Cache-Control", "no-store")
+        .send({ data: platformRepositoryView(repository) });
+    },
+  );
+
+  app.delete(
+    "/api/v1/platform/repositories/:repositoryKey",
+    async (request, reply) => {
+      const params = platformRepositoryParamsSchema.safeParse(request.params);
+      const command = platformConfigurationDeleteSchema.safeParse(request.body);
+      if (!params.success) throw platformValidationError(params.error);
+      if (!command.success) throw platformValidationError(command.error);
+      await platformConfiguration.deleteRepository(
+        principalFrom(request),
+        params.data.repositoryKey,
+        { expectedRevision: command.data.expectedRevision },
+      );
+      return reply.header("Cache-Control", "no-store").status(204).send();
+    },
+  );
 
   const workerConnectionFrom = (
     request: FastifyRequest,

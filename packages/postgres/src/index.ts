@@ -30,3 +30,7 @@ export {
   PostgresAccountRepository,
   type PostgresAccountPool,
 } from "./postgres-account-repository.js";
+export {
+  PostgresPlatformConfigurationRepository,
+  type PostgresPlatformConfigurationPool,
+} from "./postgres-platform-configuration-repository.js";

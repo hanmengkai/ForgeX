@@ -16,8 +16,7 @@ describe("ForgeX Agent 安装入口", () => {
         workers: [],
         capacity: {
           connectedAccounts: 0,
-          maxAccounts: 5,
-          availableSlots: 5,
+          unlimited: true,
         },
         connectAction: "/api/v1/worker-enrollments",
       }),

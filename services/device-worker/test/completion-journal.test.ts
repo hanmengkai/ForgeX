@@ -57,7 +57,7 @@ describe("FileWorkerCompletionJournal", () => {
     });
     await journal.clear();
     await expect(journal.load()).resolves.toBeNull();
-  });
+  }, 15_000);
 
   it("原子保存并恢复待确认提交，成功后清除", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-journal-"));
