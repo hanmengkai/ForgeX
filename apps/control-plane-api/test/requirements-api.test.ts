@@ -14,7 +14,9 @@ import {
 } from "@forgex/contracts";
 
 import {
+  AccountAdministrationService,
   InMemoryRequirementRepository,
+  InMemoryAccountRepository,
   InMemoryExtensionCatalogRepository,
   InMemoryMcpRegistryRepository,
   InMemoryMcpInputSchemaStore,
@@ -77,6 +79,29 @@ const brokenPrincipal: AuthenticatedPrincipal = {
   ...productOwner,
   actorName: "",
 };
+const accountRepository = () =>
+  new InMemoryAccountRepository([
+    {
+      accountKey: administrator.actorKey,
+      tenantKey,
+      username: "super.admin",
+      actorName: administrator.actorName,
+      roles: administrator.roles,
+      password: "Admin-Password-2026!",
+      enabled: true,
+      revision: 1,
+    },
+    {
+      accountKey: productOwner.actorKey,
+      tenantKey,
+      username: "product.owner",
+      actorName: productOwner.actorName,
+      roles: productOwner.roles,
+      password: "Owner-Password-2026!",
+      enabled: true,
+      revision: 1,
+    },
+  ]);
 
 const validRequirement = {
   schemaVersion: 1,
@@ -135,6 +160,7 @@ const createTestApp = (
         : null,
   };
   const app = buildControlPlaneApi({
+    accountService: new AccountAdministrationService(accountRepository()),
     authenticator,
     runnerAuthenticator: { authenticate: async () => null },
     evidenceAuthority: new EvidenceAuthority({ runners: [] }),
@@ -178,6 +204,127 @@ const createTestApp = (
 };
 
 describe("需求 API", () => {
+  it("使用账号密码建立会话并返回顶部展示所需的账号与角色", async () => {
+    const { app } = createTestApp(undefined, { sessionCookieSecure: false });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/v1/session",
+      headers: { "x-forgex-csrf": "1" },
+      payload: {
+        schemaVersion: 1,
+        username: "super.admin",
+        password: "Admin-Password-2026!",
+      },
+    });
+
+    expect(login.statusCode).toBe(200);
+    expect(login.json()).toEqual({
+      data: {
+        actorName: "平台管理员",
+        username: "super.admin",
+        roles: ["administrator"],
+      },
+    });
+    expect(login.headers["set-cookie"]).toContain("HttpOnly");
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/v1/session",
+      headers: { "x-forgex-csrf": "1" },
+      payload: {
+        schemaVersion: 1,
+        username: "super.admin",
+        password: "incorrect-password",
+      },
+    });
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.json()).toMatchObject({
+      error: { code: "invalid_credentials", message: "账号或密码不正确" },
+    });
+    await app.close();
+  });
+
+  it("超级管理员通过账号接口完成 CRUD，普通成员不能访问", async () => {
+    const { app } = createTestApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/accounts",
+      headers: {
+        authorization: "Bearer admin-session",
+        "x-forgex-csrf": "1",
+      },
+      payload: {
+        schemaVersion: 1,
+        username: "developer.one",
+        actorName: "研发一号",
+        roles: ["developer"],
+        password: "Developer-Password-2026!",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      data: {
+        username: "developer.one",
+        actorName: "研发一号",
+        enabled: true,
+        revision: 1,
+      },
+    });
+    expect(JSON.stringify(created.json())).not.toContain("password");
+    const accountUrl = created.headers.location!;
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/v1/accounts",
+      headers: { authorization: "Bearer admin-session" },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      data: expect.arrayContaining([
+        expect.objectContaining({ username: "developer.one" }),
+      ]),
+    });
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: accountUrl,
+      headers: {
+        authorization: "Bearer admin-session",
+        "x-forgex-csrf": "1",
+      },
+      payload: {
+        schemaVersion: 1,
+        expectedRevision: 1,
+        actorName: "高级研发",
+        roles: ["developer", "requirement_analyst"],
+        enabled: false,
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({
+      data: { actorName: "高级研发", enabled: false, revision: 2 },
+    });
+
+    const removed = await app.inject({
+      method: "DELETE",
+      url: accountUrl,
+      headers: {
+        authorization: "Bearer admin-session",
+        "x-forgex-csrf": "1",
+      },
+      payload: { schemaVersion: 1, expectedRevision: 2 },
+    });
+    expect(removed.statusCode).toBe(204);
+
+    const forbidden = await app.inject({
+      method: "GET",
+      url: "/api/v1/accounts",
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(forbidden.statusCode).toBe(403);
+    await app.close();
+  });
+
   it("用一次性提交的访问令牌建立、读取并注销 HttpOnly 同源会话", async () => {
     const { app } = createTestApp(undefined, { sessionCookieSecure: false });
 
