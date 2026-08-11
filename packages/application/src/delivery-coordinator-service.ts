@@ -95,6 +95,10 @@ export class DeliveryCoordinatorService {
     principal: AuthenticatedPrincipal,
     requirementKey: string,
     command: StartDeliveryCommandPayload,
+    scope?: {
+      projectKey: string;
+      requirements: RequirementApplicationService;
+    },
   ): Promise<{
     title: string;
     requirementRevision: number;
@@ -115,12 +119,14 @@ export class DeliveryCoordinatorService {
         "交付安排需要调整",
       );
     }
+    const projectKey = scope?.projectKey.toLowerCase() ?? this.#projectKey;
+    const requirementService = scope?.requirements ?? this.#requirements;
     const skills = await this.#resolveSkills(
       principal.tenantKey,
-      this.#projectKey,
+      projectKey,
       parsedCommand.data.skillKeys ?? [],
     );
-    const dispatch = await this.#requirements.requestDelivery(
+    const dispatch = await requirementService.requestDelivery(
       principal,
       requirementKey,
       parsedCommand.data,

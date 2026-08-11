@@ -402,6 +402,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     return {
       items: pageItems.map(({ record }) => ({
         requirementKey: record.requirementKey,
+        repositoryKey: record.repositoryKey ?? null,
         view: record.workflow.toPeopleView(),
         allowedActions: record.workflow.listAllowedActions(),
       })),

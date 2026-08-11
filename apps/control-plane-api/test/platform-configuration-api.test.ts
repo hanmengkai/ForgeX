@@ -220,6 +220,79 @@ describe("平台资源配置 API", () => {
     );
     expect(videoRequirements.json().data).toHaveLength(0);
 
+    const detail = await app.inject({
+      method: "GET",
+      url: created.headers.location!,
+      headers: memberHeaders,
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().data.spec.title).toBe("保单质检规则");
+    const revised = await app.inject({
+      method: "POST",
+      url: `${created.headers.location}/revisions`,
+      headers: memberHeaders,
+      payload: {
+        schemaVersion: 1,
+        expectedRevision: 1,
+        spec: {
+          ...detail.json().data.spec,
+          goal: "让质检人员按保险项目维护并交付质检规则",
+        },
+      },
+    });
+    expect(revised.statusCode).toBe(200);
+    const revisions = await app.inject({
+      method: "GET",
+      url: `${created.headers.location}/revisions`,
+      headers: memberHeaders,
+    });
+    expect(revisions.json().data).toHaveLength(2);
+    expect(
+      await app.inject({
+        method: "POST",
+        url: `${created.headers.location}/submit-confirmation`,
+        headers: memberHeaders,
+        payload: {},
+      }),
+    ).toMatchObject({ statusCode: 200 });
+    expect(
+      await app.inject({
+        method: "POST",
+        url: `${created.headers.location}/confirm`,
+        headers: memberHeaders,
+        payload: {},
+      }),
+    ).toMatchObject({ statusCode: 200 });
+    const delivery = await app.inject({
+      method: "POST",
+      url: `${created.headers.location}/start-delivery`,
+      headers: memberHeaders,
+      payload: { schemaVersion: 1, requiredCapabilities: [] },
+    });
+    expect(delivery.statusCode).toBe(202);
+    expect(delivery.json()).toMatchObject({
+      data: { status: "等待空闲设备" },
+    });
+    const previewBeforeVerification = await app.inject({
+      method: "GET",
+      url: `${created.headers.location}/preview`,
+      headers: memberHeaders,
+    });
+    expect(previewBeforeVerification.statusCode).toBe(409);
+    expect(previewBeforeVerification.json()).toMatchObject({
+      error: { code: "preview_not_ready" },
+    });
+    const acceptBeforeVerification = await app.inject({
+      method: "POST",
+      url: `${created.headers.location}/accept`,
+      headers: memberHeaders,
+      payload: {},
+    });
+    expect(acceptBeforeVerification.statusCode).toBe(409);
+    expect(acceptBeforeVerification.json()).toMatchObject({
+      error: { code: "requirement_state_conflict" },
+    });
+
     const wrongProjectCreateUrl =
       `${video.links.requirements.replace(/\/requirements$/u, "")}` +
       `/repositories/${firstRepository.json().data.links.self.split("/").at(-1)}/requirements`;

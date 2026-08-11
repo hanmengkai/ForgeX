@@ -232,7 +232,10 @@ describe("RequirementWorkbench", () => {
       ),
     );
 
-    await userEvent.selectOptions(screen.getByLabelText("当前项目"), "营销视频");
+    await userEvent.selectOptions(
+      screen.getByLabelText("当前项目"),
+      "营销视频",
+    );
     expect(window.location.pathname).toBe("/requirements");
     expect(window.location.search).toBe(
       "?customer=%E4%BF%9D%E9%99%A9%E5%AE%A2%E6%88%B7&project=%E8%90%A5%E9%94%80%E8%A7%86%E9%A2%91",
@@ -260,7 +263,9 @@ describe("RequirementWorkbench", () => {
       screen.getByLabelText("怎么才算完成？"),
       "需求只出现在当前项目",
     );
-    await userEvent.click(screen.getByRole("button", { name: "保存并开始整理" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "保存并开始整理" }),
+    );
 
     await waitFor(() =>
       expect(client.createRequirement).toHaveBeenCalledWith(
@@ -299,9 +304,8 @@ describe("RequirementWorkbench", () => {
 
     render(<RequirementWorkbench client={client} />);
 
-    const summary = (await screen.findByText("需要我处理")).closest(
-      ".summary-card",
-    );
+    expect(await screen.findByText("验证失败，版本已封存")).toBeInTheDocument();
+    const summary = screen.getByText("需要我处理").closest(".summary-card");
     expect(summary).toHaveTextContent("1");
     expect(screen.getByText("验证失败，版本已封存")).toHaveClass("attention");
   });
@@ -949,31 +953,34 @@ describe("RequirementWorkbench", () => {
     );
     await user.click(screen.getByRole("button", { name: "保存并开始整理" }));
 
-    expect(client.createRequirement).toHaveBeenCalledWith({
-      schemaVersion: 1,
-      title: "访客通行记录",
-      goal: "让物业人员能够快速查询访客的到访记录",
-      userStories: [
-        {
-          role: "物业人员",
-          need: "按日期查询到访记录",
-          value: "快速完成访客追溯",
-        },
-      ],
-      acceptanceCriteria: [
-        {
-          title: "可以按日期查询到访记录",
-          description: "验收时确认：可以按日期查询到访记录",
-          priority: "must",
-        },
-        {
-          title: "可以导出查询结果",
-          description: "验收时确认：可以导出查询结果",
-          priority: "must",
-        },
-      ],
-      openQuestions: ["导出文件需要保留多久"],
-    });
+    expect(client.createRequirement).toHaveBeenCalledWith(
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/repositories/44444444-4444-4444-8444-444444444444/requirements",
+      {
+        schemaVersion: 1,
+        title: "访客通行记录",
+        goal: "让物业人员能够快速查询访客的到访记录",
+        userStories: [
+          {
+            role: "物业人员",
+            need: "按日期查询到访记录",
+            value: "快速完成访客追溯",
+          },
+        ],
+        acceptanceCriteria: [
+          {
+            title: "可以按日期查询到访记录",
+            description: "验收时确认：可以按日期查询到访记录",
+            priority: "must",
+          },
+          {
+            title: "可以导出查询结果",
+            description: "验收时确认：可以导出查询结果",
+            priority: "must",
+          },
+        ],
+        openQuestions: ["导出文件需要保留多久"],
+      },
+    );
     expect(
       await screen.findByRole("alert", {
         name: "暂时无法保存，请稍后再试",

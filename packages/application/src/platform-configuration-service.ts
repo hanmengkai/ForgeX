@@ -488,12 +488,65 @@ const requireAdministrator = (principal: AuthenticatedPrincipal): void => {
   }
 };
 
+const requirementContextNotFound = (): ApplicationError =>
+  new ApplicationError(
+    404,
+    "requirement_context_not_found",
+    "没有找到可用的客户、项目或代码仓库，请刷新后重新选择",
+  );
+
 export class PlatformConfigurationService {
   constructor(readonly repository: PlatformConfigurationRepository) {}
 
   async list(principal: AuthenticatedPrincipal): Promise<PlatformCustomer[]> {
     requireAdministrator(principal);
     return this.repository.list(principal.tenantKey);
+  }
+
+  async listRequirementContexts(
+    principal: AuthenticatedPrincipal,
+  ): Promise<PlatformCustomer[]> {
+    const customers = await this.repository.list(principal.tenantKey);
+    return customers
+      .filter((customer) => customer.enabled)
+      .map((customer) => ({
+        ...customer,
+        projects: customer.projects
+          .filter((project) => project.enabled)
+          .map((project) => ({
+            ...project,
+            repositories: project.repositories
+              .filter((repository) => repository.enabled)
+              .map(cloneRepository),
+          })),
+      }));
+  }
+
+  async getRequirementProject(
+    principal: AuthenticatedPrincipal,
+    projectKey: string,
+  ): Promise<PlatformProject> {
+    const project = internalKeySchema.parse(projectKey);
+    const customers = await this.listRequirementContexts(principal);
+    const match = customers
+      .flatMap((customer) => customer.projects)
+      .find((candidate) => candidate.projectKey === project);
+    if (!match) throw requirementContextNotFound();
+    return cloneProject(match);
+  }
+
+  async getRequirementRepository(
+    principal: AuthenticatedPrincipal,
+    projectKey: string,
+    repositoryKey: string,
+  ): Promise<PlatformRepositoryBinding> {
+    const project = await this.getRequirementProject(principal, projectKey);
+    const repository = internalKeySchema.parse(repositoryKey);
+    const match = project.repositories.find(
+      (candidate) => candidate.repositoryKey === repository,
+    );
+    if (!match) throw requirementContextNotFound();
+    return cloneRepository(match);
   }
 
   async createCustomer(

@@ -24,6 +24,74 @@ const member: AuthenticatedPrincipal = {
 };
 
 describe("客户、项目与代码仓库配置", () => {
+  it("需求上下文只向普通成员开放启用资源并校验仓库真实归属", async () => {
+    const service = new PlatformConfigurationService(
+      new InMemoryPlatformConfigurationRepository(),
+    );
+    const customer = await service.createCustomer(administrator, {
+      name: "保险客户",
+      summary: "承载保险客户的交付项目",
+    });
+    const project = await service.createProject(
+      administrator,
+      customer.customerKey,
+      { name: "智能质检", summary: "保险双录质量检查项目" },
+    );
+    const repository = await service.createRepository(
+      administrator,
+      project.projectKey,
+      {
+        name: "控制面",
+        gitUrl: "https://gitee.com/example/quality-control.git",
+        localPath: "/data/work/quality-control",
+        defaultBranch: "master",
+      },
+    );
+
+    await expect(service.listRequirementContexts(member)).resolves.toEqual([
+      expect.objectContaining({
+        name: "保险客户",
+        projects: [
+          expect.objectContaining({
+            name: "智能质检",
+            repositories: [expect.objectContaining({ name: "控制面" })],
+          }),
+        ],
+      }),
+    ]);
+    await expect(
+      service.getRequirementRepository(
+        member,
+        project.projectKey,
+        repository.repositoryKey,
+      ),
+    ).resolves.toMatchObject({ name: "控制面" });
+
+    await service.updateRepository(administrator, repository.repositoryKey, {
+      expectedRevision: 1,
+      name: repository.name,
+      gitUrl: repository.gitUrl,
+      localPath: repository.localPath,
+      defaultBranch: repository.defaultBranch,
+      enabled: false,
+    });
+    await expect(service.listRequirementContexts(member)).resolves.toEqual([
+      expect.objectContaining({
+        projects: [expect.objectContaining({ repositories: [] })],
+      }),
+    ]);
+    await expect(
+      service.getRequirementRepository(
+        member,
+        project.projectKey,
+        repository.repositoryKey,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "requirement_context_not_found",
+    });
+  });
+
   it("超级管理员可配置多个客户、项目和仓库路径", async () => {
     const service = new PlatformConfigurationService(
       new InMemoryPlatformConfigurationRepository(),

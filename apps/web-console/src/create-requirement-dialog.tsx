@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import type { ForgeXClient, RequirementSpecInput } from "./api.js";
+import type {
+  ForgeXClient,
+  RequirementContextRepository,
+  RequirementSpecInput,
+} from "./api.js";
 
 interface CreateRequirementDialogProps {
   client: ForgeXClient;
+  repositories: RequirementContextRepository[];
   onClose(): void;
   onCreated(): Promise<void>;
 }
@@ -45,6 +50,7 @@ const toRequirementSpec = (
 
 export function CreateRequirementDialog({
   client,
+  repositories,
   onClose,
   onCreated,
 }: CreateRequirementDialogProps) {
@@ -60,6 +66,9 @@ export function CreateRequirementDialog({
   const [acceptance, setAcceptance] = useState("");
   const [userStories, setUserStories] = useState("");
   const [openQuestions, setOpenQuestions] = useState("");
+  const [repositoryName, setRepositoryName] = useState(
+    repositories[0]?.name ?? "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -160,7 +169,19 @@ export function CreateRequirementDialog({
     setSaving(true);
     setError(null);
     try {
-      await client.createRequirement(spec);
+      const repository = repositories.find(
+        (candidate) => candidate.name === repositoryName,
+      );
+      if (!repository) {
+        setError("当前项目还没有可用的代码仓库，请联系管理员配置");
+        savingRef.current = false;
+        setSaving(false);
+        return;
+      }
+      await client.createRequirement(
+        repository.links.actions.createRequirement,
+        spec,
+      );
       await onCreated();
       savingRef.current = false;
       setSaving(false);
@@ -209,6 +230,23 @@ export function CreateRequirementDialog({
         </div>
 
         <form onSubmit={submit}>
+          <div className="field">
+            <label htmlFor="requirement-repository">目标代码仓库</label>
+            <select
+              id="requirement-repository"
+              aria-label="目标代码仓库"
+              value={repositoryName}
+              onChange={(event) => setRepositoryName(event.target.value)}
+              disabled={saving || repositories.length === 0}
+            >
+              {repositories.map((repository) => (
+                <option key={repository.name} value={repository.name}>
+                  {repository.name}
+                </option>
+              ))}
+            </select>
+            <small>后续 Agent 会在这个仓库的独立工作区完成交付。</small>
+          </div>
           <div className="field">
             <label htmlFor="requirement-title">需求名称</label>
             <input

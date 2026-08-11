@@ -10,6 +10,8 @@ import {
 import type {
   ForgeXClient,
   PlatformRole,
+  RequirementContextCustomer,
+  RequirementContextProject,
   RequirementActionLinks,
   RequirementDetail,
   RequirementListItem,
@@ -789,6 +791,11 @@ export function RequirementWorkbench({
   signingOut = false,
 }: RequirementWorkbenchProps) {
   const isAdministrator = roles.includes("administrator");
+  const [contextCustomers, setContextCustomers] = useState<
+    RequirementContextCustomer[]
+  >([]);
+  const [selectedCustomerName, setSelectedCustomerName] = useState("");
+  const [selectedProjectName, setSelectedProjectName] = useState("");
   const [items, setItems] = useState<RequirementListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -819,15 +826,94 @@ export function RequirementWorkbench({
   const expandedDetailRef = useRef<string | null>(null);
   const actionActiveRef = useRef(false);
   const mountedRef = useRef(true);
+  const contextCustomersRef = useRef<RequirementContextCustomer[]>([]);
+  const selectedContextRef = useRef({ customerName: "", projectName: "" });
+  selectedContextRef.current = {
+    customerName: selectedCustomerName,
+    projectName: selectedProjectName,
+  };
+
+  const selectedCustomer = useMemo(
+    () =>
+      contextCustomers.find(
+        (customer) => customer.name === selectedCustomerName,
+      ) ?? null,
+    [contextCustomers, selectedCustomerName],
+  );
+  const selectedProject = useMemo(
+    () =>
+      selectedCustomer?.projects.find(
+        (project) => project.name === selectedProjectName,
+      ) ?? null,
+    [selectedCustomer, selectedProjectName],
+  );
+
+  const writeRequirementContextUrl = useCallback(
+    (customerName: string, projectName: string, replace = false) => {
+      if (window.location.pathname !== pathByView.requirements) return;
+      const query = new URLSearchParams();
+      query.set("customer", customerName);
+      query.set("project", projectName);
+      const url = `${pathByView.requirements}?${query.toString()}`;
+      if (`${window.location.pathname}${window.location.search}` !== url) {
+        window.history[replace ? "replaceState" : "pushState"](
+          { view: "requirements", customerName, projectName },
+          "",
+          url,
+        );
+      }
+    },
+    [],
+  );
+
+  const selectContextFromLocation = useCallback(
+    (customers: RequirementContextCustomer[], replaceInvalid = false) => {
+      const query = new URLSearchParams(window.location.search);
+      const requestedCustomer = query.get("customer");
+      const requestedProject = query.get("project");
+      const customer =
+        customers.find((candidate) => candidate.name === requestedCustomer) ??
+        customers.find((candidate) => candidate.projects.length > 0) ??
+        customers[0] ??
+        null;
+      const project =
+        customer?.projects.find(
+          (candidate) => candidate.name === requestedProject,
+        ) ??
+        customer?.projects[0] ??
+        null;
+      setSelectedCustomerName(customer?.name ?? "");
+      setSelectedProjectName(project?.name ?? "");
+      if (customer && project) {
+        writeRequirementContextUrl(
+          customer.name,
+          project.name,
+          replaceInvalid ||
+            requestedCustomer !== customer.name ||
+            requestedProject !== project.name,
+        );
+      }
+    },
+    [writeRequirementContextUrl],
+  );
 
   const navigate = useCallback((path: string, replace = false) => {
     const view = viewFromPath(path);
     const normalizedPath = pathByView[view];
-    if (window.location.pathname !== normalizedPath) {
+    const target =
+      view === "requirements" &&
+      selectedContextRef.current.customerName.length > 0 &&
+      selectedContextRef.current.projectName.length > 0
+        ? `${normalizedPath}?${new URLSearchParams({
+            customer: selectedContextRef.current.customerName,
+            project: selectedContextRef.current.projectName,
+          }).toString()}`
+        : normalizedPath;
+    if (`${window.location.pathname}${window.location.search}` !== target) {
       window.history[replace ? "replaceState" : "pushState"](
         { view },
         "",
-        normalizedPath,
+        target,
       );
     }
     setActiveView(view);
@@ -836,8 +922,16 @@ export function RequirementWorkbench({
   const load = useCallback(async () => {
     const generation = ++loadGenerationRef.current;
     setError(null);
+    if (!selectedProject) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      const result = await client.listRequirements();
+      const result = await client.listRequirements(
+        selectedProject.links.requirements,
+      );
       if (generation === loadGenerationRef.current) {
         setItems(result.items);
       }
@@ -854,20 +948,38 @@ export function RequirementWorkbench({
         setLoading(false);
       }
     }
-  }, [client]);
+  }, [client, selectedProject]);
 
   useEffect(() => {
     mountedRef.current = true;
-    void load();
     if (
       window.location.pathname === "/" ||
       !Object.values(pathByView).includes(window.location.pathname)
     ) {
       navigate(pathByView.dashboard, true);
     }
-    const onPopState = () =>
+    const onPopState = () => {
       setActiveView(viewFromPath(window.location.pathname));
+      selectContextFromLocation(contextCustomersRef.current);
+    };
     window.addEventListener("popstate", onPopState);
+    void client
+      .listRequirementContexts()
+      .then((overview) => {
+        if (!mountedRef.current) return;
+        contextCustomersRef.current = overview.customers;
+        setContextCustomers(overview.customers);
+        selectContextFromLocation(overview.customers, true);
+      })
+      .catch((caught: unknown) => {
+        if (!mountedRef.current) return;
+        setLoading(false);
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "暂时无法读取需求所属客户与项目",
+        );
+      });
     void client
       .listWorkers()
       .then((overview) => {
@@ -889,7 +1001,13 @@ export function RequirementWorkbench({
       expandedDetailRef.current = null;
       window.removeEventListener("popstate", onPopState);
     };
-  }, [client, load, navigate]);
+  }, [client, navigate, selectContextFromLocation]);
+
+  useEffect(() => {
+    if (!selectedProject) return;
+    setItems([]);
+    void load();
+  }, [load, selectedProject]);
 
   useEffect(() => {
     if (
@@ -1240,6 +1358,78 @@ export function RequirementWorkbench({
             <AccountManagement client={client} />
           ) : activeView === "requirements" ? (
             <>
+              <section
+                className="requirement-context-panel"
+                aria-label="需求所属范围"
+              >
+                <div>
+                  <span className="eyebrow">BUSINESS CONTEXT</span>
+                  <strong>当前业务范围</strong>
+                </div>
+                <label>
+                  <span>当前客户</span>
+                  <select
+                    aria-label="当前客户"
+                    value={selectedCustomerName}
+                    disabled={contextCustomers.length === 0}
+                    onChange={(event) => {
+                      const customer = contextCustomers.find(
+                        (candidate) => candidate.name === event.target.value,
+                      );
+                      const project = customer?.projects[0] ?? null;
+                      setSelectedCustomerName(customer?.name ?? "");
+                      setSelectedProjectName(project?.name ?? "");
+                      setExpandedDetail(null);
+                      setDetail(null);
+                      if (customer && project) {
+                        writeRequirementContextUrl(customer.name, project.name);
+                      }
+                    }}
+                  >
+                    {contextCustomers.map((customer) => (
+                      <option key={customer.name} value={customer.name}>
+                        {customer.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>当前项目</span>
+                  <select
+                    aria-label="当前项目"
+                    value={selectedProjectName}
+                    disabled={
+                      !selectedCustomer ||
+                      selectedCustomer.projects.length === 0
+                    }
+                    onChange={(event) => {
+                      const project = selectedCustomer?.projects.find(
+                        (candidate) => candidate.name === event.target.value,
+                      );
+                      setSelectedProjectName(project?.name ?? "");
+                      setExpandedDetail(null);
+                      setDetail(null);
+                      if (selectedCustomer && project) {
+                        writeRequirementContextUrl(
+                          selectedCustomer.name,
+                          project.name,
+                        );
+                      }
+                    }}
+                  >
+                    {(selectedCustomer?.projects ?? []).map((project) => (
+                      <option key={project.name} value={project.name}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="context-repository-count">
+                  {selectedProject
+                    ? `${selectedProject.repositories.length} 个可用代码仓库`
+                    : "尚未配置可用项目"}
+                </span>
+              </section>
               <header className="topbar">
                 <div>
                   <span className="eyebrow">REQUIREMENT FLOW</span>
@@ -1249,6 +1439,10 @@ export function RequirementWorkbench({
                 <button
                   className="button primary"
                   type="button"
+                  disabled={
+                    !selectedProject ||
+                    selectedProject.repositories.length === 0
+                  }
                   onClick={() => setCreating(true)}
                 >
                   <PlusIcon />
@@ -1358,6 +1552,7 @@ export function RequirementWorkbench({
       {creating ? (
         <CreateRequirementDialog
           client={client}
+          repositories={selectedProject?.repositories ?? []}
           onClose={() => setCreating(false)}
           onCreated={load}
         />

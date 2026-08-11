@@ -126,7 +126,7 @@ describe("PostgresRequirementRepository", () => {
     const persisted = database.queries.find((query) =>
       query.text.startsWith("INSERT INTO forgex_requirements"),
     );
-    expect(JSON.parse(String(persisted?.values?.[5]))).toMatchObject({
+    expect(JSON.parse(String(persisted?.values?.[6]))).toMatchObject({
       schemaVersion: 2,
       revisions: [expect.objectContaining({ contentState: "complete", spec })],
     });

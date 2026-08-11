@@ -9,47 +9,54 @@ describe("createHttpForgeXClient", () => {
     const createRequirement =
       "/api/v1/projects/22222222-2222-4222-8222-222222222222/repositories/44444444-4444-4444-8444-444444444444/requirements";
     const requests: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
-    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      requests.push([input, init]);
-      if (String(input) === "/api/v1/requirement-contexts") {
-        return new Response(
-          JSON.stringify({
-            data: [
-              {
-                name: "保险客户",
-                projects: [
-                  {
-                    name: "智能质检",
-                    summary: "保险双录质量检查项目",
-                    repositories: [
-                      {
-                        name: "控制面",
-                        links: { actions: { createRequirement } },
-                      },
-                    ],
-                    links: { requirements: projectRequirements },
-                  },
-                ],
-              },
-            ],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (String(input) === `${projectRequirements}?limit=100`) {
-        return new Response(JSON.stringify({ data: [], meta: { nextCursor: null } }), {
-          status: 200,
+    const fetcher = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push([input, init]);
+        if (String(input) === "/api/v1/requirement-contexts") {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  name: "保险客户",
+                  projects: [
+                    {
+                      name: "智能质检",
+                      summary: "保险双录质量检查项目",
+                      repositories: [
+                        {
+                          name: "控制面",
+                          links: { actions: { createRequirement } },
+                        },
+                      ],
+                      links: { requirements: projectRequirements },
+                    },
+                  ],
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (String(input) === `${projectRequirements}?limit=100`) {
+          return new Response(
+            JSON.stringify({ data: [], meta: { nextCursor: null } }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ data: {} }), {
+          status: 201,
           headers: { "Content-Type": "application/json" },
         });
-      }
-      return new Response(JSON.stringify({ data: {} }), {
-        status: 201,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
+      },
+    );
     const client = createHttpForgeXClient({ fetcher });
     const contexts = await client.listRequirementContexts();
-    await client.listRequirements(contexts.customers[0]!.projects[0]!.links.requirements);
+    await client.listRequirements(
+      contexts.customers[0]!.projects[0]!.links.requirements,
+    );
     await client.createRequirement(
       contexts.customers[0]!.projects[0]!.repositories[0]!.links.actions
         .createRequirement,
@@ -74,6 +81,36 @@ describe("createHttpForgeXClient", () => {
       `${projectRequirements}?limit=100`,
       createRequirement,
     ]);
+    await expect(
+      client.listRequirements("/api/v1/projects/not-a-project/requirements"),
+    ).rejects.toThrow("需求列表入口已经失效");
+    await expect(
+      client.createRequirement("/api/v1/projects/not-a-project/requirements", {
+        schemaVersion: 1,
+        title: "无效入口",
+        goal: "验证客户端拒绝伪造的项目入口",
+        userStories: [],
+        acceptanceCriteria: [
+          {
+            title: "拒绝请求",
+            description: "无效动作链接不会发往服务端",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      }),
+    ).rejects.toThrow("需求创建入口已经失效");
+    const invalidContextClient = createHttpForgeXClient({
+      fetcher: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ data: [{ name: "缺少项目" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    });
+    await expect(
+      invalidContextClient.listRequirementContexts(),
+    ).rejects.toThrow("需求所属客户与项目格式不正确");
   });
 
   const requirement = (overrides: Record<string, unknown> = {}) => {

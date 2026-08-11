@@ -134,7 +134,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
             return this.#copyRecord(cached);
           }
           const result = await client.query(
-            "SELECT created_at, spec, workflow FROM forgex_requirements WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3",
+            "SELECT created_at, repository_key, spec, workflow FROM forgex_requirements WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3",
             [tenant, project, key],
           );
           const row = result.rows[0];
@@ -345,10 +345,11 @@ export class PostgresRequirementRepository implements RequirementRepository {
       const result = await operation(transaction);
       for (const record of pendingRecords.values()) {
         await client.query(
-          "INSERT INTO forgex_requirements (tenant_key, project_key, requirement_key, created_at, spec, workflow) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb) ON CONFLICT (tenant_key, project_key, requirement_key) DO UPDATE SET spec = EXCLUDED.spec, workflow = EXCLUDED.workflow, updated_at = now()",
+          "INSERT INTO forgex_requirements (tenant_key, project_key, repository_key, requirement_key, created_at, spec, workflow) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb) ON CONFLICT (tenant_key, project_key, requirement_key) DO UPDATE SET repository_key = COALESCE(forgex_requirements.repository_key, EXCLUDED.repository_key), spec = EXCLUDED.spec, workflow = EXCLUDED.workflow, updated_at = now()",
           [
             tenant,
             project,
+            record.repositoryKey ?? null,
             record.requirementKey,
             record.createdAt,
             JSON.stringify(record.spec),
@@ -532,7 +533,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
     }
     return this.#withClient(async (client) => {
       const result = await client.query(
-        "SELECT requirement_key, workflow, position FROM forgex_requirements WHERE tenant_key = $1 AND project_key = $2 AND position > $3 ORDER BY position ASC LIMIT $4",
+        "SELECT requirement_key, repository_key, workflow, position FROM forgex_requirements WHERE tenant_key = $1 AND project_key = $2 AND position > $3 ORDER BY position ASC LIMIT $4",
         [tenant, project, after, options.limit + 1],
       );
       const parsed = result.rows.map((row) => {
@@ -551,6 +552,10 @@ export class PostgresRequirementRepository implements RequirementRepository {
         });
         return {
           requirementKey,
+          repositoryKey:
+            row.repository_key === null || row.repository_key === undefined
+              ? null
+              : parseInternalKey(String(row.repository_key), "仓库标识"),
           workflow,
           position: parseSafePosition(row.position),
         };
@@ -560,6 +565,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       return {
         items: page.map((item) => ({
           requirementKey: item.requirementKey,
+          repositoryKey: item.repositoryKey,
           view: item.workflow.toPeopleView(),
           allowedActions: item.workflow.listAllowedActions(),
         })),
@@ -734,6 +740,10 @@ export class PostgresRequirementRepository implements RequirementRepository {
     return {
       tenantKey,
       projectKey,
+      repositoryKey:
+        row.repository_key === null || row.repository_key === undefined
+          ? null
+          : parseInternalKey(String(row.repository_key), "仓库标识"),
       requirementKey,
       createdAt: parseIsoDate(row.created_at, "需求创建时间"),
       spec,
@@ -781,6 +791,9 @@ export class PostgresRequirementRepository implements RequirementRepository {
       record.projectKey.toLowerCase() !== projectKey
     ) {
       throw new Error("需求事务不能写入其他租户或项目");
+    }
+    if (record.repositoryKey !== null && record.repositoryKey !== undefined) {
+      parseInternalKey(record.repositoryKey, "仓库标识");
     }
     record.workflow.assertPersistenceIdentity({
       tenantKey,

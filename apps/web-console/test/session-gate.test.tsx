@@ -21,6 +21,7 @@ const createClient = (): ForgeXClient => ({
   updateAccount: vi.fn(),
   deleteAccount: vi.fn(),
   listPlatformConfiguration: vi.fn().mockResolvedValue({ customers: [] }),
+  listRequirementContexts: vi.fn().mockResolvedValue({ customers: [] }),
   createPlatformCustomer: vi.fn(),
   updatePlatformCustomer: vi.fn(),
   deletePlatformCustomer: vi.fn(),
