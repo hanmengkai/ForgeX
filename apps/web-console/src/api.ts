@@ -9,6 +9,8 @@ import {
   type McpToolCatalog,
 } from "@forgex/contracts";
 
+import { createBrowserUuid } from "./browser-uuid.js";
+
 export interface RequirementActionLinks {
   revise?: string | undefined;
   submitConfirmation?: string | undefined;
@@ -1588,7 +1590,7 @@ export const createHttpForgeXClient = (
         method: "POST",
         body: JSON.stringify({
           schemaVersion: 1,
-          requestKey: crypto.randomUUID(),
+          requestKey: createBrowserUuid(),
           ...input,
         }),
       });
@@ -1607,7 +1609,7 @@ export const createHttpForgeXClient = (
           method: "POST",
           body: JSON.stringify({
             schemaVersion: 1,
-            requestKey: crypto.randomUUID(),
+            requestKey: createBrowserUuid(),
             ...input,
           }),
         },
@@ -1624,7 +1626,7 @@ export const createHttpForgeXClient = (
         method: "POST",
         body: JSON.stringify({
           schemaVersion: 1,
-          requestKey: crypto.randomUUID(),
+          requestKey: createBrowserUuid(),
         }),
       });
     },

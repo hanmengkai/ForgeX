@@ -7,6 +7,7 @@ import type {
 } from "@forgex/contracts";
 
 import type { ForgeXClient } from "./api.js";
+import { createBrowserUuid } from "./browser-uuid.js";
 
 interface McpRequestDialogProps {
   client: ForgeXClient;
@@ -190,7 +191,7 @@ export function McpRequestDialog({
       ? null
       : (document.activeElement as HTMLElement | null),
   );
-  const requestKeyRef = useRef(crypto.randomUUID());
+  const requestKeyRef = useRef(createBrowserUuid());
   const busyRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const [catalog, setCatalog] = useState<McpToolCatalog | null>(null);
@@ -297,7 +298,7 @@ export function McpRequestDialog({
       ) {
         throw new Error("外部操作表单与当前业务动作不匹配，请刷新后重试");
       }
-      requestKeyRef.current = crypto.randomUUID();
+      requestKeyRef.current = createBrowserUuid();
       setForm(nextForm);
       setValues({});
     } catch (caught) {
