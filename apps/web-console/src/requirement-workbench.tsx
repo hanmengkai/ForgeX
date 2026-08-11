@@ -1318,7 +1318,7 @@ export function RequirementWorkbench({
             <span className="account-avatar compact">
               <UserIcon />
             </span>
-            <span>
+            <span className="workspace-identity">
               <strong>{actorName ?? "本地开发"}</strong>
               <small>{actorUsername ?? roleLabel(roles)}</small>
             </span>

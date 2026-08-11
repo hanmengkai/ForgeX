@@ -2279,7 +2279,7 @@ h1 {
 }
 
 .workspace-context > span:last-child,
-.workspace-account > span:nth-child(2) {
+.workspace-identity {
   display: grid;
   gap: 1px;
 }
