@@ -403,7 +403,7 @@ p {
 
 h1 {
   margin-bottom: 8px;
-  font-size: clamp(28px, 4vw, 38px);
+  font-size: clamp(27px, 3vw, 34px);
   line-height: 1.15;
   letter-spacing: -0.035em;
 }
@@ -412,8 +412,8 @@ h1 {
 .dialog-heading p {
   margin-bottom: 0;
   color: var(--ink-soft);
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .button {
@@ -434,7 +434,7 @@ h1 {
 .button.primary {
   color: var(--brand-on);
   background: var(--brand);
-  box-shadow: 0 7px 18px rgb(37 107 136 / 18%);
+  box-shadow: 0 4px 12px rgb(37 107 136 / 14%);
 }
 
 .button.primary:hover:not(:disabled) {
@@ -2170,18 +2170,76 @@ h1 {
 .session-card,
 .content-section,
 .summary-card,
+.project-chip,
+.session-profile,
+.session-profile button,
+.requirement-card,
+.card-detail li,
+.revision-editor,
+.structured-editor-list,
+.acceptance-evidence,
+.page-error,
+.form-error,
 .fleet-capacity,
 .fleet-summary > div,
 .worker-card,
+.worker-credential-panel textarea,
+.slot-track span,
+.device-orb,
 .extension-summary > div,
 .extension-card,
+.page-notice,
+.knowledge-inline-form,
+.knowledge-publish-form,
+.knowledge-detail,
+.knowledge-search,
+.knowledge-results article,
+.knowledge-source-list li,
 .invocation-summary > div,
 .invocation-card,
+.invocation-inputs > div,
 .dialog,
+.icon-button,
 .mcp-impact-summary,
 .mcp-tool-list button,
 .skill-selection-list label {
   border-radius: 7px;
+}
+
+.project-avatar {
+  border-radius: 6px;
+}
+
+.field input,
+.field textarea,
+.field select {
+  border-radius: 7px;
+}
+
+.worker-center,
+.extension-center,
+.invocation-center {
+  gap: 20px;
+}
+
+.fleet-capacity {
+  gap: 22px;
+  padding: 20px 22px;
+}
+
+.fleet-summary > div,
+.extension-summary > div,
+.invocation-summary > div {
+  padding: 14px 16px;
+}
+
+.extension-card,
+.invocation-card {
+  padding: 16px;
+}
+
+.dialog {
+  padding: 22px;
 }
 
 .filter-button,
