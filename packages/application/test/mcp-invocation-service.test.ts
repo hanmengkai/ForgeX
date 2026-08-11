@@ -129,18 +129,27 @@ class MutableToolDirectory implements TrustedMcpToolDirectory {
 
 const createService = async (
   clock: () => Date = () => new Date(now.getTime()),
+  schema: unknown = inputSchema,
 ) => {
   const repository = new InMemoryMcpInvocationRepository();
   const schemaStore = new InMemoryMcpInputSchemaStore();
   const toolDirectory = new MutableToolDirectory();
+  const selectedSchemaHash = canonicalizeMcpInputSchema(schema).hash;
+  toolDirectory.currentManifest = {
+    ...manifest,
+    tools: manifest.tools.map((tool) => ({
+      ...tool,
+      inputSchemaHash: selectedSchemaHash,
+    })),
+  };
   await schemaStore.put(
     {
       tenantKey,
       projectKey,
       hashAlgorithm: "sha256",
-      hash: schemaHash,
+      hash: selectedSchemaHash,
     },
-    inputSchema,
+    schema,
   );
   return {
     repository,
@@ -157,6 +166,349 @@ const createService = async (
 };
 
 describe("McpInvocationApplicationService", () => {
+  it("向普通成员提供业务表单且不暴露技术名和参数键", async () => {
+    const { service } = await createService();
+
+    const form = await service.formForPeople(developer, serverKey, readToolKey);
+
+    expect(form).toMatchObject({
+      serviceName: "代码仓库助手",
+      title: "读取项目结构",
+      description: "读取项目目录和受版本控制文件的结构摘要",
+      impact: "仅读取信息",
+      confirmation: "自动确认",
+      fields: [
+        {
+          fieldKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          label: "操作目标",
+          kind: "text",
+          required: true,
+          options: [],
+        },
+      ],
+    });
+    expect(JSON.stringify(form)).not.toMatch(
+      /repository\.read_structure|technicalName|"target"/u,
+    );
+  });
+
+  it("下拉选项只暴露不透明标识和业务名称并映射回签名原值", async () => {
+    const enumSchema = {
+      type: "object",
+      properties: {
+        target: {
+          type: "string",
+          title: "工单状态",
+          writeOnly: false,
+          enum: ["待处理", "已完成"],
+        },
+      },
+      required: ["target"],
+      additionalProperties: false,
+    };
+    const { service, repository } = await createService(
+      () => new Date(now.getTime()),
+      enumSchema,
+    );
+    const form = await service.formForPeople(developer, serverKey, readToolKey);
+
+    expect(form.fields[0]).toMatchObject({
+      label: "工单状态",
+      kind: "select",
+      options: [
+        {
+          optionKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          label: "待处理",
+        },
+        {
+          optionKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          label: "已完成",
+        },
+      ],
+    });
+    const serialized = JSON.stringify(form);
+    expect(serialized).not.toContain('"target"');
+    await service.requestFromPeople(developer, serverKey, readToolKey, {
+      schemaVersion: 1,
+      requestKey: randomUUID(),
+      inputs: {
+        [form.fields[0]!.fieldKey]: form.fields[0]!.options[0]!.optionKey,
+      },
+    });
+    await expect(repository.list(tenantKey, projectKey)).resolves.toEqual([
+      expect.objectContaining({ arguments: { target: "待处理" } }),
+    ]);
+  });
+
+  it("缺少业务选项名或包含嵌套对象时不生成有损普通表单", async () => {
+    for (const schema of [
+      ...[
+        "66666666-6666-4666-8666-666666666666",
+        "STATUS_PENDING",
+        "status_pending",
+        "github.user_id",
+      ].map((option) => ({
+        type: "object",
+        properties: {
+          target: {
+            type: "string",
+            title: "操作目标",
+            writeOnly: false,
+            enum: [option],
+          },
+        },
+        required: ["target"],
+        additionalProperties: false,
+      })),
+      ...[
+        [1, "1"],
+        [true, "是"],
+        ["待处理", " 待处理 "],
+      ].map((options) => ({
+        type: "object",
+        properties: {
+          target: {
+            title: "操作目标",
+            writeOnly: false,
+            enum: options,
+          },
+        },
+        required: ["target"],
+        additionalProperties: false,
+      })),
+      {
+        type: "object",
+        properties: {
+          targets: {
+            type: "array",
+            title: "操作目标",
+            writeOnly: false,
+            items: { type: "string", enum: ["生产环境", "测试环境"] },
+          },
+        },
+        required: ["targets"],
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: {
+          note: {
+            type: "string",
+            title: "操作说明",
+            writeOnly: false,
+          },
+        },
+        minProperties: 1,
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: {
+          target: {
+            type: "object",
+            title: "客户资料",
+            writeOnly: false,
+            properties: {
+              name: { type: "string", title: "客户名称", writeOnly: false },
+            },
+            required: ["name"],
+            additionalProperties: false,
+          },
+        },
+        required: ["target"],
+        additionalProperties: false,
+      },
+    ]) {
+      const { service } = await createService(
+        () => new Date(now.getTime()),
+        schema,
+      );
+      await expect(
+        service.formForPeople(developer, serverKey, readToolKey),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "mcp_form_unsupported",
+      });
+    }
+  });
+
+  it("必填固定值由服务端确定性物化而不暴露为可编辑字段", async () => {
+    const constSchema = {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          title: "执行模式",
+          writeOnly: false,
+          const: "受控执行",
+        },
+      },
+      required: ["mode"],
+      additionalProperties: false,
+    };
+    const { service, repository } = await createService(
+      () => new Date(now.getTime()),
+      constSchema,
+    );
+    const form = await service.formForPeople(developer, serverKey, readToolKey);
+    expect(form.fields).toEqual([]);
+    await service.requestFromPeople(developer, serverKey, readToolKey, {
+      schemaVersion: 1,
+      requestKey: randomUUID(),
+      inputs: {},
+    });
+    await expect(repository.list(tenantKey, projectKey)).resolves.toEqual([
+      expect.objectContaining({ arguments: { mode: "受控执行" } }),
+    ]);
+  });
+
+  it("把简单文本、数值和列表约束无损投影为业务提示", async () => {
+    const constrainedSchema = {
+      type: "object",
+      properties: {
+        note: {
+          type: "string",
+          title: "预约说明",
+          writeOnly: false,
+          minLength: 50,
+          maxLength: 100,
+        },
+        retries: {
+          type: "integer",
+          title: "重试次数",
+          writeOnly: false,
+          minimum: 1,
+          maximum: 5,
+          multipleOf: 1,
+        },
+        recipients: {
+          type: "array",
+          title: "通知对象",
+          writeOnly: false,
+          minItems: 1,
+          maxItems: 3,
+          items: { type: "string", minLength: 2, maxLength: 20 },
+        },
+      },
+      required: ["note"],
+      additionalProperties: false,
+    };
+    const { service } = await createService(
+      () => new Date(now.getTime()),
+      constrainedSchema,
+    );
+    const form = await service.formForPeople(developer, serverKey, readToolKey);
+
+    expect(form.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "预约说明",
+          description: "请填写预约说明（至少 50 个字符，最多 100 个字符）",
+          constraints: { minLength: 50, maxLength: 100 },
+        }),
+        expect.objectContaining({
+          label: "重试次数",
+          description: "请填写重试次数（不小于 1，不大于 5，按 1 递增）",
+          constraints: { minimum: 1, maximum: 5, multipleOf: 1 },
+        }),
+        expect.objectContaining({
+          label: "通知对象",
+          description:
+            "请填写通知对象（至少 1 项，最多 3 项，每项至少 2 个字符，每项最多 20 个字符）",
+          constraints: {
+            minItems: 1,
+            maxItems: 3,
+            itemMinLength: 2,
+            itemMaxLength: 20,
+          },
+        }),
+      ]),
+    );
+  });
+
+  it("将业务表单的不透明字段映射回可信参数后发起调用", async () => {
+    const { service, repository } = await createService();
+    const form = await service.formForPeople(developer, serverKey, readToolKey);
+
+    await expect(
+      service.requestFromPeople(developer, serverKey, readToolKey, {
+        schemaVersion: 1,
+        requestKey: randomUUID(),
+        inputs: { [form.fields[0]!.fieldKey]: "src" },
+      }),
+    ).resolves.toMatchObject({
+      status: "等待设备执行",
+      title: "读取项目结构",
+    });
+    await expect(repository.list(tenantKey, projectKey)).resolves.toEqual([
+      expect.objectContaining({ arguments: { target: "src" } }),
+    ]);
+  });
+
+  it("业务表单响应丢失后即使能力停用也能精确幂等恢复", async () => {
+    const { service, toolDirectory } = await createService();
+    const form = await service.formForPeople(developer, serverKey, readToolKey);
+    const requestKey = randomUUID();
+    const input = {
+      schemaVersion: 1 as const,
+      requestKey,
+      inputs: { [form.fields[0]!.fieldKey]: "src" },
+    };
+    const first = await service.requestFromPeople(
+      developer,
+      serverKey,
+      readToolKey,
+      input,
+    );
+    toolDirectory.enabled = false;
+
+    await expect(
+      service.requestFromPeople(developer, serverKey, readToolKey, input),
+    ).resolves.toEqual(first);
+    await expect(
+      service.requestFromPeople(developer, serverKey, readToolKey, {
+        ...input,
+        inputs: { [form.fields[0]!.fieldKey]: "other" },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "mcp_request_conflict",
+    });
+  });
+
+  it("旧表单或无效业务输入失败时不泄漏内部参数键", async () => {
+    const { service, repository } = await createService();
+
+    await expect(
+      service.requestFromPeople(developer, serverKey, readToolKey, {
+        schemaVersion: 1,
+        requestKey: randomUUID(),
+        inputs: { ["a".repeat(64)]: "src" },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "mcp_invocation_form_changed",
+    });
+    await expect(repository.list(tenantKey, projectKey)).resolves.toEqual([]);
+
+    const form = await service.formForPeople(developer, serverKey, readToolKey);
+    const request = service.requestFromPeople(
+      developer,
+      serverKey,
+      readToolKey,
+      {
+        schemaVersion: 1,
+        requestKey: randomUUID(),
+        inputs: { [form.fields[0]!.fieldKey]: "x" },
+      },
+    );
+    await expect(request).rejects.toMatchObject({
+      statusCode: 422,
+      code: "invalid_mcp_invocation_form",
+    });
+    await expect(request).rejects.not.toThrow(/target/u);
+  });
+
   it("将已验证的只读能力自动排队，成员视图不暴露内部标识、技术名和参数", async () => {
     const { service, repository } = await createService();
     const result = await service.request(developer, {

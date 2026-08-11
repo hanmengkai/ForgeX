@@ -235,6 +235,16 @@ const assertSupportedSchemaNode = (value: unknown): void => {
     ) {
       throw new Error("Schema 的可选值只能使用文本、数字、是非或空值");
     }
+    if (
+      key === "enum" &&
+      Array.isArray(item) &&
+      item.some(
+        (entry) =>
+          typeof entry === "string" && hiddenControlPattern.test(entry),
+      )
+    ) {
+      throw new Error("Schema 的可选值不能包含隐藏控制字符");
+    }
     if (key === "const" && !isScalarJson(item)) {
       throw new Error("Schema 的固定值只能使用文本、数字、是非或空值");
     }
@@ -358,6 +368,9 @@ export const canonicalizeMcpInputSchema = (
         `Schema 参数 ${propertyName} 必须提供业务标题和敏感信息标记`,
       );
     }
+    if (/^[a-z][a-z0-9_.-]*$/iu.test(propertySchema.title.trim())) {
+      throw new Error("Schema 参数必须使用业务标题，不能直接展示技术字段名");
+    }
     const visibleTitle = propertySchema.title
       .normalize("NFKC")
       .replace(/\s+/g, " ")
@@ -398,6 +411,31 @@ export const canonicalizeMcpArguments = (
       [{ field: "参数", message: "必须是对象", code: "type" }],
     );
   }
+  const assertSafeStrings = (value: unknown): void => {
+    if (typeof value === "string") {
+      if (hiddenControlPattern.test(value)) {
+        throw new ApplicationError(
+          422,
+          "mcp_arguments_unsafe",
+          "MCP 调用参数不能包含隐藏控制字符",
+        );
+      }
+      if (containsLikelyPlaintextCredential(value)) {
+        throw new ApplicationError(
+          422,
+          "mcp_credential_detected",
+          "MCP 调用参数不能包含明文凭据，请使用设备本地连接绑定",
+        );
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(assertSafeStrings);
+      return;
+    }
+    if (isPlainObject(value)) Object.values(value).forEach(assertSafeStrings);
+  };
+  assertSafeStrings(copied);
   const canonicalJson = JSON.stringify(copied);
   const sizeBytes = Buffer.byteLength(canonicalJson, "utf8");
   if (sizeBytes > MAX_ARGUMENT_BYTES) {

@@ -140,7 +140,10 @@ export class ExtensionCatalogApplicationService {
       status: item.view.status === "可使用" ? "可使用" : "需要处理",
       detail: item.view.detail,
       supportingText: item.view.supportingText,
-      links: { self: `/api/v1/extensions/mcp/${item.serverKey}` },
+      links: {
+        self: `/api/v1/extensions/mcp/${item.serverKey}`,
+        tools: `/api/v1/extensions/mcp/${item.serverKey}/tools`,
+      },
     }));
     return overview;
   }
@@ -225,7 +228,10 @@ export class ExtensionCatalogApplicationService {
       status: item.view.status === "可使用" ? "可使用" : "需要处理",
       detail: item.view.detail,
       supportingText: item.view.supportingText,
-      links: { self: `/api/v1/extensions/mcp/${item.serverKey}` },
+      links: {
+        self: `/api/v1/extensions/mcp/${item.serverKey}`,
+        tools: `/api/v1/extensions/mcp/${item.serverKey}/tools`,
+      },
     };
   }
 

@@ -46,7 +46,10 @@ import {
 } from "@forgex/application";
 import {
   REQUIREMENT_REQUEST_BODY_LIMIT_BYTES,
+  McpInvocationPeopleRequestSchema,
   McpInvocationRequestSchema,
+  McpInvocationToolFormSchema,
+  McpToolCatalogSchema,
   RequirementSpecSchema,
   StartDeliveryCommandSchema,
   WorkerConnectionCredentialSchema,
@@ -56,6 +59,7 @@ import {
   WorkerRequirementCompletionSchema,
   SignedEvidenceSchema,
   type WorkerConnectionCredentialPayload,
+  type McpInvocationPeopleRequestPayload,
   type McpInvocationRequestPayload,
 } from "@forgex/contracts";
 import type {
@@ -201,6 +205,14 @@ const mcpExtensionParamsSchema = z
   .strict();
 const mcpRevisionParamsSchema = mcpExtensionParamsSchema
   .extend({ revision: z.coerce.number().int().positive() })
+  .strict();
+const mcpToolParamsSchema = mcpExtensionParamsSchema
+  .extend({
+    toolKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
   .strict();
 const MAX_SKILL_PACKAGE_BYTES = 20 * 1024 * 1024;
 const SKILL_PACKAGE_BODY_LIMIT_BYTES = 29 * 1024 * 1024;
@@ -1683,6 +1695,7 @@ export const buildControlPlaneApi = (
 
   app.get("/api/v1/mcp-invocations", async (request, reply) => {
     const principal = principalFrom(request);
+    reply.header("Cache-Control", "no-store");
     const items = await mcpInvocations.listItemsForPeople(principal);
     return reply.send({
       data: items.map((item) => {
@@ -1696,6 +1709,7 @@ export const buildControlPlaneApi = (
 
   app.get("/api/v1/mcp-invocations/:invocationKey", async (request, reply) => {
     const principal = principalFrom(request);
+    reply.header("Cache-Control", "no-store");
     const params = mcpInvocationParamsSchema.safeParse(request.params);
     if (!params.success) {
       throw new ApplicationError(
@@ -1848,6 +1862,115 @@ export const buildControlPlaneApi = (
       ),
     });
   });
+
+  app.get("/api/v1/extensions/mcp/:serverKey/tools", async (request, reply) => {
+    const principal = principalFrom(request);
+    reply.header("Cache-Control", "no-store");
+    const params = mcpExtensionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "请求内容需要调整",
+        validationDetails(params.error),
+      );
+    }
+    const manifest = await mcpServers.getEnabledManifestForInvocation(
+      principal.tenantKey,
+      params.data.serverKey,
+    );
+    if (!manifest) {
+      throw new ApplicationError(
+        409,
+        "mcp_tool_unavailable",
+        "这项外部服务当前不可使用，请稍后重试",
+      );
+    }
+    const impact = {
+      read: "仅读取信息",
+      write: "会修改业务数据",
+      external_action: "会触发外部动作",
+    } as const;
+    return reply.send({
+      data: McpToolCatalogSchema.parse({
+        serviceName: manifest.name,
+        summary: manifest.summary,
+        tools: manifest.tools.map((tool) => ({
+          title: tool.displayName,
+          description: tool.description,
+          impact: impact[tool.effect],
+          confirmation:
+            tool.approval === "automatic" ? "自动确认" : "需要产品负责人确认",
+          links: {
+            form: `/api/v1/extensions/mcp/${manifest.serverKey}/tools/${tool.toolKey}/form`,
+          },
+        })),
+      }),
+    });
+  });
+
+  app.get(
+    "/api/v1/extensions/mcp/:serverKey/tools/:toolKey/form",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      reply.header("Cache-Control", "no-store");
+      const params = mcpToolParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "请求内容需要调整",
+          validationDetails(params.error),
+        );
+      }
+      return reply.send({
+        data: McpInvocationToolFormSchema.parse(
+          await mcpInvocations.formForPeople(
+            principal,
+            params.data.serverKey,
+            params.data.toolKey,
+          ),
+        ),
+      });
+    },
+  );
+
+  app.post<{ Body: McpInvocationPeopleRequestPayload }>(
+    "/api/v1/extensions/mcp/:serverKey/tools/:toolKey/requests",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      reply.header("Cache-Control", "no-store");
+      const params = mcpToolParamsSchema.safeParse(request.params);
+      const command = McpInvocationPeopleRequestSchema.safeParse(request.body);
+      if (!params.success || !command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "外部操作表单需要调整",
+          !params.success
+            ? validationDetails(params.error)
+            : validationDetails(command.error!),
+        );
+      }
+      const result = await mcpInvocations.requestFromPeople(
+        principal,
+        params.data.serverKey,
+        params.data.toolKey,
+        command.data,
+      );
+      const self = `/api/v1/mcp-invocations/${result.invocationKey}`;
+      return reply
+        .code(201)
+        .header("Location", self)
+        .send({
+          data: {
+            title: result.title,
+            status: result.status,
+            links: { self },
+          },
+        });
+    },
+  );
 
   app.get("/api/v1/requirements/:requirementKey", async (request, reply) => {
     const principal = principalFrom(request);

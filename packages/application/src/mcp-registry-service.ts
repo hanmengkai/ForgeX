@@ -247,6 +247,27 @@ export class McpRegistryApplicationService {
     );
   }
 
+  async getEnabledManifestForInvocation(
+    tenantKey: string,
+    serverKey: string,
+    projectKey = this.#projectKey,
+  ): Promise<McpServerManifest | null> {
+    if (!internalKeyPattern.test(projectKey)) {
+      throw new Error("项目范围必须使用有效的内部标识");
+    }
+    const normalizedProjectKey = projectKey.toLowerCase();
+    return this.#repository.transaction(
+      tenantKey,
+      normalizedProjectKey,
+      (transaction) =>
+        this.#restore(
+          tenantKey,
+          transaction.load(),
+          normalizedProjectKey,
+        ).getEnabledManifest(serverKey),
+    );
+  }
+
   async getRecoveryChallenge(
     tenantKey: string,
     serverKey: string,

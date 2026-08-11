@@ -1,8 +1,12 @@
 import { z } from "zod";
 import {
   ExtensionCatalogResponseSchema,
+  McpInvocationToolFormSchema,
+  McpToolCatalogSchema,
   type ExtensionCatalogOverviewForPeople,
   type ExtensionItemForPeople,
+  type McpInvocationToolForm,
+  type McpToolCatalog,
 } from "@forgex/contracts";
 
 export interface RequirementActionLinks {
@@ -204,6 +208,13 @@ export interface ForgeXClient {
     input: WorkerConnectInput,
   ): Promise<WorkerEnrollmentSetup>;
   listExtensions(): Promise<ExtensionCatalogOverview>;
+  getMcpToolCatalog(toolsUrl: string): Promise<McpToolCatalog>;
+  getMcpInvocationForm(formUrl: string): Promise<McpInvocationToolForm>;
+  requestMcpInvocation(
+    actionUrl: string | undefined,
+    requestKey: string,
+    inputs: Record<string, unknown>,
+  ): Promise<void>;
   listMcpInvocations(): Promise<McpInvocationListItem[]>;
   getKnowledgeBase(selfUrl: string): Promise<KnowledgeBaseDetail>;
   createKnowledgeBase(
@@ -519,6 +530,20 @@ const workerEnrollmentResponseSchema = z
 
 const mcpInvocationSelfPattern =
   /^\/api\/v1\/mcp-invocations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const internalKeyPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const mcpServerSelfPattern =
+  /^\/api\/v1\/extensions\/mcp\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const mcpToolFormPattern = new RegExp(
+  `${mcpServerSelfPattern.source.slice(0, -1)}/tools/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/form$`,
+  "i",
+);
+const mcpToolCatalogResponseSchema = z
+  .object({ data: McpToolCatalogSchema })
+  .strict();
+const mcpInvocationFormResponseSchema = z
+  .object({ data: McpInvocationToolFormSchema })
+  .strict();
 const mcpInvocationListResponseSchema = z
   .object({
     data: z
@@ -820,6 +845,33 @@ const assertMcpApprovalUrl = (url: string | undefined): string => {
   return url;
 };
 
+const assertMcpToolsUrl = (url: string): string => {
+  const suffix = "/tools";
+  const self = url.endsWith(suffix) ? url.slice(0, -suffix.length) : "";
+  if (!mcpServerSelfPattern.test(self)) {
+    throw new Error("这个外部服务入口已经失效，请刷新页面后重试");
+  }
+  return url;
+};
+
+const assertMcpToolFormUrl = (url: string): string => {
+  if (!mcpToolFormPattern.test(url)) {
+    throw new Error("这个外部操作入口已经失效，请刷新页面后重试");
+  }
+  return url;
+};
+
+const assertMcpRequestUrl = (url: string | undefined): string => {
+  const suffix = "/requests";
+  const formUrl = url?.endsWith(suffix)
+    ? `${url.slice(0, -suffix.length)}/form`
+    : "";
+  if (!url || !mcpToolFormPattern.test(formUrl)) {
+    throw new Error("这个外部操作表单已经失效，请刷新页面后重试");
+  }
+  return url;
+};
+
 const assertMcpCancellationUrl = (url: string | undefined): string => {
   const suffix = "/cancel";
   const self = url?.endsWith(suffix) ? url.slice(0, -suffix.length) : "";
@@ -965,6 +1017,56 @@ export const createHttpForgeXClient = (
         throw new Error("扩展目录格式不正确，请联系管理员");
       }
       return parsed.data.data;
+    },
+    getMcpToolCatalog: async (toolsUrl) => {
+      const trustedToolsUrl = assertMcpToolsUrl(toolsUrl);
+      const response = await request(trustedToolsUrl);
+      const parsed = mcpToolCatalogResponseSchema.safeParse(
+        await response.json(),
+      );
+      const formLinks = parsed.success
+        ? parsed.data.data.tools.map((tool) => tool.links.form)
+        : [];
+      if (
+        !parsed.success ||
+        new Set(formLinks).size !== formLinks.length ||
+        formLinks.some(
+          (form) =>
+            !form.startsWith(`${trustedToolsUrl}/`) ||
+            !mcpToolFormPattern.test(form),
+        )
+      ) {
+        throw new Error("外部服务目录格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
+    },
+    getMcpInvocationForm: async (formUrl) => {
+      const trustedFormUrl = assertMcpToolFormUrl(formUrl);
+      const response = await request(trustedFormUrl);
+      const parsed = mcpInvocationFormResponseSchema.safeParse(
+        await response.json(),
+      );
+      const expectedRequestUrl = `${trustedFormUrl.slice(0, -"/form".length)}/requests`;
+      if (
+        !parsed.success ||
+        parsed.data.data.links.request !== expectedRequestUrl
+      ) {
+        throw new Error("外部操作表单格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
+    },
+    requestMcpInvocation: async (actionUrl, requestKey, inputs) => {
+      if (!internalKeyPattern.test(requestKey)) {
+        throw new Error("这次外部操作请求已经失效，请重新打开表单");
+      }
+      await request(assertMcpRequestUrl(actionUrl), {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: 1,
+          requestKey,
+          inputs,
+        }),
+      });
     },
     listMcpInvocations: async () => {
       const response = await request("/api/v1/mcp-invocations");

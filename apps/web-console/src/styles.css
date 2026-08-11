@@ -1217,6 +1217,19 @@ h1 {
   font-weight: 650;
 }
 
+.extension-card > button {
+  justify-self: start;
+}
+
+.page-notice {
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
+  border-radius: 10px;
+}
+
 .section-actions,
 .inline-form-actions,
 .source-actions {
@@ -1494,7 +1507,8 @@ h1 {
 }
 
 .field input,
-.field textarea {
+.field textarea,
+.field select {
   width: 100%;
   padding: 11px 12px;
   color: var(--ink);
@@ -1503,6 +1517,48 @@ h1 {
   background: var(--surface-muted);
   border: 1px solid var(--line);
   border-radius: 10px;
+}
+
+.mcp-impact-summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  margin-top: 18px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.mcp-impact-summary span {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.mcp-tool-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.mcp-tool-list button {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  text-align: left;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.mcp-tool-list button:hover {
+  border-color: var(--primary);
+}
+
+.mcp-tool-list span,
+.mcp-tool-list small {
+  color: var(--ink-soft);
 }
 
 .field input::placeholder,

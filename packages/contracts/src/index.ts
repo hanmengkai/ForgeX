@@ -214,6 +214,131 @@ export const McpInvocationRequestSchema = z
   })
   .strict();
 
+const mcpFormFieldKey = z.string().regex(/^[a-f0-9]{64}$/u);
+const mcpFormUuidPath =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const mcpFormOptionSchema = z
+  .object({
+    optionKey: mcpFormFieldKey,
+    label: z.string().trim().min(1).max(100),
+  })
+  .strict();
+const mcpFormConstraintsSchema = z
+  .object({
+    minLength: z.number().int().min(0).optional(),
+    maxLength: z.number().int().min(0).optional(),
+    minimum: z.number().finite().optional(),
+    maximum: z.number().finite().optional(),
+    exclusiveMinimum: z.number().finite().optional(),
+    exclusiveMaximum: z.number().finite().optional(),
+    multipleOf: z.number().finite().positive().optional(),
+    minItems: z.number().int().min(0).optional(),
+    maxItems: z.number().int().min(0).optional(),
+    itemMinLength: z.number().int().min(0).optional(),
+    itemMaxLength: z.number().int().min(0).optional(),
+  })
+  .strict();
+
+export const McpInvocationPeopleRequestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    requestKey: internalKey,
+    inputs: z.record(mcpFormFieldKey, z.unknown()),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (Object.keys(request.inputs).length > 50) {
+      context.addIssue({
+        code: "custom",
+        path: ["inputs"],
+        message: "外部操作参数不能超过 50 项",
+      });
+    }
+  });
+
+export const McpInvocationFormFieldSchema = z
+  .object({
+    fieldKey: mcpFormFieldKey,
+    label: z.string().trim().min(2).max(100),
+    description: z.string().trim().min(2).max(500),
+    kind: z.enum([
+      "text",
+      "integer",
+      "number",
+      "boolean",
+      "select",
+      "text_list",
+    ]),
+    required: z.boolean(),
+    options: z.array(mcpFormOptionSchema).max(100),
+    constraints: mcpFormConstraintsSchema.optional(),
+  })
+  .strict()
+  .superRefine((field, context) => {
+    if ((field.kind === "select") !== field.options.length > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "选择字段必须提供可选值，其他字段不能夹带可选值",
+      });
+    }
+  });
+
+export const McpInvocationToolFormSchema = z
+  .object({
+    serviceName: z.string().trim().min(2).max(100),
+    title: z.string().trim().min(2).max(100),
+    description: z.string().trim().min(4).max(500),
+    impact: z.enum(["仅读取信息", "会修改业务数据", "会触发外部动作"]),
+    confirmation: z.enum(["自动确认", "需要产品负责人确认"]),
+    fields: z.array(McpInvocationFormFieldSchema).max(50),
+    links: z
+      .object({
+        request: z
+          .string()
+          .regex(
+            new RegExp(
+              `^/api/v1/extensions/mcp/${mcpFormUuidPath}/tools/${mcpFormUuidPath}/requests$`,
+              "i",
+            ),
+          ),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const McpToolCatalogSchema = z
+  .object({
+    serviceName: z.string().trim().min(2).max(100),
+    summary: z.string().trim().min(4).max(500),
+    tools: z
+      .array(
+        z
+          .object({
+            title: z.string().trim().min(2).max(100),
+            description: z.string().trim().min(4).max(500),
+            impact: z.enum(["仅读取信息", "会修改业务数据", "会触发外部动作"]),
+            confirmation: z.enum(["自动确认", "需要产品负责人确认"]),
+            links: z
+              .object({
+                form: z
+                  .string()
+                  .regex(
+                    new RegExp(
+                      `^/api/v1/extensions/mcp/${mcpFormUuidPath}/tools/${mcpFormUuidPath}/form$`,
+                      "i",
+                    ),
+                  ),
+              })
+              .strict(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50),
+  })
+  .strict();
+
 export const StartDeliveryCommandSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -443,9 +568,37 @@ const knowledgeExtensionItemSchema = extensionItemSchema(
 const skillExtensionItemSchema = extensionItemSchema(
   new RegExp(`^/api/v1/extensions/skills/${extensionKeyPath}$`, "i"),
 );
-const mcpExtensionItemSchema = extensionItemSchema(
-  new RegExp(`^/api/v1/extensions/mcp/${extensionKeyPath}$`, "i"),
-);
+const mcpExtensionItemSchema = z
+  .object({
+    ...extensionItemFields,
+    links: z
+      .object({
+        self: z
+          .string()
+          .regex(
+            new RegExp(`^/api/v1/extensions/mcp/${extensionKeyPath}$`, "i"),
+          ),
+        tools: z
+          .string()
+          .regex(
+            new RegExp(
+              `^/api/v1/extensions/mcp/${extensionKeyPath}/tools$`,
+              "i",
+            ),
+          ),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((item, context) => {
+    if (item.links.tools !== `${item.links.self}/tools`) {
+      context.addIssue({
+        code: "custom",
+        path: ["links", "tools"],
+        message: "MCP 工具入口与当前服务不匹配",
+      });
+    }
+  });
 
 export const ExtensionItemForPeopleSchema = z.union([
   knowledgeExtensionItemSchema,
@@ -496,6 +649,14 @@ export type WorkerEnrollmentExchangePayload = z.infer<
 export type McpInvocationRequestPayload = z.infer<
   typeof McpInvocationRequestSchema
 >;
+export type McpInvocationPeopleRequestPayload = z.infer<
+  typeof McpInvocationPeopleRequestSchema
+>;
+export type McpInvocationFormField = z.infer<
+  typeof McpInvocationFormFieldSchema
+>;
+export type McpInvocationToolForm = z.infer<typeof McpInvocationToolFormSchema>;
+export type McpToolCatalog = z.infer<typeof McpToolCatalogSchema>;
 export type StartDeliveryCommandPayload = z.infer<
   typeof StartDeliveryCommandSchema
 >;

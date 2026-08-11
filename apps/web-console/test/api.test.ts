@@ -155,6 +155,8 @@ describe("createHttpForgeXClient", () => {
       supportingText: "读取自动放行，变更需要确认",
       links: {
         self: "/api/v1/extensions/mcp/33333333-3333-4333-8333-333333333333",
+        tools:
+          "/api/v1/extensions/mcp/33333333-3333-4333-8333-333333333333/tools",
       },
     };
     const businessKnowledge = {
@@ -205,6 +207,26 @@ describe("createHttpForgeXClient", () => {
             },
           }),
         ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              businessKnowledge: [],
+              teamCapabilities: [],
+              externalTools: [
+                {
+                  ...valid,
+                  links: {
+                    ...valid.links,
+                    tools:
+                      "/api/v1/extensions/mcp/66666666-6666-4666-8666-666666666666/tools",
+                  },
+                },
+              ],
+            },
+          }),
+        ),
       );
     const client = createHttpForgeXClient({ fetcher });
 
@@ -215,6 +237,122 @@ describe("createHttpForgeXClient", () => {
     });
     await expect(client.listExtensions()).rejects.toThrow("扩展目录格式不正确");
     await expect(client.listExtensions()).rejects.toThrow("扩展目录格式不正确");
+    await expect(client.listExtensions()).rejects.toThrow("扩展目录格式不正确");
+  });
+
+  it("外部操作只接受受信 HATEOAS 表单并提交不透明业务字段", async () => {
+    const toolsUrl =
+      "/api/v1/extensions/mcp/33333333-3333-4333-8333-333333333333/tools";
+    const formUrl = `${toolsUrl}/44444444-4444-4444-8444-444444444444/form`;
+    const requestUrl = `${toolsUrl}/44444444-4444-4444-8444-444444444444/requests`;
+    const requestKey = "77777777-7777-4777-8777-777777777777";
+    const fieldKey = "a".repeat(64);
+    const catalog = {
+      serviceName: "代码仓库工具",
+      summary: "读取代码并在确认后执行受控业务动作",
+      tools: [
+        {
+          title: "创建交付分支",
+          description: "在明确确认后创建本次需求的交付分支",
+          impact: "会修改业务数据",
+          confirmation: "需要产品负责人确认",
+          links: { form: formUrl },
+        },
+      ],
+    };
+    const form = {
+      serviceName: "代码仓库工具",
+      title: "创建交付分支",
+      description: "在明确确认后创建本次需求的交付分支",
+      impact: "会修改业务数据",
+      confirmation: "需要产品负责人确认",
+      fields: [
+        {
+          fieldKey,
+          label: "分支名称",
+          description: "请填写分支名称",
+          kind: "text",
+          required: true,
+          options: [],
+        },
+      ],
+      links: { request: requestUrl },
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: catalog })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: form })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} })))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              ...catalog,
+              tools: [
+                {
+                  ...catalog.tools[0],
+                  technicalName: "repository.create_branch",
+                },
+              ],
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              ...catalog,
+              tools: [
+                {
+                  ...catalog.tools[0],
+                  links: {
+                    form: "/api/v1/extensions/mcp/66666666-6666-4666-8666-666666666666/tools/44444444-4444-4444-8444-444444444444/form",
+                  },
+                },
+              ],
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              ...form,
+              links: {
+                request:
+                  "/api/v1/extensions/mcp/66666666-6666-4666-8666-666666666666/tools/44444444-4444-4444-8444-444444444444/requests",
+              },
+            },
+          }),
+        ),
+      );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(client.getMcpToolCatalog(toolsUrl)).resolves.toEqual(catalog);
+    await expect(client.getMcpInvocationForm(formUrl)).resolves.toEqual(form);
+    await client.requestMcpInvocation(requestUrl, requestKey, {
+      [fieldKey]: "feature/payment",
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toMatchObject({
+      schemaVersion: 1,
+      requestKey,
+      inputs: { [fieldKey]: "feature/payment" },
+    });
+    await expect(client.getMcpToolCatalog(toolsUrl)).rejects.toThrow(
+      "外部服务目录格式不正确",
+    );
+    await expect(client.getMcpToolCatalog(toolsUrl)).rejects.toThrow(
+      "外部服务目录格式不正确",
+    );
+    await expect(client.getMcpInvocationForm(formUrl)).rejects.toThrow(
+      "外部操作表单格式不正确",
+    );
+    await expect(
+      client.getMcpToolCatalog("/api/v1/mcp-invocations"),
+    ).rejects.toThrow("外部服务入口已经失效");
+    expect(fetcher).toHaveBeenCalledTimes(6);
   });
 
   it("严格绑定知识库、资料和检索入口，不接受其他资源的详情", async () => {

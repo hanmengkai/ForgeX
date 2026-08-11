@@ -70,6 +70,8 @@ describe("ExtensionCatalogApplicationService", () => {
           supportingText: "每次使用前都要确认",
           links: {
             self: "/api/v1/extensions/mcp/44444444-4444-4444-8444-444444444444",
+            tools:
+              "/api/v1/extensions/mcp/44444444-4444-4444-8444-444444444444/tools",
           },
         },
       ],
@@ -343,6 +345,7 @@ describe("ExtensionCatalogApplicationService", () => {
           status: "可使用",
           links: {
             self: `/api/v1/extensions/mcp/${trustedServerKey}`,
+            tools: `/api/v1/extensions/mcp/${trustedServerKey}/tools`,
           },
         },
       ],
@@ -351,7 +354,10 @@ describe("ExtensionCatalogApplicationService", () => {
       service.mcpDetailForPeople(principal, trustedServerKey),
     ).resolves.toMatchObject({
       name: "代码仓库工具",
-      links: { self: `/api/v1/extensions/mcp/${trustedServerKey}` },
+      links: {
+        self: `/api/v1/extensions/mcp/${trustedServerKey}`,
+        tools: `/api/v1/extensions/mcp/${trustedServerKey}/tools`,
+      },
     });
     await expect(
       service.detailForPeople(

@@ -3,8 +3,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import {
+  McpInvocationPeopleRequestSchema,
   McpInvocationRequestSchema,
+  type McpInvocationFormField,
+  type McpInvocationPeopleRequestPayload,
   type McpInvocationRequestPayload,
+  type McpInvocationToolForm,
 } from "@forgex/contracts";
 
 import {
@@ -17,6 +21,7 @@ import type { AuthenticatedPrincipal, PlatformRole } from "./auth.js";
 import { ApplicationError } from "./errors.js";
 import {
   canonicalizeMcpArguments,
+  canonicalizeMcpInputSchema,
   projectMcpArgumentsForPeople,
   validateMcpToolArguments,
   type McpArgumentForPeople,
@@ -158,6 +163,238 @@ export interface McpInvocationItemForPeople {
 const approvalRoles = new Set<PlatformRole>(["product_owner", "administrator"]);
 const MAX_OUTSTANDING_MCP_INVOCATIONS = 100;
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const argumentsHashForExistingRequest = (input: unknown): string | null => {
+  if (!isPlainObject(input)) return null;
+  let canonicalJson: string;
+  try {
+    canonicalJson = JSON.stringify(input, (_key, value: unknown) => {
+      if (!isPlainObject(value)) return value;
+      return Object.fromEntries(
+        Object.entries(value).sort(([left], [right]) =>
+          left < right ? -1 : left > right ? 1 : 0,
+        ),
+      );
+    });
+  } catch {
+    return null;
+  }
+  return createHash("sha256").update(canonicalJson, "utf8").digest("hex");
+};
+
+const formFieldKey = (schemaHash: string, propertyName: string): string =>
+  createHash("sha256")
+    .update(`${schemaHash}\u0000${propertyName}`, "utf8")
+    .digest("hex");
+
+const formOptionKey = (
+  schemaHash: string,
+  propertyName: string,
+  option: unknown,
+): string =>
+  createHash("sha256")
+    .update(
+      `${schemaHash}\u0000${propertyName}\u0000${JSON.stringify(option)}`,
+      "utf8",
+    )
+    .digest("hex");
+
+const optionLabel = (option: unknown): string => {
+  if (option === null) return "无";
+  if (typeof option === "boolean") return option ? "是" : "否";
+  if (typeof option === "number") return String(option);
+  if (typeof option !== "string") {
+    throw new ApplicationError(
+      409,
+      "mcp_form_unsupported",
+      "这项外部能力暂时不能生成安全的业务表单",
+    );
+  }
+  const label = option.trim();
+  if (
+    label !== option ||
+    label.length === 0 ||
+    label.length > 100 ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      label,
+    ) ||
+    /^[a-z][a-z0-9_.-]*$/iu.test(label)
+  ) {
+    throw new ApplicationError(
+      409,
+      "mcp_form_unsupported",
+      "这项外部能力的选项缺少可理解的业务名称",
+    );
+  }
+  return label;
+};
+
+const formFieldKind = (
+  property: Record<string, unknown>,
+): McpInvocationFormField["kind"] | null => {
+  if (Array.isArray(property.enum) && property.enum.length > 0) return "select";
+  if (property.type === "string") return "text";
+  if (property.type === "integer") return "integer";
+  if (property.type === "number") return "number";
+  if (property.type === "boolean") return "boolean";
+  if (
+    property.type === "array" &&
+    isPlainObject(property.items) &&
+    property.items.type === "string" &&
+    !Object.hasOwn(property.items, "enum") &&
+    !Object.hasOwn(property.items, "const")
+  ) {
+    return "text_list";
+  }
+  return null;
+};
+
+const formConstraints = (
+  property: Record<string, unknown>,
+): NonNullable<McpInvocationFormField["constraints"]> => {
+  const constraints: NonNullable<McpInvocationFormField["constraints"]> = {};
+  for (const key of [
+    "minLength",
+    "maxLength",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minItems",
+    "maxItems",
+  ] as const) {
+    if (typeof property[key] === "number") constraints[key] = property[key];
+  }
+  if (isPlainObject(property.items)) {
+    if (typeof property.items.minLength === "number") {
+      constraints.itemMinLength = property.items.minLength;
+    }
+    if (typeof property.items.maxLength === "number") {
+      constraints.itemMaxLength = property.items.maxLength;
+    }
+  }
+  return constraints;
+};
+
+const formDescription = (
+  label: string,
+  kind: McpInvocationFormField["kind"],
+  constraints: NonNullable<McpInvocationFormField["constraints"]>,
+): string => {
+  const details: string[] = [];
+  if (kind === "text") {
+    if (constraints.minLength !== undefined) {
+      details.push(`至少 ${constraints.minLength} 个字符`);
+    }
+    if (constraints.maxLength !== undefined) {
+      details.push(`最多 ${constraints.maxLength} 个字符`);
+    }
+  }
+  if (kind === "integer" || kind === "number") {
+    if (constraints.minimum !== undefined) {
+      details.push(`不小于 ${constraints.minimum}`);
+    }
+    if (constraints.exclusiveMinimum !== undefined) {
+      details.push(`大于 ${constraints.exclusiveMinimum}`);
+    }
+    if (constraints.maximum !== undefined) {
+      details.push(`不大于 ${constraints.maximum}`);
+    }
+    if (constraints.exclusiveMaximum !== undefined) {
+      details.push(`小于 ${constraints.exclusiveMaximum}`);
+    }
+    if (constraints.multipleOf !== undefined) {
+      details.push(`按 ${constraints.multipleOf} 递增`);
+    }
+  }
+  if (kind === "text_list") {
+    if (constraints.minItems !== undefined) {
+      details.push(`至少 ${constraints.minItems} 项`);
+    }
+    if (constraints.maxItems !== undefined) {
+      details.push(`最多 ${constraints.maxItems} 项`);
+    }
+    if (constraints.itemMinLength !== undefined) {
+      details.push(`每项至少 ${constraints.itemMinLength} 个字符`);
+    }
+    if (constraints.itemMaxLength !== undefined) {
+      details.push(`每项最多 ${constraints.itemMaxLength} 个字符`);
+    }
+  }
+  const action = kind === "select" ? `请选择${label}` : `请填写${label}`;
+  return details.length > 0 ? `${action}（${details.join("，")}）` : action;
+};
+
+const argumentsFromPeopleInputs = (
+  schemaInput: unknown,
+  inputs: Record<string, unknown>,
+): { values: Record<string, unknown>; hash: string } | null => {
+  const canonical = canonicalizeMcpInputSchema(schemaInput);
+  if (
+    canonical.schema.minProperties !== undefined ||
+    canonical.schema.maxProperties !== undefined
+  ) {
+    return null;
+  }
+  const properties = canonical.schema.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const required = new Set(
+    Array.isArray(canonical.schema.required)
+      ? canonical.schema.required.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : [],
+  );
+  const propertyByField = new Map<
+    string,
+    { propertyName: string; property: Record<string, unknown> }
+  >();
+  const values: Record<string, unknown> = {};
+  for (const [propertyName, property] of Object.entries(properties)) {
+    if (Object.hasOwn(property, "const")) {
+      if (required.has(propertyName)) values[propertyName] = property.const;
+      continue;
+    }
+    if (!formFieldKind(property)) return null;
+    propertyByField.set(formFieldKey(canonical.hash, propertyName), {
+      propertyName,
+      property,
+    });
+  }
+  for (const [fieldKey, submitted] of Object.entries(inputs)) {
+    const binding = propertyByField.get(fieldKey);
+    if (!binding) return null;
+    if (Array.isArray(binding.property.enum)) {
+      if (typeof submitted !== "string") return null;
+      const option = binding.property.enum.find(
+        (candidate) =>
+          formOptionKey(canonical.hash, binding.propertyName, candidate) ===
+          submitted,
+      );
+      if (option === undefined) return null;
+      values[binding.propertyName] = option;
+    } else {
+      values[binding.propertyName] = submitted;
+    }
+  }
+  const canonicalJson = JSON.stringify(
+    Object.fromEntries(
+      Object.entries(values).sort(([left], [right]) =>
+        left < right ? -1 : left > right ? 1 : 0,
+      ),
+    ),
+  );
+  return {
+    values,
+    hash: createHash("sha256").update(canonicalJson, "utf8").digest("hex"),
+  };
+};
+
 const statusForPeople = (
   status: McpInvocationRecord["status"],
 ): McpInvocationPeopleView["status"] => {
@@ -193,6 +430,198 @@ export class McpInvocationApplicationService {
     this.#clock = options.clock ?? (() => new Date());
   }
 
+  async formForPeople(
+    principal: AuthenticatedPrincipal,
+    serverKey: string,
+    toolKey: string,
+  ): Promise<McpInvocationToolForm> {
+    const trusted = await this.#trustedToolAndSchema(
+      principal.tenantKey,
+      serverKey,
+      toolKey,
+    );
+    const canonical = canonicalizeMcpInputSchema(trusted.schema);
+    if (
+      canonical.schema.minProperties !== undefined ||
+      canonical.schema.maxProperties !== undefined
+    ) {
+      throw new ApplicationError(
+        409,
+        "mcp_form_unsupported",
+        "这项外部能力包含暂不支持的组合业务约束",
+      );
+    }
+    const required = new Set(
+      Array.isArray(canonical.schema.required)
+        ? canonical.schema.required.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+    );
+    const properties = canonical.schema.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const fields = Object.entries(properties).flatMap(
+      ([propertyName, property]): McpInvocationFormField[] => {
+        if (Object.hasOwn(property, "const")) return [];
+        const kind = formFieldKind(property);
+        if (!kind) {
+          throw new ApplicationError(
+            409,
+            "mcp_form_unsupported",
+            "这项外部能力包含暂不支持的复杂业务参数",
+          );
+        }
+        const options = Array.isArray(property.enum)
+          ? property.enum.map((option) => ({
+              optionKey: formOptionKey(canonical.hash, propertyName, option),
+              label: optionLabel(option),
+            }))
+          : [];
+        const visibleOptions = new Set(
+          options.map((option) =>
+            option.label
+              .normalize("NFKC")
+              .replace(/\s+/gu, " ")
+              .trim()
+              .toLowerCase(),
+          ),
+        );
+        if (visibleOptions.size !== options.length) {
+          throw new ApplicationError(
+            409,
+            "mcp_form_unsupported",
+            "这项外部能力包含无法区分的业务选项",
+          );
+        }
+        const constraints = formConstraints(property);
+        const label = String(property.title).trim();
+        return [
+          {
+            fieldKey: formFieldKey(canonical.hash, propertyName),
+            label,
+            description: formDescription(label, kind, constraints),
+            kind,
+            required: required.has(propertyName),
+            options,
+            ...(Object.keys(constraints).length > 0 ? { constraints } : {}),
+          },
+        ];
+      },
+    );
+    const impact = {
+      read: "仅读取信息",
+      write: "会修改业务数据",
+      external_action: "会触发外部动作",
+    } as const;
+    return {
+      serviceName: trusted.manifest.name,
+      title: trusted.tool.displayName,
+      description: trusted.tool.description,
+      impact: impact[trusted.tool.effect],
+      confirmation:
+        trusted.tool.approval === "automatic"
+          ? "自动确认"
+          : "需要产品负责人确认",
+      fields,
+      links: {
+        request: `/api/v1/extensions/mcp/${trusted.manifest.serverKey}/tools/${trusted.tool.toolKey}/requests`,
+      },
+    };
+  }
+
+  async requestFromPeople(
+    principal: AuthenticatedPrincipal,
+    serverKey: string,
+    toolKey: string,
+    input: McpInvocationPeopleRequestPayload,
+  ): ReturnType<McpInvocationApplicationService["request"]> {
+    const command = McpInvocationPeopleRequestSchema.safeParse(input);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "invalid_mcp_invocation_form",
+        "外部操作表单需要调整",
+      );
+    }
+    const existing = await this.#repository.transaction(
+      principal.tenantKey,
+      this.#projectKey,
+      (transaction) =>
+        transaction.findByRequest(principal.actorKey, command.data.requestKey),
+    );
+    if (existing) {
+      const historicalSchema = await this.#schemaStore.get({
+        tenantKey: existing.tenantKey,
+        projectKey: existing.projectKey,
+        hashAlgorithm: existing.inputSchemaHashAlgorithm,
+        hash: existing.inputSchemaHash,
+      });
+      if (!historicalSchema) {
+        throw new Error("已持久化的 MCP 调用缺少内容寻址参数定义");
+      }
+      const mapped = argumentsFromPeopleInputs(
+        historicalSchema,
+        command.data.inputs,
+      );
+      if (
+        !mapped ||
+        existing.serverKey !== serverKey.toLowerCase() ||
+        existing.toolKey !== toolKey.toLowerCase() ||
+        mapped.hash !== existing.argumentsHash
+      ) {
+        throw new ApplicationError(
+          409,
+          "mcp_request_conflict",
+          "这次请求已用于另一项外部操作",
+        );
+      }
+      return {
+        invocationKey: existing.invocationKey,
+        title: existing.toolDisplayName,
+        status: statusForPeople(existing.status),
+      };
+    }
+    const trusted = await this.#trustedToolAndSchema(
+      principal.tenantKey,
+      serverKey,
+      toolKey,
+    );
+    const mapped = argumentsFromPeopleInputs(
+      trusted.schema,
+      command.data.inputs,
+    );
+    if (!mapped) {
+      throw new ApplicationError(
+        409,
+        "mcp_invocation_form_changed",
+        "这项外部操作的表单已经变化，请重新打开后再提交",
+      );
+    }
+    try {
+      return await this.request(principal, {
+        schemaVersion: 1,
+        requestKey: command.data.requestKey,
+        serverKey,
+        toolKey,
+        arguments: mapped.values,
+      });
+    } catch (error) {
+      if (
+        error instanceof ApplicationError &&
+        error.code === "mcp_arguments_invalid"
+      ) {
+        throw new ApplicationError(
+          422,
+          "invalid_mcp_invocation_form",
+          "外部操作参数不符合当前业务规则，请检查后重试",
+        );
+      }
+      throw error;
+    }
+  }
+
   async request(
     principal: AuthenticatedPrincipal,
     input: McpInvocationRequestPayload,
@@ -209,7 +638,6 @@ export class McpInvocationApplicationService {
         "MCP 调用信息需要调整",
       );
     }
-    const canonicalArguments = canonicalizeMcpArguments(command.data.arguments);
     const existing = await this.#repository.transaction(
       principal.tenantKey,
       this.#projectKey,
@@ -220,7 +648,8 @@ export class McpInvocationApplicationService {
       if (
         existing.serverKey !== command.data.serverKey ||
         existing.toolKey !== command.data.toolKey ||
-        existing.argumentsHash !== canonicalArguments.hash
+        existing.argumentsHash !==
+          argumentsHashForExistingRequest(command.data.arguments)
       ) {
         throw new ApplicationError(
           409,
@@ -234,6 +663,7 @@ export class McpInvocationApplicationService {
         status: statusForPeople(existing.status),
       };
     }
+    const canonicalArguments = canonicalizeMcpArguments(command.data.arguments);
     const trusted = await this.#toolDirectory.getEnabledToolForInvocation(
       principal.tenantKey,
       command.data.serverKey,
@@ -1614,6 +2044,54 @@ export class McpInvocationApplicationService {
     return (
       manifest.tools.find((candidate) => candidate.toolKey === toolKey) ?? null
     );
+  }
+
+  async #trustedToolAndSchema(
+    tenantKey: string,
+    serverKey: string,
+    toolKey: string,
+  ): Promise<{
+    manifest: McpServerManifest;
+    tool: McpToolDefinition;
+    schema: Record<string, unknown>;
+  }> {
+    const trusted = await this.#toolDirectory.getEnabledToolForInvocation(
+      tenantKey,
+      serverKey,
+      toolKey,
+      this.#projectKey,
+    );
+    if (!trusted) {
+      throw new ApplicationError(
+        409,
+        "mcp_tool_unavailable",
+        "这项外部能力当前不可使用，请稍后重试",
+      );
+    }
+    const tool = this.#trustedManifestTool(
+      tenantKey,
+      this.#projectKey,
+      serverKey,
+      trusted.manifest,
+      toolKey,
+    );
+    if (!tool) {
+      throw new Error("可信 MCP 目录返回了错误的租户、项目或能力绑定");
+    }
+    const schema = await this.#schemaStore.get({
+      tenantKey,
+      projectKey: this.#projectKey,
+      hashAlgorithm: tool.inputSchemaHashAlgorithm,
+      hash: tool.inputSchemaHash,
+    });
+    if (!schema) {
+      throw new ApplicationError(
+        409,
+        "mcp_schema_unavailable",
+        "这项外部能力的参数规则尚未就绪",
+      );
+    }
+    return { manifest: trusted.manifest, tool, schema };
   }
 
   #sameValidationSnapshot(

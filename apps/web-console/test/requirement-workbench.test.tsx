@@ -63,6 +63,9 @@ const createClient = (): ForgeXClient => ({
     teamCapabilities: [],
     externalTools: [],
   }),
+  getMcpToolCatalog: vi.fn(),
+  getMcpInvocationForm: vi.fn(),
+  requestMcpInvocation: vi.fn(),
   listMcpInvocations: vi.fn().mockResolvedValue([]),
   getKnowledgeBase: vi.fn(),
   createKnowledgeBase: vi.fn(),
@@ -268,6 +271,7 @@ describe("RequirementWorkbench", () => {
   it("扩展中心用业务资料、团队能力和外部工具组织项目能力", async () => {
     const user = userEvent.setup();
     const client = createClient();
+    const fieldKey = "a".repeat(64);
     vi.mocked(client.listExtensions).mockResolvedValue({
       businessKnowledge: [
         {
@@ -302,10 +306,70 @@ describe("RequirementWorkbench", () => {
           supportingText: "读取自动放行，变更需要确认",
           links: {
             self: "/api/v1/extensions/mcp/55555555-5555-4555-8555-555555555555",
+            tools:
+              "/api/v1/extensions/mcp/55555555-5555-4555-8555-555555555555/tools",
           },
         },
       ],
     });
+    vi.mocked(client.getMcpToolCatalog).mockResolvedValue({
+      serviceName: "代码仓库工具",
+      summary: "读取代码、创建交付分支并运行受控检查",
+      tools: [
+        {
+          title: "创建交付分支",
+          description: "在明确确认后创建本次需求的交付分支",
+          impact: "会修改业务数据",
+          confirmation: "需要产品负责人确认",
+          links: {
+            form: "/api/v1/extensions/mcp/55555555-5555-4555-8555-555555555555/tools/66666666-6666-4666-8666-666666666666/form",
+          },
+        },
+      ],
+    });
+    vi.mocked(client.getMcpInvocationForm).mockResolvedValue({
+      serviceName: "代码仓库工具",
+      title: "创建交付分支",
+      description: "在明确确认后创建本次需求的交付分支",
+      impact: "会修改业务数据",
+      confirmation: "需要产品负责人确认",
+      fields: [
+        {
+          fieldKey,
+          label: "分支名称",
+          description: "请填写分支名称",
+          kind: "text",
+          required: true,
+          options: [],
+          constraints: { minLength: 5, maxLength: 80 },
+        },
+        {
+          fieldKey: "b".repeat(64),
+          label: "重试次数",
+          description: "请填写重试次数（不小于 1，不大于 5，按 1 递增）",
+          kind: "integer",
+          required: false,
+          options: [],
+          constraints: { minimum: 1, maximum: 5, multipleOf: 1 },
+        },
+        {
+          fieldKey: "c".repeat(64),
+          label: "通知对象",
+          description: "请填写通知对象（至少 1 项，最多 3 项）",
+          kind: "text_list",
+          required: false,
+          options: [],
+          constraints: { minItems: 1, maxItems: 3 },
+        },
+      ],
+      links: {
+        request:
+          "/api/v1/extensions/mcp/55555555-5555-4555-8555-555555555555/tools/66666666-6666-4666-8666-666666666666/requests",
+      },
+    });
+    vi.mocked(client.requestMcpInvocation)
+      .mockRejectedValueOnce(new Error("响应暂时中断"))
+      .mockResolvedValueOnce(undefined);
     render(<RequirementWorkbench client={client} />);
 
     await user.click(screen.getByRole("button", { name: "扩展中心" }));
@@ -319,6 +383,38 @@ describe("RequirementWorkbench", () => {
       /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
     );
     expect(client.listExtensions).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      screen.getByRole("button", { name: /发起业务操作.*代码仓库工具/u }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /创建交付分支/u }),
+    );
+    const branchInput = await screen.findByLabelText(/分支名称/u);
+    expect(branchInput).toHaveAttribute("minlength", "5");
+    expect(branchInput).toHaveAttribute("maxlength", "80");
+    expect(screen.getByLabelText(/重试次数/u)).toHaveAttribute("min", "1");
+    expect(screen.getByLabelText(/重试次数/u)).toHaveAttribute("max", "5");
+    expect(screen.getByLabelText(/重试次数/u)).toHaveAttribute("step", "1");
+    expect(screen.getByLabelText(/通知对象/u)).toBeInTheDocument();
+    await user.type(branchInput, "feature/payment");
+    await user.click(screen.getByRole("button", { name: "确认发起" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("响应暂时中断");
+    await user.click(screen.getByRole("button", { name: "确认发起" }));
+
+    expect(client.requestMcpInvocation).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/extensions/mcp/55555555-5555-4555-8555-555555555555/tools/66666666-6666-4666-8666-666666666666/requests",
+      expect.stringMatching(/^[0-9a-f-]{36}$/iu),
+      { [fieldKey]: "feature/payment" },
+    );
+    expect(client.requestMcpInvocation).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/extensions/mcp/55555555-5555-4555-8555-555555555555/tools/66666666-6666-4666-8666-666666666666/requests",
+      vi.mocked(client.requestMcpInvocation).mock.calls[0]![1],
+      { [fieldKey]: "feature/payment" },
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("操作已发起");
   });
 
   it("业务资料可以直接查看、检索引用并由负责人发布内容", async () => {

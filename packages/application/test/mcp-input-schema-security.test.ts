@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canonicalizeMcpArguments,
   canonicalizeMcpInputSchema,
   projectMcpArgumentsForPeople,
 } from "../src/index.js";
@@ -62,15 +63,36 @@ describe("MCP 人工确认文本安全边界", () => {
         { target: "safe.txt\u202Ecod.exe" },
         { requireExactValues: true },
       ),
-    ).toThrow("需要人工确认的非敏感文本不能包含隐藏控制字符");
+    ).toThrow("MCP 调用参数不能包含隐藏控制字符");
     expect(() =>
       projectMcpArgumentsForPeople(
         visibleSchema(),
         { target: "customer\u200Badmin" },
         { requireExactValues: true },
       ),
-    ).toThrow("需要人工确认的非敏感文本不能包含隐藏控制字符");
+    ).toThrow("MCP 调用参数不能包含隐藏控制字符");
+    expect(() =>
+      canonicalizeMcpArguments({ target: "src\u202Egpj.exe" }),
+    ).toThrow("MCP 调用参数不能包含隐藏控制字符");
   });
+
+  it("拒绝实参中的明文凭据但允许安全占位示例", () => {
+    expect(() =>
+      canonicalizeMcpArguments({ query: 'apiKey = "actual-secret-123456"' }),
+    ).toThrow("MCP 调用参数不能包含明文凭据");
+    expect(() =>
+      canonicalizeMcpArguments({ query: "apiKey = <YOUR_TOKEN>" }),
+    ).not.toThrow();
+  });
+
+  it.each(["customer_id", "STATUS_PENDING"])(
+    "拒绝直接向普通成员展示纯技术字段标题 %s",
+    (title) => {
+      expect(() => canonicalizeMcpInputSchema(visibleSchema(title))).toThrow(
+        "Schema 参数必须使用业务标题",
+      );
+    },
+  );
 
   it("按最终 JSON 展示文本限制长度，避免转义后越过 Web 契约", () => {
     expect(

@@ -232,6 +232,25 @@ describe("McpServerRegistry", () => {
     }
   });
 
+  it("拒绝在普通成员可见的 MCP 说明中使用隐藏控制字符", () => {
+    for (const candidate of [
+      { ...manifest, summary: "安全服务\u202Ecod.exe" },
+      {
+        ...manifest,
+        tools: [
+          {
+            ...manifest.tools[0]!,
+            description: "读取安全目标\u200B后返回业务摘要",
+          },
+        ],
+      },
+    ]) {
+      expect(() => McpServerManifestSchema.parse(candidate)).toThrow(
+        "业务说明不能包含隐藏控制字符",
+      );
+    }
+  });
+
   it("拒绝能力漂移、失败、跨范围、篡改或过期的探测结果", () => {
     const target = registry();
     target.publish(manifest);

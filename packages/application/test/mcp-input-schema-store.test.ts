@@ -352,4 +352,21 @@ describe("MCP 输入 Schema 制品", () => {
       ).toThrow("MCP Schema 不能包含明文凭据");
     }
   });
+
+  it("拒绝用隐藏控制字符伪装业务表单的可选值", () => {
+    expect(() =>
+      canonicalizeMcpInputSchema({
+        type: "object",
+        properties: {
+          target: {
+            type: "string",
+            title: "操作目标",
+            writeOnly: false,
+            enum: ["safe.txt\u202Ecod.exe"],
+          },
+        },
+        additionalProperties: false,
+      }),
+    ).toThrow("Schema 的可选值不能包含隐藏控制字符");
+  });
 });

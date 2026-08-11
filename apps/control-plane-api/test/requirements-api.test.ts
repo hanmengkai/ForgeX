@@ -430,7 +430,10 @@ describe("需求 API", () => {
         status: "需要处理",
         detail: "1 项业务能力",
         supportingText: "读取可自动运行",
-        links: { self: `/api/v1/extensions/mcp/${serverKey}` },
+        links: {
+          self: `/api/v1/extensions/mcp/${serverKey}`,
+          tools: `/api/v1/extensions/mcp/${serverKey}/tools`,
+        },
       },
     ]);
     const detail = await app.inject({
@@ -887,16 +890,53 @@ describe("需求 API", () => {
       inputSchema,
     );
 
+    const catalog = await app.inject({
+      method: "GET",
+      url: `/api/v1/extensions/mcp/${serverKey}/tools`,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(catalog.statusCode, catalog.body).toBe(200);
+    expect(catalog.json().data).toMatchObject({
+      serviceName: "代码仓库助手",
+      tools: [
+        {
+          title: "创建交付分支",
+          impact: "会修改业务数据",
+          confirmation: "需要产品负责人确认",
+        },
+      ],
+    });
+    expect(catalog.headers["cache-control"]).toBe("no-store");
+    expect(catalog.body).not.toMatch(/repository\.create_branch|branchName/u);
+    const formUrl = catalog.json().data.tools[0].links.form;
+    const form = await app.inject({
+      method: "GET",
+      url: formUrl,
+      headers: { authorization: "Bearer developer-session" },
+    });
+    expect(form.statusCode, form.body).toBe(200);
+    expect(form.json().data).toMatchObject({
+      title: "创建交付分支",
+      fields: [
+        {
+          fieldKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          label: "分支名称",
+          kind: "text",
+          required: true,
+        },
+      ],
+    });
+    expect(form.body).not.toMatch(/repository\.create_branch|branchName/u);
     const created = await app.inject({
       method: "POST",
-      url: "/api/v1/mcp-invocations",
+      url: form.json().data.links.request,
       headers: { authorization: "Bearer developer-session" },
       payload: {
         schemaVersion: 1,
         requestKey: randomUUID(),
-        serverKey,
-        toolKey,
-        arguments: { branchName: "feature/payment" },
+        inputs: {
+          [form.json().data.fields[0].fieldKey]: "feature/payment",
+        },
       },
     });
     expect(created.statusCode).toBe(201);
@@ -911,6 +951,7 @@ describe("需求 API", () => {
       headers: { authorization: "Bearer developer-session" },
     });
     expect(invocationDetail.statusCode).toBe(200);
+    expect(invocationDetail.headers["cache-control"]).toBe("no-store");
     expect(invocationDetail.json().data).toMatchObject({
       title: "创建交付分支",
       links: {
@@ -924,6 +965,7 @@ describe("需求 API", () => {
       url: "/api/v1/mcp-invocations",
       headers: { authorization: "Bearer developer-session" },
     });
+    expect(developerList.headers["cache-control"]).toBe("no-store");
     expect(developerList.json().data).toEqual([
       expect.objectContaining({
         title: "创建交付分支",

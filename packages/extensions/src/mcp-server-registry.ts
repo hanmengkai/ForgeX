@@ -28,6 +28,18 @@ const businessName = humanLabel.refine(
   (value) => !/^[a-z][a-z0-9_.-]*(?:\(\))?$/i.test(value),
   "请使用业务名称，不要只填写技术标识",
 );
+const humanDescription = z
+  .string()
+  .trim()
+  .min(4)
+  .max(500)
+  .refine(
+    (value) =>
+      !/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/u.test(
+        value,
+      ),
+    "业务说明不能包含隐藏控制字符",
+  );
 const sha256Hash = z.string().regex(/^[0-9a-f]{64}$/);
 const technicalName = z
   .string()
@@ -41,7 +53,7 @@ const McpToolDefinitionSchema = z
     toolKey: internalKey,
     technicalName,
     displayName: businessName,
-    description: z.string().trim().min(4).max(500),
+    description: humanDescription,
     effect: z.enum(["read", "write", "external_action"]),
     approval: z.enum(["automatic", "review_required"]),
     inputSchemaHashAlgorithm: z.literal("sha256"),
@@ -66,7 +78,7 @@ export const McpServerManifestSchema = z
     projectKey: internalKey,
     revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
     name: businessName,
-    summary: z.string().trim().min(4).max(500),
+    summary: humanDescription,
     transport: z.enum(["stdio", "streamable_http"]),
     connectionBindingKey: internalKey,
     protocolVersion: z.string().regex(/^20\d{2}-\d{2}-\d{2}$/),
@@ -1307,8 +1319,17 @@ export class McpServerRegistry {
     serverKeyInput: string,
     toolKeyInput: string,
   ): { manifest: McpServerManifest; tool: McpToolDefinition } | null {
-    const serverKey = internalKey.parse(serverKeyInput);
     const toolKey = internalKey.parse(toolKeyInput);
+    const manifest = this.getEnabledManifest(serverKeyInput);
+    if (!manifest) return null;
+    const tool = manifest.tools.find(
+      (candidate) => candidate.toolKey === toolKey,
+    );
+    return tool ? { manifest, tool: structuredClone(tool) } : null;
+  }
+
+  getEnabledManifest(serverKeyInput: string): McpServerManifest | null {
+    const serverKey = internalKey.parse(serverKeyInput);
     const server = this.#servers.get(serverKey);
     if (!server?.enabledRevision) return null;
     const release = server.releases.get(server.enabledRevision)!;
@@ -1324,15 +1345,7 @@ export class McpServerRegistry {
     ) {
       return null;
     }
-    const tool = release.manifest.tools.find(
-      (candidate) => candidate.toolKey === toolKey,
-    );
-    return tool
-      ? {
-          manifest: structuredClone(release.manifest),
-          tool: structuredClone(tool),
-        }
-      : null;
+    return structuredClone(release.manifest);
   }
 
   listForPeople(): McpServerPeopleView[] {

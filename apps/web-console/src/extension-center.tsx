@@ -6,6 +6,7 @@ import type {
   ForgeXClient,
 } from "./api.js";
 import { KnowledgeBaseCenter } from "./knowledge-base-center.js";
+import { McpRequestDialog } from "./mcp-request-dialog.js";
 
 interface ExtensionCenterProps {
   client: ForgeXClient;
@@ -29,11 +30,13 @@ function ExtensionSection({
   description,
   emptyTitle,
   items,
+  onRequestExternalTool,
 }: {
   title: string;
   description: string;
   emptyTitle: string;
   items: ExtensionCatalogItem[];
+  onRequestExternalTool?: ((toolsUrl: string) => void) | undefined;
 }) {
   return (
     <section className="content-section extension-section">
@@ -51,21 +54,37 @@ function ExtensionSection({
         </div>
       ) : (
         <div className="extension-grid">
-          {items.map((item) => (
-            <article className="extension-card" key={item.links.self}>
-              <div className="extension-card-heading">
-                <strong>{item.name}</strong>
-                <span className={`status-pill ${tone(item.status)}`}>
-                  {item.status}
-                </span>
-              </div>
-              <p>{item.summary}</p>
-              <div className="extension-card-meta">
-                <span>{item.detail}</span>
-                <small>{item.supportingText}</small>
-              </div>
-            </article>
-          ))}
+          {items.map((item) => {
+            const toolsUrl =
+              "tools" in item.links ? item.links.tools : undefined;
+            return (
+              <article className="extension-card" key={item.links.self}>
+                <div className="extension-card-heading">
+                  <strong>{item.name}</strong>
+                  <span className={`status-pill ${tone(item.status)}`}>
+                    {item.status}
+                  </span>
+                </div>
+                <p>{item.summary}</p>
+                <div className="extension-card-meta">
+                  <span>{item.detail}</span>
+                  <small>{item.supportingText}</small>
+                </div>
+                {onRequestExternalTool &&
+                item.status === "可使用" &&
+                toolsUrl ? (
+                  <button
+                    className="button secondary compact-button"
+                    type="button"
+                    onClick={() => onRequestExternalTool(toolsUrl)}
+                  >
+                    发起业务操作
+                    <span className="sr-only">：{item.name}</span>
+                  </button>
+                ) : null}
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
@@ -78,6 +97,8 @@ export function ExtensionCenter({ client }: ExtensionCenterProps) {
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [mcpToolsUrl, setMcpToolsUrl] = useState<string | null>(null);
   const generationRef = useRef(0);
 
   const load = useCallback(async () => {
@@ -143,6 +164,12 @@ export function ExtensionCenter({ client }: ExtensionCenterProps) {
         </div>
       ) : null}
 
+      {notice ? (
+        <div className="page-notice" role="status">
+          {notice}
+        </div>
+      ) : null}
+
       {loading && !overview ? (
         <div className="loading-state" role="status">
           正在整理项目扩展…
@@ -183,8 +210,22 @@ export function ExtensionCenter({ client }: ExtensionCenterProps) {
             description="只开放业务动作，不把数据库、终端或凭据直接交给 AI。"
             emptyTitle="还没有外部工具"
             items={overview.externalTools}
+            onRequestExternalTool={(toolsUrl) => {
+              setNotice(null);
+              setMcpToolsUrl(toolsUrl);
+            }}
           />
         </>
+      ) : null}
+      {mcpToolsUrl ? (
+        <McpRequestDialog
+          client={client}
+          toolsUrl={mcpToolsUrl}
+          onClose={() => setMcpToolsUrl(null)}
+          onSubmitted={() => {
+            setNotice("操作已发起，可在“操作确认”中查看进度。");
+          }}
+        />
       ) : null}
     </div>
   );
