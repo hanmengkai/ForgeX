@@ -159,7 +159,7 @@ export function SessionGate({
             type="password"
             value={password}
             autoComplete="current-password"
-            minLength={12}
+            minLength={6}
             maxLength={128}
             required
             disabled={submitting}

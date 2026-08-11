@@ -1260,7 +1260,7 @@ export const createHttpForgeXClient = (
         username.length < 3 ||
         username.length > 64 ||
         !usernamePattern.test(username) ||
-        input.password.length < 12 ||
+        input.password.length < 6 ||
         input.password.length > 128
       ) {
         throw new Error("账号或密码格式不正确，请检查后重试");
