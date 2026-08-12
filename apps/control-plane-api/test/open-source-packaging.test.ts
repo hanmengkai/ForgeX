@@ -66,7 +66,9 @@ describe("开源交付包装", () => {
       "Content-Security-Policy",
     );
     expect(localRuntimeConfig).toContain("tokenSha256");
-    expect(localRuntimeConfig).toContain('"publicOrigin": "http://localhost:8080"');
+    expect(localRuntimeConfig).toContain(
+      '"publicOrigin": "http://localhost:8080"',
+    );
     expect(localRuntimeConfig).toContain('"sessionCookieSecure": false');
     expect(productionRuntimeConfig).toContain(
       '"publicOrigin": "https://forgex.example.com"',

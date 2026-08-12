@@ -160,30 +160,21 @@ export const ControlPlaneRuntimeConfigSchema = z
     const originUrl = config.publicOrigin
       ? new URL(config.publicOrigin)
       : undefined;
-    const browserHostname = (
-      originUrl?.hostname ?? config.host
-    ).toLowerCase();
+    const browserHostname = (originUrl?.hostname ?? config.host).toLowerCase();
     const isLoopbackBrowser = [
       "127.0.0.1",
       "[::1]",
       "::1",
       "localhost",
     ].includes(browserHostname);
-    if (
-      !config.sessionCookieSecure &&
-      !isLoopbackBrowser
-    ) {
+    if (!config.sessionCookieSecure && !isLoopbackBrowser) {
       context.addIssue({
         code: "custom",
         path: ["sessionCookieSecure"],
         message: "非回环公开地址必须启用 Secure Cookie 并通过 HTTPS 访问",
       });
     }
-    if (
-      originUrl &&
-      !isLoopbackBrowser &&
-      originUrl.protocol !== "https:"
-    ) {
+    if (originUrl && !isLoopbackBrowser && originUrl.protocol !== "https:") {
       context.addIssue({
         code: "custom",
         path: ["publicOrigin"],

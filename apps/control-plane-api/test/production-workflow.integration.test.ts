@@ -134,9 +134,7 @@ describe("真实 PostgreSQL 首版业务闭环", () => {
       let app: ReturnType<typeof createProductionControlPlane> | undefined;
       try {
         await runPostgresMigrations(pool, migrations);
-        await new PostgresAccountRepository(
-          pool,
-        ).ensureBootstrapAdministrator({
+        await new PostgresAccountRepository(pool).ensureBootstrapAdministrator({
           tenantKey,
           username: "acceptance.admin",
           actorName: "验收超级管理员",
@@ -242,8 +240,8 @@ describe("真实 PostgreSQL 首版业务闭环", () => {
           url: "/api/v1/requirement-contexts",
           headers: readHeaders,
         });
-        const selectedRepository = contexts.json().data[0].projects[0]
-          .repositories[0];
+        const selectedRepository =
+          contexts.json().data[0].projects[0].repositories[0];
         const created = await app.inject({
           method: "POST",
           url: selectedRepository.links.actions.createRequirement,

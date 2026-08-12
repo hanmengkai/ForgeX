@@ -15,6 +15,7 @@
     "db:migrate": "npm run build -w @forgex/postgres && npm run migrate -w @forgex/postgres",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:postgres": "npm run build:all && playwright test --config playwright.postgres.config.ts",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "format:check": "prettier --check ."
