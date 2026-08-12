@@ -55,12 +55,13 @@ describe("Control Plane 运行配置", () => {
   it("按浏览器公开 Origin 限制不安全 Cookie", () => {
     expect(
       ControlPlaneRuntimeConfigSchema.safeParse(
-        runtimeConfig("127.0.0.1", false),
+        runtimeConfig("127.0.0.1", false, "http://127.0.0.1:3000"),
       ).success,
     ).toBe(true);
     expect(
-      ControlPlaneRuntimeConfigSchema.safeParse(runtimeConfig("::1", false))
-        .success,
+      ControlPlaneRuntimeConfigSchema.safeParse(
+        runtimeConfig("::1", false, "http://[::1]:3000"),
+      ).success,
     ).toBe(true);
     expect(
       ControlPlaneRuntimeConfigSchema.safeParse(
@@ -85,6 +86,19 @@ describe("Control Plane 运行配置", () => {
         runtimeConfig("0.0.0.0", true, "https://forgex.example.com"),
       ).success,
     ).toBe(true);
+
+    const missingOrigin = ControlPlaneRuntimeConfigSchema.safeParse(
+      runtimeConfig("127.0.0.1", false),
+    );
+    expect(missingOrigin.success).toBe(false);
+    if (!missingOrigin.success) {
+      expect(missingOrigin.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["publicOrigin"],
+          message: "关闭 Secure Cookie 时必须显式声明回环 publicOrigin",
+        }),
+      );
+    }
   });
 
   it("从文件加载严格配置并拒绝缺失或非 PostgreSQL 数据库地址", async () => {
