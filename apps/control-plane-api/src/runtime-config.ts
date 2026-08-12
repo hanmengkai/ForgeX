@@ -167,6 +167,13 @@ export const ControlPlaneRuntimeConfigSchema = z
       "::1",
       "localhost",
     ].includes(browserHostname);
+    if (!config.sessionCookieSecure && !originUrl) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicOrigin"],
+        message: "关闭 Secure Cookie 时必须显式声明回环 publicOrigin",
+      });
+    }
     if (!config.sessionCookieSecure && !isLoopbackBrowser) {
       context.addIssue({
         code: "custom",

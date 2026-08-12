@@ -64,6 +64,7 @@ const baseConfig = (
     schemaVersion: 1,
     host: "127.0.0.1",
     port: 3000,
+    publicOrigin: "http://127.0.0.1:3000",
     sessionCookieSecure: false,
     projectKey,
     repositoryKey,

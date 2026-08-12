@@ -86,6 +86,7 @@ const config = ControlPlaneRuntimeConfigSchema.parse({
   schemaVersion: 1,
   host: "127.0.0.1",
   port: 3000,
+  publicOrigin: "http://127.0.0.1:4174",
   sessionCookieSecure: false,
   sessionCookieMaxAgeSeconds: 3_600,
   projectKey,
