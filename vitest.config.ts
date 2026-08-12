@@ -11,5 +11,13 @@ export default defineConfig({
       "services/**/*.test.{ts,tsx}",
     ],
     exclude: ["e2e/**", "**/node_modules/**", "**/dist/**"],
+    coverage: {
+      thresholds: {
+        statements: 80,
+        branches: 69,
+        functions: 80,
+        lines: 80,
+      },
+    },
   },
 });

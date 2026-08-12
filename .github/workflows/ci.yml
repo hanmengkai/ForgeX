@@ -37,7 +37,7 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run test:coverage
       - run: npm run build:all
       - run: npm run --workspace @forgex/verification-runner build:verifier
       - run: npx playwright install --with-deps chromium

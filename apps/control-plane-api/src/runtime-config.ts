@@ -139,6 +139,16 @@ export const ControlPlaneRuntimeConfigSchema = z
   })
   .strict()
   .superRefine((config, context) => {
+    if (
+      !config.sessionCookieSecure &&
+      !["127.0.0.1", "::1", "localhost"].includes(config.host.toLowerCase())
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["sessionCookieSecure"],
+        message: "非回环部署必须启用 Secure Cookie 并由 HTTPS 对外提供服务",
+      });
+    }
     const peopleDigests = new Set(
       config.sessions.map((session) => session.tokenSha256),
     );
