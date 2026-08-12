@@ -82,6 +82,7 @@ const cloneRecord = (
 
 export class InMemoryProjectInitializationRepository implements ProjectInitializationRepository {
   readonly #records = new Map<string, ProjectInitializationRecord>();
+  readonly #requestProjects = new Map<string, string>();
 
   async find(
     tenantKey: string,
@@ -98,8 +99,18 @@ export class InMemoryProjectInitializationRepository implements ProjectInitializ
     const key = this.#key(input.tenantKey, input.projectKey);
     const existing = this.#records.get(key);
     if (existing) return cloneRecord(existing);
+    const requestKey = `${internalKeySchema.parse(input.tenantKey)}:${internalKeySchema.parse(input.requestKey)}`;
+    const requestProject = this.#requestProjects.get(requestKey);
+    if (requestProject && requestProject !== input.projectKey) {
+      throw new ApplicationError(
+        409,
+        "project_initialization_request_conflict",
+        "这个初始化请求已经用于另一个项目，请刷新后重试",
+      );
+    }
     const record = cloneRecord(input);
     this.#records.set(key, record);
+    this.#requestProjects.set(requestKey, record.projectKey);
     return cloneRecord(record);
   }
 

@@ -1,4 +1,5 @@
 import {
+  ApplicationError,
   type ProjectInitializationRecord,
   type ProjectInitializationRepository,
 } from "@forgex/application";
@@ -67,7 +68,7 @@ export class PostgresProjectInitializationRepository implements ProjectInitializ
     record: ProjectInitializationRecord,
   ): Promise<ProjectInitializationRecord> {
     const result = await this.pool.query(
-      `INSERT INTO forgex_project_initializations (tenant_key, project_key, preset_key, preset_version, request_key, created_by_key, created_by_name, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) ON CONFLICT (tenant_key, project_key) DO NOTHING RETURNING ${selectColumns}`,
+      `INSERT INTO forgex_project_initializations (tenant_key, project_key, preset_key, preset_version, request_key, created_by_key, created_by_name, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) ON CONFLICT DO NOTHING RETURNING ${selectColumns}`,
       [
         record.tenantKey.toLowerCase(),
         record.projectKey.toLowerCase(),
@@ -82,7 +83,11 @@ export class PostgresProjectInitializationRepository implements ProjectInitializ
     if (result.rows[0]) return recordFrom(result.rows[0]);
     const existing = await this.find(record.tenantKey, record.projectKey);
     if (!existing) {
-      throw new Error("项目初始化记录并发写入后不可见");
+      throw new ApplicationError(
+        409,
+        "project_initialization_request_conflict",
+        "这个初始化请求已经用于另一个项目，请刷新后重试",
+      );
     }
     return existing;
   }

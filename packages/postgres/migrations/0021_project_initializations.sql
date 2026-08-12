@@ -14,7 +14,7 @@ CREATE TABLE forgex_project_initializations (
   UNIQUE (tenant_key, request_key),
   FOREIGN KEY (tenant_key, project_key)
     REFERENCES forgex_platform_projects (tenant_key, project_key)
-    ON DELETE RESTRICT
+    ON DELETE CASCADE
 );
 
 CREATE INDEX forgex_project_initializations_preset_idx
