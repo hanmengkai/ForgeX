@@ -920,9 +920,7 @@ export const buildControlPlaneApi = (
           skillReady: projectSkills.some(
             (item) => item.view.status === "可使用",
           ),
-          mcpReady: projectMcp.some(
-            (item) => item.view.status === "可使用",
-          ),
+          mcpReady: projectMcp.some((item) => item.view.status === "可使用"),
         };
       },
     },
@@ -1382,8 +1380,7 @@ export const buildControlPlaneApi = (
     projectKey: string,
     initialization: ProjectInitializationView,
   ) => {
-    const initializationPath =
-      `/api/v1/platform/projects/${projectKey}/initialization`;
+    const initializationPath = `/api/v1/platform/projects/${projectKey}/initialization`;
     const extensionsPath = `/api/v1/projects/${projectKey}/extensions`;
     return {
       status: initialization.status,
@@ -1598,10 +1595,7 @@ export const buildControlPlaneApi = (
         params.data.projectKey,
       );
       return reply.header("Cache-Control", "no-store").send({
-        data: projectInitializationView(
-          params.data.projectKey,
-          initialization,
-        ),
+        data: projectInitializationView(params.data.projectKey, initialization),
       });
     },
   );
@@ -1626,10 +1620,7 @@ export const buildControlPlaneApi = (
         command.data,
       );
       return reply.header("Cache-Control", "no-store").send({
-        data: projectInitializationView(
-          params.data.projectKey,
-          initialization,
-        ),
+        data: projectInitializationView(params.data.projectKey, initialization),
       });
     },
   );
@@ -2041,23 +2032,20 @@ export const buildControlPlaneApi = (
     });
   });
 
-  app.get(
-    "/api/v1/projects/:projectKey/extensions",
-    async (request, reply) => {
-      const params = platformProjectParamsSchema.safeParse(request.params);
-      if (!params.success) throw platformValidationError(params.error);
-      const principal = principalFrom(request);
-      await platformConfiguration.getRequirementProject(
+  app.get("/api/v1/projects/:projectKey/extensions", async (request, reply) => {
+    const params = platformProjectParamsSchema.safeParse(request.params);
+    if (!params.success) throw platformValidationError(params.error);
+    const principal = principalFrom(request);
+    await platformConfiguration.getRequirementProject(
+      principal,
+      params.data.projectKey,
+    );
+    return reply.send({
+      data: await extensionCatalogFor(params.data.projectKey).overviewForPeople(
         principal,
-        params.data.projectKey,
-      );
-      return reply.send({
-        data: await extensionCatalogFor(
-          params.data.projectKey,
-        ).overviewForPeople(principal),
-      });
-    },
-  );
+      ),
+    });
+  });
 
   app.post(
     "/api/v1/extensions/skills",

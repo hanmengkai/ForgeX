@@ -77,6 +77,8 @@ const createClient = (): ForgeXClient =>
     createProjectRepository: vi.fn(),
     updateProjectRepository: vi.fn(),
     deleteProjectRepository: vi.fn(),
+    getProjectInitialization: vi.fn(),
+    initializeProject: vi.fn(),
     connectWorker: vi.fn(),
     getMcpToolCatalog: vi.fn(),
     getMcpInvocationForm: vi.fn(),

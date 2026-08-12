@@ -231,7 +231,12 @@ export interface PlatformProjectItem {
   enabled: boolean;
   revision: number;
   repositories: PlatformRepositoryItem[];
-  links: { self: string; actions: { createRepository: string } };
+  links: {
+    self: string;
+    initialization: string;
+    extensions: string;
+    actions: { createRepository: string; initialize: string };
+  };
 }
 
 export interface PlatformCustomerItem {
@@ -256,7 +261,42 @@ export interface RequirementContextProject {
   name: string;
   summary: string;
   repositories: RequirementContextRepository[];
-  links: { requirements: string };
+  links: { requirements: string; extensions: string };
+}
+
+export interface ProjectInitializationTask {
+  key: "knowledge" | "skill" | "mcp";
+  name: string;
+  detail: string;
+  status: "ready" | "action_required";
+  links: { nextStep: string };
+}
+
+export interface ProjectInitializationView {
+  status: "not_started" | "action_required" | "ready";
+  preset: {
+    key: "standard-delivery";
+    version: 1;
+    name: string;
+  };
+  record: {
+    presetKey: string;
+    presetVersion: number;
+    initializedBy: string;
+    initializedAt: string;
+  } | null;
+  tasks: ProjectInitializationTask[];
+  links: {
+    self: string;
+    extensions: string;
+    actions: { initialize: string };
+  };
+}
+
+export interface ProjectInitializationInput {
+  presetKey: "standard-delivery";
+  presetVersion: 1;
+  requestKey: string;
 }
 
 export interface RequirementContextCustomer {
@@ -350,6 +390,13 @@ export interface ForgeXClient {
     selfUrl: string,
     expectedRevision: number,
   ): Promise<void>;
+  getProjectInitialization(
+    initializationUrl: string,
+  ): Promise<ProjectInitializationView>;
+  initializeProject(
+    initializationUrl: string,
+    input: ProjectInitializationInput,
+  ): Promise<ProjectInitializationView>;
   listRequirementContexts(): Promise<RequirementContextOverview>;
   listRequirements(requirementsUrl?: string): Promise<RequirementListPage>;
   listWorkers(): Promise<WorkerFleetOverview>;
@@ -357,7 +404,7 @@ export interface ForgeXClient {
     actionUrl: string | undefined,
     input: WorkerConnectInput,
   ): Promise<WorkerEnrollmentSetup>;
-  listExtensions(): Promise<ExtensionCatalogOverview>;
+  listExtensions(extensionsUrl?: string): Promise<ExtensionCatalogOverview>;
   getMcpToolCatalog(toolsUrl: string): Promise<McpToolCatalog>;
   getMcpInvocationForm(formUrl: string): Promise<McpInvocationToolForm>;
   requestMcpInvocation(
@@ -460,6 +507,10 @@ const platformCustomerSelfPattern =
   /^\/api\/v1\/platform\/customers\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const platformProjectSelfPattern =
   /^\/api\/v1\/platform\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const projectInitializationPattern =
+  /^\/api\/v1\/platform\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/initialization$/iu;
+const projectExtensionsPattern =
+  /^\/api\/v1\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/extensions$/iu;
 const platformRepositorySelfPattern =
   /^\/api\/v1\/platform\/repositories\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const platformRepositoryItemSchema = z
@@ -485,7 +536,14 @@ const platformProjectItemSchema = z
     links: z
       .object({
         self: z.string().regex(platformProjectSelfPattern),
-        actions: z.object({ createRepository: z.string() }).strict(),
+        initialization: z.string().regex(projectInitializationPattern),
+        extensions: z.string().regex(projectExtensionsPattern),
+        actions: z
+          .object({
+            createRepository: z.string(),
+            initialize: z.string().regex(projectInitializationPattern),
+          })
+          .strict(),
       })
       .strict(),
   })
@@ -499,6 +557,27 @@ const platformProjectItemSchema = z
         code: "custom",
         path: ["links", "actions", "createRepository"],
         message: "代码仓库创建入口与项目不匹配",
+      });
+    }
+    if (
+      project.links.initialization !== `${project.links.self}/initialization` ||
+      project.links.actions.initialize !== project.links.initialization
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["links", "initialization"],
+        message: "项目初始化入口与项目不匹配",
+      });
+    }
+    const expectedExtensions = `${project.links.self.replace(
+      "/api/v1/platform/projects/",
+      "/api/v1/projects/",
+    )}/extensions`;
+    if (project.links.extensions !== expectedExtensions) {
+      context.addIssue({
+        code: "custom",
+        path: ["links", "extensions"],
+        message: "项目扩展入口与项目不匹配",
       });
     }
   });
@@ -531,6 +610,79 @@ const platformCustomerItemSchema = z
 const platformConfigurationResponseSchema = z
   .object({ data: z.array(platformCustomerItemSchema).max(500) })
   .strict();
+const projectInitializationResponseSchema = z
+  .object({
+    data: z
+      .object({
+        status: z.enum(["not_started", "action_required", "ready"]),
+        preset: z
+          .object({
+            key: z.literal("standard-delivery"),
+            version: z.literal(1),
+            name: z.string().trim().min(2).max(100),
+          })
+          .strict(),
+        record: z
+          .object({
+            presetKey: z.string().trim().min(1).max(100),
+            presetVersion: z.number().int().positive(),
+            initializedBy: z.string().trim().min(1).max(100),
+            initializedAt: z.iso.datetime(),
+          })
+          .strict()
+          .nullable(),
+        tasks: z
+          .array(
+            z
+              .object({
+                key: z.enum(["knowledge", "skill", "mcp"]),
+                name: z.string().trim().min(2).max(100),
+                detail: z.string().trim().min(2).max(500),
+                status: z.enum(["ready", "action_required"]),
+                links: z
+                  .object({
+                    nextStep: z.string().regex(projectExtensionsPattern),
+                  })
+                  .strict(),
+              })
+              .strict(),
+          )
+          .length(3),
+        links: z
+          .object({
+            self: z.string().regex(projectInitializationPattern),
+            extensions: z.string().regex(projectExtensionsPattern),
+            actions: z
+              .object({
+                initialize: z.string().regex(projectInitializationPattern),
+              })
+              .strict(),
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    if (response.data.links.actions.initialize !== response.data.links.self) {
+      context.addIssue({
+        code: "custom",
+        path: ["data", "links", "actions", "initialize"],
+        message: "项目初始化动作入口不匹配",
+      });
+    }
+    if (
+      response.data.tasks.some(
+        (task) => task.links.nextStep !== response.data.links.extensions,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["data", "tasks"],
+        message: "项目初始化下一步入口不匹配",
+      });
+    }
+  });
 const projectRequirementsPattern =
   /^\/api\/v1\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/requirements$/iu;
 const createRequirementPattern =
@@ -567,6 +719,7 @@ const requirementContextResponseSchema = z
                 links: z
                   .object({
                     requirements: z.string().regex(projectRequirementsPattern),
+                    extensions: z.string().regex(projectExtensionsPattern),
                   })
                   .strict(),
               })
@@ -1438,6 +1591,42 @@ export const createHttpForgeXClient = (
         },
       );
     },
+    getProjectInitialization: async (initializationUrl) => {
+      const response = await request(
+        assertPlatformUrl(
+          initializationUrl,
+          projectInitializationPattern,
+          "项目初始化",
+        ),
+      );
+      const parsed = projectInitializationResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("项目初始化状态格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
+    },
+    initializeProject: async (initializationUrl, input) => {
+      const response = await request(
+        assertPlatformUrl(
+          initializationUrl,
+          projectInitializationPattern,
+          "项目初始化",
+        ),
+        {
+          method: "PUT",
+          body: JSON.stringify({ schemaVersion: 1, ...input }),
+        },
+      );
+      const parsed = projectInitializationResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("项目初始化结果格式不正确，请联系管理员");
+      }
+      return parsed.data.data;
+    },
     listRequirementContexts: async () => {
       const response = await request("/api/v1/requirement-contexts");
       const parsed = requirementContextResponseSchema.safeParse(
@@ -1501,8 +1690,14 @@ export const createHttpForgeXClient = (
       }
       return parsed.data.data;
     },
-    listExtensions: async () => {
-      const response = await request("/api/v1/extensions");
+    listExtensions: async (extensionsUrl = "/api/v1/extensions") => {
+      if (
+        extensionsUrl !== "/api/v1/extensions" &&
+        !projectExtensionsPattern.test(extensionsUrl)
+      ) {
+        throw new Error("扩展目录入口已经失效，请刷新后重试");
+      }
+      const response = await request(extensionsUrl);
       const parsed = ExtensionCatalogResponseSchema.safeParse(
         await response.json(),
       );

@@ -1069,7 +1069,9 @@ export function RequirementWorkbench({
     setBusyAction(actionUrl);
     setError(null);
     try {
-      const extensions = await client.listExtensions();
+      const extensions = await client.listExtensions(
+        selectedProject?.links.extensions,
+      );
       setPendingDelivery({
         actionUrl,
         body,

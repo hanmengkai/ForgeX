@@ -71,6 +71,8 @@ const createClient = (): ForgeXClient => ({
   createProjectRepository: vi.fn(),
   updateProjectRepository: vi.fn(),
   deleteProjectRepository: vi.fn(),
+  getProjectInitialization: vi.fn(),
+  initializeProject: vi.fn(),
   listRequirementContexts: vi.fn().mockResolvedValue({
     customers: [
       {
@@ -93,6 +95,8 @@ const createClient = (): ForgeXClient => ({
             links: {
               requirements:
                 "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements",
+              extensions:
+                "/api/v1/projects/22222222-2222-4222-8222-222222222222/extensions",
             },
           },
           {
@@ -112,6 +116,8 @@ const createClient = (): ForgeXClient => ({
             links: {
               requirements:
                 "/api/v1/projects/55555555-5555-4555-8555-555555555555/requirements",
+              extensions:
+                "/api/v1/projects/55555555-5555-4555-8555-555555555555/extensions",
             },
           },
         ],
@@ -696,6 +702,9 @@ describe("RequirementWorkbench", () => {
 
     await user.click(
       await screen.findByRole("button", { name: "安排 AI 开始实现" }),
+    );
+    expect(client.listExtensions).toHaveBeenCalledWith(
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/extensions",
     );
     await user.click(
       await screen.findByRole("checkbox", { name: /需求风险检查/ }),

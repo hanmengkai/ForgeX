@@ -2562,6 +2562,97 @@ h1 {
   color: var(--danger);
 }
 
+.project-initialization-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  margin: 14px 0;
+  background: color-mix(in srgb, var(--brand-soft) 34%, var(--surface));
+  border: 1px solid var(--line);
+}
+
+.project-initialization-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.project-initialization-heading h4 {
+  margin: 4px 0 5px;
+  font-size: 16px;
+}
+
+.project-initialization-heading p,
+.project-initialization-tasks p,
+.project-initialization-note {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.project-initialization-tasks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.project-initialization-tasks li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.project-initialization-tasks strong,
+.project-initialization-task-status {
+  font-size: 11px;
+}
+
+.project-initialization-task-status {
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+}
+
+.status-dot.ready {
+  background: var(--success);
+}
+
+.status-dot.pending {
+  background: var(--warning);
+}
+
+.project-initialization-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.project-initialization-error button {
+  color: inherit;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+}
+
 .repository-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -2691,7 +2782,8 @@ h1 {
 @media (max-width: 760px) {
   .platform-resource-editor form,
   .integration-fields,
-  .integration-steps {
+  .integration-steps,
+  .project-initialization-tasks {
     grid-template-columns: 1fr;
   }
 
@@ -2702,6 +2794,10 @@ h1 {
   }
 
   .platform-resource-heading {
+    flex-direction: column;
+  }
+
+  .project-initialization-heading {
     flex-direction: column;
   }
 

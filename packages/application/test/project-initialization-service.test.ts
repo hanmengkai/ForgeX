@@ -67,7 +67,9 @@ describe("项目标准交付初始化", () => {
       requestKey: "55555555-5555-4555-8555-555555555555",
     };
 
-    await expect(service.initialize(member, projectKey, command)).rejects.toMatchObject({
+    await expect(
+      service.initialize(member, projectKey, command),
+    ).rejects.toMatchObject({
       statusCode: 403,
       code: "project_initialization_admin_required",
     });

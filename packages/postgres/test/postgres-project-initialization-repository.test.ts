@@ -64,9 +64,13 @@ describe("PostgreSQL 项目初始化仓储", () => {
     const pool = new InitializationPool();
     const repository = new PostgresProjectInitializationRepository(pool);
 
-    await expect(repository.find(record.tenantKey, record.projectKey)).resolves.toBeNull();
+    await expect(
+      repository.find(record.tenantKey, record.projectKey),
+    ).resolves.toBeNull();
     await expect(repository.createIfAbsent(record)).resolves.toEqual(record);
-    await expect(repository.find(record.tenantKey, record.projectKey)).resolves.toEqual(record);
+    await expect(
+      repository.find(record.tenantKey, record.projectKey),
+    ).resolves.toEqual(record);
   });
 
   it("重复初始化保留第一条不可变记录", async () => {
@@ -86,7 +90,10 @@ describe("PostgreSQL 项目初始化仓储", () => {
 
   it("迁移只保存初始化台账，不保存预设 JSON 或连接凭据", async () => {
     const sql = await readFile(
-      new URL("../migrations/0021_project_initializations.sql", import.meta.url),
+      new URL(
+        "../migrations/0021_project_initializations.sql",
+        import.meta.url,
+      ),
       "utf8",
     );
 

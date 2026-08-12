@@ -3,9 +3,102 @@ import { describe, expect, it, vi } from "vitest";
 import { createHttpForgeXClient } from "../src/index.js";
 
 describe("createHttpForgeXClient", () => {
+  it("只通过项目动作链接读取并显式初始化标准交付预设", async () => {
+    const initializationUrl =
+      "/api/v1/platform/projects/22222222-2222-4222-8222-222222222222/initialization";
+    const extensionsUrl =
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/extensions";
+    const tasks = [
+      {
+        key: "knowledge",
+        name: "补充项目规则资料",
+        detail: "加入项目约束、术语和交付说明",
+        status: "action_required",
+        links: { nextStep: extensionsUrl },
+      },
+      {
+        key: "skill",
+        name: "安装并评测团队 Skill",
+        detail: "只使用当前项目已通过评测的 Skill",
+        status: "action_required",
+        links: { nextStep: extensionsUrl },
+      },
+      {
+        key: "mcp",
+        name: "连接并验证外部工具",
+        detail: "MCP 凭据保留在执行设备本地",
+        status: "action_required",
+        links: { nextStep: extensionsUrl },
+      },
+    ];
+    const view = {
+      status: "not_started",
+      preset: { key: "standard-delivery", version: 1, name: "标准 AI 交付" },
+      record: null,
+      tasks,
+      links: {
+        self: initializationUrl,
+        extensions: extensionsUrl,
+        actions: { initialize: initializationUrl },
+      },
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: view })))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              ...view,
+              status: "action_required",
+              record: {
+                presetKey: "standard-delivery",
+                presetVersion: 1,
+                initializedBy: "超级管理员",
+                initializedAt: "2026-08-12T10:00:00.000Z",
+              },
+            },
+          }),
+        ),
+      );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(
+      client.getProjectInitialization(initializationUrl),
+    ).resolves.toMatchObject({ status: "not_started", tasks });
+    await expect(
+      client.initializeProject(initializationUrl, {
+        presetKey: "standard-delivery",
+        presetVersion: 1,
+        requestKey: "55555555-5555-4555-8555-555555555555",
+      }),
+    ).resolves.toMatchObject({ status: "action_required" });
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      initializationUrl,
+      expect.any(Object),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      initializationUrl,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          schemaVersion: 1,
+          presetKey: "standard-delivery",
+          presetVersion: 1,
+          requestKey: "55555555-5555-4555-8555-555555555555",
+        }),
+      }),
+    );
+  });
+
   it("从服务端动作链接读取需求上下文，并按所选项目和仓库调用需求 API", async () => {
     const projectRequirements =
       "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements";
+    const projectExtensions =
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/extensions";
     const createRequirement =
       "/api/v1/projects/22222222-2222-4222-8222-222222222222/repositories/44444444-4444-4444-8444-444444444444/requirements";
     const requests: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
@@ -28,7 +121,10 @@ describe("createHttpForgeXClient", () => {
                           links: { actions: { createRequirement } },
                         },
                       ],
-                      links: { requirements: projectRequirements },
+                      links: {
+                        requirements: projectRequirements,
+                        extensions: projectExtensions,
+                      },
                     },
                   ],
                 },

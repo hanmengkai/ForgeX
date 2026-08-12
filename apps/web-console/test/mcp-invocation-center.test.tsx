@@ -74,6 +74,8 @@ const createClient = (): ForgeXClient => ({
   createProjectRepository: vi.fn(),
   updateProjectRepository: vi.fn(),
   deleteProjectRepository: vi.fn(),
+  getProjectInitialization: vi.fn(),
+  initializeProject: vi.fn(),
   listRequirements: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [],

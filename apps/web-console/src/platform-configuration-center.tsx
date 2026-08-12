@@ -9,9 +9,11 @@ import {
 import type {
   ForgeXClient,
   PlatformCustomerItem,
+  ProjectInitializationView,
   PlatformProjectItem,
   PlatformRepositoryItem,
 } from "./api.js";
+import { createBrowserUuid } from "./browser-uuid.js";
 
 interface PlatformConfigurationCenterProps {
   client: ForgeXClient;
@@ -68,6 +70,125 @@ const createCustomerEditor = (): ResourceEditor => ({
   name: "",
   summary: "",
 });
+
+function ProjectInitializationPanel({
+  client,
+  project,
+}: {
+  client: ForgeXClient;
+  project: PlatformProjectItem;
+}) {
+  const [initialization, setInitialization] =
+    useState<ProjectInitializationView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [applying, setApplying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setInitialization(
+        await client.getProjectInitialization(project.links.initialization),
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "暂时无法读取项目准备状态",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [client, project.links.initialization]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const initialize = async () => {
+    if (applying) return;
+    setApplying(true);
+    setError(null);
+    try {
+      setInitialization(
+        await client.initializeProject(project.links.actions.initialize, {
+          presetKey: "standard-delivery",
+          presetVersion: 1,
+          requestKey: createBrowserUuid(),
+        }),
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "标准交付预设没有应用成功",
+      );
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const pendingCount =
+    initialization?.tasks.filter((task) => task.status === "action_required")
+      .length ?? 0;
+  const statusText =
+    initialization?.status === "ready"
+      ? "标准交付准备已完成"
+      : initialization?.status === "action_required"
+        ? `已应用，继续完成 ${pendingCount} 项准备`
+        : "尚未应用标准交付预设";
+
+  return (
+    <section className="project-initialization-panel">
+      <div className="project-initialization-heading">
+        <div>
+          <span className="eyebrow">DELIVERY PRESET</span>
+          <h4>标准交付准备</h4>
+          <p>{loading ? "正在检查项目准备状态…" : statusText}</p>
+        </div>
+        {initialization?.status === "not_started" ? (
+          <button
+            className="button primary compact-button"
+            type="button"
+            disabled={applying}
+            onClick={() => void initialize()}
+          >
+            {applying ? "正在应用…" : "应用标准交付预设"}
+          </button>
+        ) : null}
+      </div>
+      {error ? (
+        <div className="project-initialization-error" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={() => void load()}>
+            重试
+          </button>
+        </div>
+      ) : null}
+      {initialization ? (
+        <ul className="project-initialization-tasks">
+          {initialization.tasks.map((task) => (
+            <li key={task.key}>
+              <span
+                className={`status-dot ${
+                  task.status === "ready" ? "ready" : "pending"
+                }`}
+                aria-hidden="true"
+              />
+              <div>
+                <strong>{task.name}</strong>
+                <p>{task.detail}</p>
+              </div>
+              <span className="project-initialization-task-status">
+                {task.status === "ready" ? "已就绪" : "待完成"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="project-initialization-note">
+        加载项目只检查状态；MCP 凭据始终保留在执行设备本地，不会由预设自动启用。
+      </p>
+    </section>
+  );
+}
 
 export function PlatformConfigurationCenter({
   client,
@@ -472,6 +593,10 @@ export function PlatformConfigurationCenter({
                         </button>
                       </div>
                     </div>
+                    <ProjectInitializationPanel
+                      client={client}
+                      project={project}
+                    />
                     <div className="repository-list">
                       {project.repositories.map((repository) => (
                         <div

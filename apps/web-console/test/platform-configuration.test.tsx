@@ -76,6 +76,20 @@ const createClient = (): ForgeXClient =>
     createProjectRepository: vi.fn().mockResolvedValue(undefined),
     updateProjectRepository: vi.fn().mockResolvedValue(undefined),
     deleteProjectRepository: vi.fn().mockResolvedValue(undefined),
+    getProjectInitialization: vi.fn().mockResolvedValue({
+      status: "not_started",
+      preset: { key: "standard-delivery", version: 1, name: "标准 AI 交付" },
+      record: null,
+      tasks: [],
+      links: {
+        self: overview.customers[0]!.projects[0]!.links.initialization,
+        extensions: overview.customers[0]!.projects[0]!.links.extensions,
+        actions: {
+          initialize: overview.customers[0]!.projects[0]!.links.initialization,
+        },
+      },
+    }),
+    initializeProject: vi.fn(),
     listExtensions: vi.fn().mockResolvedValue({
       businessKnowledge: [],
       teamCapabilities: [],
@@ -140,21 +154,27 @@ describe("平台资源配置", () => {
           name: "补充项目规则资料",
           detail: "加入项目约束、术语和交付说明",
           status: "action_required",
-          links: { nextStep: overview.customers[0]!.projects[0]!.links.extensions },
+          links: {
+            nextStep: overview.customers[0]!.projects[0]!.links.extensions,
+          },
         },
         {
           key: "skill",
           name: "安装并评测团队 Skill",
           detail: "只使用当前项目已通过评测的 Skill",
           status: "action_required",
-          links: { nextStep: overview.customers[0]!.projects[0]!.links.extensions },
+          links: {
+            nextStep: overview.customers[0]!.projects[0]!.links.extensions,
+          },
         },
         {
           key: "mcp",
           name: "连接并验证外部工具",
           detail: "凭据保留在设备本地",
           status: "action_required",
-          links: { nextStep: overview.customers[0]!.projects[0]!.links.extensions },
+          links: {
+            nextStep: overview.customers[0]!.projects[0]!.links.extensions,
+          },
         },
       ],
       links: {
@@ -208,7 +228,9 @@ describe("平台资源配置", () => {
         ),
       }),
     );
-    expect(await screen.findByText("已应用，继续完成 3 项准备")).toBeInTheDocument();
+    expect(
+      await screen.findByText("已应用，继续完成 3 项准备"),
+    ).toBeInTheDocument();
   });
 });
 
