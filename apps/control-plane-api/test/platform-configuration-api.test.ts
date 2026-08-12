@@ -7,6 +7,7 @@ import {
   InMemoryMcpInvocationRepository,
   InMemoryMcpRegistryRepository,
   InMemoryPlatformConfigurationRepository,
+  InMemoryProjectInitializationRepository,
   InMemoryPreviewArtifactStore,
   InMemoryRequirementRepository,
   InMemorySkillArtifactStore,
@@ -71,12 +72,134 @@ const createApp = () => {
     workerFleetRepository: new InMemoryWorkerFleetRepository(),
     platformConfigurationRepository:
       new InMemoryPlatformConfigurationRepository(),
+    projectInitializationRepository:
+      new InMemoryProjectInitializationRepository(),
     projectKey,
     repositoryKey: projectKey,
   });
 };
 
 describe("平台资源配置 API", () => {
+  it("项目初始化通过显式幂等入口执行，页面读取不会隐式初始化", async () => {
+    const app = createApp();
+    const adminHeaders = { authorization: "Bearer admin-session" };
+    const memberHeaders = { authorization: "Bearer member-session" };
+    const customer = await app.inject({
+      method: "POST",
+      url: "/api/v1/platform/customers",
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        name: "个人项目",
+        summary: "管理个人研发项目与标准 AI 交付准备",
+      },
+    });
+    const project = await app.inject({
+      method: "POST",
+      url: customer.json().data.links.actions.createProject,
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        name: "手串配置工具",
+        summary: "用于搭配和预览手串的个人项目",
+      },
+    });
+    const initializationUrl = project.json().data.links.initialization;
+    const scopedExtensionsUrl = project.json().data.links.extensions;
+
+    expect(initializationUrl).toMatch(
+      /^\/api\/v1\/platform\/projects\/[0-9a-f-]+\/initialization$/u,
+    );
+    expect(project.json().data.links.actions.initialize).toBe(
+      initializationUrl,
+    );
+    expect(scopedExtensionsUrl).toMatch(
+      /^\/api\/v1\/projects\/[0-9a-f-]+\/extensions$/u,
+    );
+
+    const before = await app.inject({
+      method: "GET",
+      url: initializationUrl,
+      headers: memberHeaders,
+    });
+    const repeatedRead = await app.inject({
+      method: "GET",
+      url: initializationUrl,
+      headers: memberHeaders,
+    });
+    expect(before.statusCode).toBe(200);
+    expect(repeatedRead.json()).toEqual(before.json());
+    expect(before.json()).toMatchObject({
+      data: {
+        status: "not_started",
+        preset: { key: "standard-delivery", version: 1 },
+        tasks: [
+          { key: "knowledge", status: "action_required" },
+          { key: "skill", status: "action_required" },
+          { key: "mcp", status: "action_required" },
+        ],
+        links: { actions: { initialize: initializationUrl } },
+      },
+    });
+
+    const denied = await app.inject({
+      method: "PUT",
+      url: initializationUrl,
+      headers: memberHeaders,
+      payload: {
+        schemaVersion: 1,
+        presetKey: "standard-delivery",
+        presetVersion: 1,
+        requestKey: "55555555-5555-4555-8555-555555555555",
+      },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const initialized = await app.inject({
+      method: "PUT",
+      url: initializationUrl,
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        presetKey: "standard-delivery",
+        presetVersion: 1,
+        requestKey: "55555555-5555-4555-8555-555555555555",
+      },
+    });
+    const replay = await app.inject({
+      method: "PUT",
+      url: initializationUrl,
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        presetKey: "standard-delivery",
+        presetVersion: 1,
+        requestKey: "66666666-6666-4666-8666-666666666666",
+      },
+    });
+    expect(initialized.statusCode).toBe(200);
+    expect(initialized.json().data.status).toBe("action_required");
+    expect(replay.json().data.record).toEqual(initialized.json().data.record);
+
+    const extensions = await app.inject({
+      method: "GET",
+      url: scopedExtensionsUrl,
+      headers: memberHeaders,
+    });
+    expect(extensions.statusCode).toBe(200);
+    expect(extensions.json()).toMatchObject({
+      data: { businessKnowledge: [], teamCapabilities: [], externalTools: [] },
+    });
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/projects/77777777-7777-4777-8777-777777777777/initialization",
+      headers: memberHeaders,
+    });
+    expect(missing.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("普通成员可选择启用的客户项目仓库，并按项目隔离创建与查询需求", async () => {
     const app = createApp();
     const adminHeaders = { authorization: "Bearer admin-session" };
