@@ -111,6 +111,37 @@ describe("项目标准交付初始化", () => {
     });
   });
 
+  it("拒绝把同一个初始化请求键复用到另一个项目", async () => {
+    const service = createService({
+      knowledgeReady: false,
+      skillReady: false,
+      mcpReady: false,
+    });
+    const requestKey = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await service.initialize(administrator, projectKey, {
+      schemaVersion: 1,
+      presetKey: "standard-delivery",
+      presetVersion: 1,
+      requestKey,
+    });
+
+    await expect(
+      service.initialize(
+        administrator,
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        {
+          schemaVersion: 1,
+          presetKey: "standard-delivery",
+          presetVersion: 1,
+          requestKey,
+        },
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "project_initialization_request_conflict",
+    });
+  });
+
   it("只有可信知识、已激活 Skill 和健康 MCP 全部存在时才就绪", async () => {
     let readiness: ProjectInitializationReadiness = {
       knowledgeReady: true,

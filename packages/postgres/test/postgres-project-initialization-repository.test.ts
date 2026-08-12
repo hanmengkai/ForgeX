@@ -88,6 +88,22 @@ describe("PostgreSQL 项目初始化仓储", () => {
     expect(pool.insertCount).toBe(2);
   });
 
+  it("同一个请求键不能被另一个项目复用", async () => {
+    const pool = new InitializationPool();
+    const repository = new PostgresProjectInitializationRepository(pool);
+    await repository.createIfAbsent(record);
+
+    await expect(
+      repository.createIfAbsent({
+        ...record,
+        projectKey: "55555555-5555-4555-8555-555555555555",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "project_initialization_request_conflict",
+    });
+  });
+
   it("迁移只保存初始化台账，不保存预设 JSON 或连接凭据", async () => {
     const sql = await readFile(
       new URL(
@@ -101,6 +117,9 @@ describe("PostgreSQL 项目初始化仓储", () => {
     expect(sql).toContain("PRIMARY KEY (tenant_key, project_key)");
     expect(sql).toContain("UNIQUE (tenant_key, request_key)");
     expect(sql).toContain("REFERENCES forgex_platform_projects");
+    expect(sql).toMatch(
+      /REFERENCES forgex_platform_projects[\s\S]+ON DELETE CASCADE/u,
+    );
     expect(sql).not.toMatch(/jsonb|credential|password|token|connection_url/iu);
   });
 });
