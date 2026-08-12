@@ -761,6 +761,52 @@ describe("RequirementWorkbench", () => {
     expect(client.runRequirementAction).not.toHaveBeenCalled();
   });
 
+  it("交付弹窗打开后浏览器切换项目会立即关闭旧项目操作", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const ready = {
+      ...items[0]!,
+      status: "已确认，等待交付" as const,
+      links: {
+        ...items[0]!.links,
+        actions: {
+          startDelivery: `${items[0]!.links.self}/start-delivery`,
+        },
+      },
+    };
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [ready],
+      nextCursor: null,
+    });
+    vi.mocked(client.listExtensions).mockResolvedValue({
+      businessKnowledge: [],
+      teamCapabilities: [],
+      externalTools: [],
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "安排 AI 开始实现" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "选择团队能力" }),
+    ).toBeInTheDocument();
+
+    window.history.pushState(
+      null,
+      "",
+      "/requirements?customer=保险客户&project=营销视频",
+    );
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "选择团队能力" }),
+      ).toBeNull(),
+    );
+    expect(client.runRequirementAction).not.toHaveBeenCalled();
+  });
+
   it("目录有超过十项可用能力时仍允许只选择本次需要的能力", async () => {
     const user = userEvent.setup();
     const client = createClient();

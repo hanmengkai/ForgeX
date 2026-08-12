@@ -813,6 +813,7 @@ export function RequirementWorkbench({
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pendingDelivery, setPendingDelivery] = useState<{
     actionUrl: string;
+    projectExtensionsUrl: string;
     body: Record<string, unknown>;
     skills: Awaited<
       ReturnType<ForgeXClient["listExtensions"]>
@@ -851,6 +852,14 @@ export function RequirementWorkbench({
   const selectedProjectExtensionsRef = useRef<string | null>(null);
   selectedProjectExtensionsRef.current =
     selectedProject?.links.extensions ?? null;
+  useEffect(() => {
+    setPendingDelivery((current) =>
+      current &&
+      current.projectExtensionsUrl !== selectedProject?.links.extensions
+        ? null
+        : current,
+    );
+  }, [selectedProject?.links.extensions]);
 
   const writeRequirementContextUrl = useCallback(
     (customerName: string, projectName: string, replace = false) => {
@@ -1085,6 +1094,7 @@ export function RequirementWorkbench({
       }
       setPendingDelivery({
         actionUrl,
+        projectExtensionsUrl: deliveryExtensionsUrl,
         body,
         skills: extensions.teamCapabilities.filter(
           (item) => item.status === "可使用",
@@ -1577,12 +1587,20 @@ export function RequirementWorkbench({
           skills={pendingDelivery.skills}
           busy={busyAction === pendingDelivery.actionUrl}
           onClose={() => setPendingDelivery(null)}
-          onConfirm={(skillKeys) =>
-            executeAction(pendingDelivery.actionUrl, {
+          onConfirm={async (skillKeys) => {
+            if (
+              selectedProjectExtensionsRef.current !==
+              pendingDelivery.projectExtensionsUrl
+            ) {
+              setPendingDelivery(null);
+              setError("当前项目已经切换，请在新项目下重新安排交付");
+              return false;
+            }
+            return executeAction(pendingDelivery.actionUrl, {
               ...pendingDelivery.body,
               skillKeys,
-            })
-          }
+            });
+          }}
         />
       ) : null}
     </div>
