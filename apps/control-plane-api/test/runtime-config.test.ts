@@ -23,6 +23,58 @@ const digest = (value: string) =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
 describe("Control Plane 运行配置", () => {
+  const runtimeConfig = (
+    host: string,
+    sessionCookieSecure: boolean,
+  ) => ({
+    schemaVersion: 1 as const,
+    host,
+    port: 3000,
+    sessionCookieSecure,
+    projectKey,
+    repositoryKey,
+    sessions: [
+      {
+        tokenSha256: digest("people-session-token-with-enough-entropy"),
+        principal: {
+          actorKey,
+          actorName: "产品负责人",
+          tenantKey,
+          roles: ["product_owner" as const],
+        },
+      },
+    ],
+    runnerSessions: [],
+    trustedRunners: [],
+    skillEvaluators: [],
+    mcpVerifiers: [],
+  });
+
+  it("仅允许回环开发环境关闭 Secure Cookie", () => {
+    expect(
+      ControlPlaneRuntimeConfigSchema.safeParse(
+        runtimeConfig("127.0.0.1", false),
+      ).success,
+    ).toBe(true);
+    expect(
+      ControlPlaneRuntimeConfigSchema.safeParse(runtimeConfig("::1", false))
+        .success,
+    ).toBe(true);
+
+    const publicHttp = ControlPlaneRuntimeConfigSchema.safeParse(
+      runtimeConfig("0.0.0.0", false),
+    );
+    expect(publicHttp.success).toBe(false);
+    if (!publicHttp.success) {
+      expect(publicHttp.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["sessionCookieSecure"],
+          message: "非回环部署必须启用 Secure Cookie 并由 HTTPS 对外提供服务",
+        }),
+      );
+    }
+  });
+
   it("从文件加载严格配置并拒绝缺失或非 PostgreSQL 数据库地址", async () => {
     const directory = await mkdtemp(join(tmpdir(), "forgex-control-plane-"));
     const path = join(directory, "runtime.json");
