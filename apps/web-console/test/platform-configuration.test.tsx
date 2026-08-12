@@ -34,9 +34,15 @@ const overview = {
           revision: 1,
           links: {
             self: "/api/v1/platform/projects/22222222-2222-4222-8222-222222222222",
+            initialization:
+              "/api/v1/platform/projects/22222222-2222-4222-8222-222222222222/initialization",
+            extensions:
+              "/api/v1/projects/22222222-2222-4222-8222-222222222222/extensions",
             actions: {
               createRepository:
                 "/api/v1/platform/projects/22222222-2222-4222-8222-222222222222/repositories",
+              initialize:
+                "/api/v1/platform/projects/22222222-2222-4222-8222-222222222222/initialization",
             },
           },
           repositories: [
@@ -121,6 +127,88 @@ describe("平台资源配置", () => {
       name: "制造事业群",
       summary: "负责制造行业客户项目",
     });
+  });
+
+  it("加载项目时只读取初始化状态，并由管理员显式应用标准交付预设", async () => {
+    const getProjectInitialization = vi.fn().mockResolvedValue({
+      status: "not_started",
+      preset: { key: "standard-delivery", version: 1, name: "标准 AI 交付" },
+      record: null,
+      tasks: [
+        {
+          key: "knowledge",
+          name: "补充项目规则资料",
+          detail: "加入项目约束、术语和交付说明",
+          status: "action_required",
+          links: { nextStep: overview.customers[0]!.projects[0]!.links.extensions },
+        },
+        {
+          key: "skill",
+          name: "安装并评测团队 Skill",
+          detail: "只使用当前项目已通过评测的 Skill",
+          status: "action_required",
+          links: { nextStep: overview.customers[0]!.projects[0]!.links.extensions },
+        },
+        {
+          key: "mcp",
+          name: "连接并验证外部工具",
+          detail: "凭据保留在设备本地",
+          status: "action_required",
+          links: { nextStep: overview.customers[0]!.projects[0]!.links.extensions },
+        },
+      ],
+      links: {
+        self: overview.customers[0]!.projects[0]!.links.initialization,
+        extensions: overview.customers[0]!.projects[0]!.links.extensions,
+        actions: {
+          initialize: overview.customers[0]!.projects[0]!.links.initialization,
+        },
+      },
+    });
+    const initializeProject = vi.fn().mockImplementation(async () => ({
+      ...(await getProjectInitialization()),
+      status: "action_required",
+      record: {
+        presetKey: "standard-delivery",
+        presetVersion: 1,
+        initializedBy: "超级管理员",
+        initializedAt: "2026-08-12T10:00:00.000Z",
+      },
+    }));
+    const client = {
+      ...createClient(),
+      getProjectInitialization,
+      initializeProject,
+    } as unknown as ForgeXClient;
+
+    render(<PlatformConfigurationCenter client={client} />);
+
+    expect(
+      await screen.findByRole("heading", { name: "标准交付准备" }),
+    ).toBeInTheDocument();
+    expect(getProjectInitialization).toHaveBeenCalledWith(
+      overview.customers[0]!.projects[0]!.links.initialization,
+    );
+    expect(initializeProject).not.toHaveBeenCalled();
+    expect(screen.getByText("补充项目规则资料")).toBeInTheDocument();
+    expect(screen.getByText("安装并评测团队 Skill")).toBeInTheDocument();
+    expect(screen.getByText("连接并验证外部工具")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "应用标准交付预设" }),
+    );
+
+    expect(initializeProject).toHaveBeenCalledWith(
+      overview.customers[0]!.projects[0]!.links.initialization,
+      expect.objectContaining({
+        presetKey: "standard-delivery",
+        presetVersion: 1,
+        requestKey: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu,
+        ),
+      }),
+    );
+    expect(await screen.findByText("已应用，继续完成 3 项准备")).toBeInTheDocument();
   });
 });
 
