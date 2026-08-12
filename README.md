@@ -40,7 +40,7 @@ FORGEX_DATABASE_URL=postgresql://forgex:password@localhost:5432/forgex npm run d
 ## Docker Compose 本地部署
 
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，用 `openssl rand -hex 32` 生成 64 位十六进制数据库密码，并把同一个值分别写入 `FORGEX_POSTGRES_PASSWORD` 与已经 URL 编码的 `FORGEX_DATABASE_URL`。如使用其他字符集，必须先对 URL 用户信息部分做 percent-encoding，不能直接把原始密码拼进 URI。
-2. 复制 `deploy/config/control-plane.example.json` 为 `deploy/config/control-plane.json`。
+2. 仅本机访问时，复制 `deploy/config/control-plane.example.json` 为 `deploy/config/control-plane.json`；该模板通过 `publicOrigin: http://localhost:8080` 明确限定浏览器回环访问，因此可以关闭 Secure Cookie。公开部署必须改用 `deploy/config/control-plane.production.example.json`，把 `publicOrigin` 替换为真实 HTTPS Origin，并在 Web 前配置 TLS 终止点；非回环 HTTP 或关闭 Secure Cookie 的配置会在启动时被拒绝。
 3. 在 `deploy/.env` 设置 `FORGEX_BOOTSTRAP_ADMIN_USERNAME`、`FORGEX_BOOTSTRAP_ADMIN_NAME` 和至少 12 位的随机强密码 `FORGEX_BOOTSTRAP_ADMIN_PASSWORD`。它只在当前租户还没有任何平台账号时创建首个超级管理员；初始化完成后应从部署环境移除明文密码。`control-plane.json` 中的摘要令牌继续供受控的非浏览器客户端使用，人员令牌与 Runner 令牌不得复用。
 4. 对最终的 `control-plane.json` 计算 SHA-256，并写入 `FORGEX_CONTROL_PLANE_CONFIG_SHA256`。Linux 可用 `sha256sum deploy/config/control-plane.json`，PowerShell 可用 `(Get-FileHash deploy/config/control-plane.json -Algorithm SHA256).Hash.ToLowerInvariant()`。任何授权配置变化都必须同步更新该摘要，并会立即令旧浏览器会话失效。
 5. 从仓库根目录启动：
@@ -49,7 +49,7 @@ FORGEX_DATABASE_URL=postgresql://forgex:password@localhost:5432/forgex npm run d
 docker compose --env-file deploy/.env -f deploy/compose.yaml up --build
 ```
 
-Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须在 Web 前增加 TLS，并把示例标识、摘要和数据库密码全部替换。
+Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须让浏览器始终通过与 `publicOrigin` 完全一致的 HTTPS 地址访问，并把示例域名、标识、摘要和数据库密码全部替换；TLS 可以终止在 Web 前的可信反向代理，上游 Compose 内网仍可使用 HTTP。
 
 ## 可信 Skill 发布与激活
 
