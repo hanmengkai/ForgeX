@@ -29,7 +29,8 @@ describe("开源交付包装", () => {
       webDockerfile,
       dockerignore,
       nginx,
-      runtimeConfig,
+      localRuntimeConfig,
+      productionRuntimeConfig,
       readme,
     ] = await Promise.all([
       read("deploy/compose.yaml"),
@@ -38,6 +39,7 @@ describe("开源交付包装", () => {
       read(".dockerignore"),
       read("deploy/nginx.conf"),
       read("deploy/config/control-plane.example.json"),
+      read("deploy/config/control-plane.production.example.json"),
       read("README.md"),
     ]);
 
@@ -63,9 +65,16 @@ describe("开源交付包装", () => {
     expect(nginx.slice(nginx.indexOf("location /api/"))).toContain(
       "Content-Security-Policy",
     );
-    expect(runtimeConfig).toContain("tokenSha256");
-    expect(runtimeConfig).toContain('"sessionCookieSecure": true');
-    expect(runtimeConfig).not.toMatch(/"(?:token|password|sessionKey)"\s*:/u);
+    expect(localRuntimeConfig).toContain("tokenSha256");
+    expect(localRuntimeConfig).toContain('"publicOrigin": "http://localhost:8080"');
+    expect(localRuntimeConfig).toContain('"sessionCookieSecure": false');
+    expect(productionRuntimeConfig).toContain(
+      '"publicOrigin": "https://forgex.example.com"',
+    );
+    expect(productionRuntimeConfig).toContain('"sessionCookieSecure": true');
+    expect(`${localRuntimeConfig}${productionRuntimeConfig}`).not.toMatch(
+      /"(?:token|password|sessionKey)"\s*:/u,
+    );
     expect(readme).toContain("docker compose");
     expect(readme).toContain("npm run db:migrate");
     expect(readme).toContain("0014_browser_sessions.sql");
@@ -86,6 +95,7 @@ describe("开源交付包装", () => {
       "npm run --workspace @forgex/verification-runner build:verifier",
       "npx playwright install --with-deps chromium",
       "npm run test:e2e",
+      "npm run test:e2e:postgres",
     ]) {
       expect(workflow).toContain(command);
     }

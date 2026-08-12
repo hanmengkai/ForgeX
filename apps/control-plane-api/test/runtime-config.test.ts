@@ -26,11 +26,13 @@ describe("Control Plane 运行配置", () => {
   const runtimeConfig = (
     host: string,
     sessionCookieSecure: boolean,
+    publicOrigin?: string,
   ) => ({
     schemaVersion: 1 as const,
     host,
     port: 3000,
     sessionCookieSecure,
+    ...(publicOrigin ? { publicOrigin } : {}),
     projectKey,
     repositoryKey,
     sessions: [
@@ -50,7 +52,7 @@ describe("Control Plane 运行配置", () => {
     mcpVerifiers: [],
   });
 
-  it("仅允许回环开发环境关闭 Secure Cookie", () => {
+  it("按浏览器公开 Origin 限制不安全 Cookie", () => {
     expect(
       ControlPlaneRuntimeConfigSchema.safeParse(
         runtimeConfig("127.0.0.1", false),
@@ -60,19 +62,29 @@ describe("Control Plane 运行配置", () => {
       ControlPlaneRuntimeConfigSchema.safeParse(runtimeConfig("::1", false))
         .success,
     ).toBe(true);
+    expect(
+      ControlPlaneRuntimeConfigSchema.safeParse(
+        runtimeConfig("0.0.0.0", false, "http://localhost:8080"),
+      ).success,
+    ).toBe(true);
 
     const publicHttp = ControlPlaneRuntimeConfigSchema.safeParse(
-      runtimeConfig("0.0.0.0", false),
+      runtimeConfig("0.0.0.0", false, "http://forgex.example.com"),
     );
     expect(publicHttp.success).toBe(false);
     if (!publicHttp.success) {
       expect(publicHttp.error.issues).toContainEqual(
         expect.objectContaining({
           path: ["sessionCookieSecure"],
-          message: "非回环部署必须启用 Secure Cookie 并由 HTTPS 对外提供服务",
+          message: "非回环公开地址必须启用 Secure Cookie 并通过 HTTPS 访问",
         }),
       );
     }
+    expect(
+      ControlPlaneRuntimeConfigSchema.safeParse(
+        runtimeConfig("0.0.0.0", true, "https://forgex.example.com"),
+      ).success,
+    ).toBe(true);
   });
 
   it("从文件加载严格配置并拒绝缺失或非 PostgreSQL 数据库地址", async () => {
