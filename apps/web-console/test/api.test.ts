@@ -94,6 +94,47 @@ describe("createHttpForgeXClient", () => {
     );
   });
 
+  it("拒绝把其他项目的初始化响应绑定到当前项目", async () => {
+    const requestedUrl =
+      "/api/v1/platform/projects/22222222-2222-4222-8222-222222222222/initialization";
+    const otherUrl =
+      "/api/v1/platform/projects/33333333-3333-4333-8333-333333333333/initialization";
+    const extensionsUrl =
+      "/api/v1/projects/33333333-3333-4333-8333-333333333333/extensions";
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            status: "not_started",
+            preset: {
+              key: "standard-delivery",
+              version: 1,
+              name: "标准 AI 交付",
+            },
+            record: null,
+            tasks: ["knowledge", "skill", "mcp"].map((key) => ({
+              key,
+              name: `${key} 准备任务`,
+              detail: "完成当前项目的可信交付准备",
+              status: "action_required",
+              links: { nextStep: extensionsUrl },
+            })),
+            links: {
+              self: otherUrl,
+              extensions: extensionsUrl,
+              actions: {},
+            },
+          },
+        }),
+      ),
+    );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(client.getProjectInitialization(requestedUrl)).rejects.toThrow(
+      "项目初始化状态与当前项目不匹配",
+    );
+  });
+
   it("从服务端动作链接读取需求上下文，并按所选项目和仓库调用需求 API", async () => {
     const projectRequirements =
       "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements";

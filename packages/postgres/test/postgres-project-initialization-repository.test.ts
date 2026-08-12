@@ -31,11 +31,12 @@ class InitializationPool implements PostgresProjectInitializationPool {
     values: unknown[] = [],
   ): Promise<PostgresQueryResult> {
     if (text.startsWith("SELECT tenant_key")) {
+      const matches = text.includes("request_key = $2")
+        ? this.stored?.request_key === values[1]
+        : this.stored?.project_key === values[1];
       return {
         rows:
-          this.stored &&
-          this.stored.tenant_key === values[0] &&
-          this.stored.project_key === values[1]
+          this.stored && this.stored.tenant_key === values[0] && matches
             ? [this.stored]
             : [],
       };

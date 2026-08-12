@@ -437,6 +437,30 @@ const platformProjectParamsSchema = z
       .transform((value) => value.toLowerCase()),
   })
   .strict();
+const scopedSkillExtensionParamsSchema = platformProjectParamsSchema.extend({
+  skillKey: z
+    .string()
+    .uuid()
+    .transform((value) => value.toLowerCase()),
+});
+const scopedMcpExtensionParamsSchema = platformProjectParamsSchema.extend({
+  serverKey: z
+    .string()
+    .uuid()
+    .transform((value) => value.toLowerCase()),
+});
+const scopedKnowledgeParamsSchema = platformProjectParamsSchema.extend({
+  knowledgeKey: z
+    .string()
+    .uuid()
+    .transform((value) => value.toLowerCase()),
+});
+const scopedKnowledgeSourceParamsSchema = scopedKnowledgeParamsSchema.extend({
+  sourceKey: z
+    .string()
+    .uuid()
+    .transform((value) => value.toLowerCase()),
+});
 const projectInitializationCommandSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -871,7 +895,7 @@ export const buildControlPlaneApi = (
       ...(options.clock ? { clock: options.clock } : {}),
     });
   };
-  const extensionCatalogFor = (projectKey: string) => {
+  const extensionCatalogFor = (projectKey: string, scoped = false) => {
     const projectSkills = skillServiceFor(projectKey);
     const projectMcp = mcpRegistryFor(projectKey);
     const projectKnowledge = knowledgeServiceFor(projectKey);
@@ -881,6 +905,7 @@ export const buildControlPlaneApi = (
       mcpRegistry: projectMcp,
       knowledgeDirectory: projectKnowledge,
       projectKey,
+      ...(scoped ? { routePrefix: `/api/v1/projects/${projectKey}` } : {}),
     });
   };
   const knowledgeBases = knowledgeServiceFor(options.projectKey);
@@ -1379,6 +1404,7 @@ export const buildControlPlaneApi = (
   const projectInitializationView = (
     projectKey: string,
     initialization: ProjectInitializationView,
+    principal: AuthenticatedPrincipal,
   ) => {
     const initializationPath = `/api/v1/platform/projects/${projectKey}/initialization`;
     const extensionsPath = `/api/v1/projects/${projectKey}/extensions`;
@@ -1400,9 +1426,24 @@ export const buildControlPlaneApi = (
       links: {
         self: initializationPath,
         extensions: extensionsPath,
-        actions: { initialize: initializationPath },
+        actions: principal.roles.includes("administrator")
+          ? { initialize: initializationPath }
+          : {},
       },
     };
+  };
+  const ensureProjectForInitialization = async (
+    principal: AuthenticatedPrincipal,
+    projectKey: string,
+  ) => {
+    if (!principal.roles.includes("administrator")) {
+      return platformConfiguration.getRequirementProject(principal, projectKey);
+    }
+    const project = (await platformConfiguration.list(principal))
+      .flatMap((customer) => customer.projects)
+      .find((candidate) => candidate.projectKey === projectKey);
+    if (project) return project;
+    return platformConfiguration.getRequirementProject(principal, projectKey);
   };
   const platformCustomerView = (customer: {
     customerKey: string;
@@ -1586,16 +1627,17 @@ export const buildControlPlaneApi = (
       const params = platformProjectParamsSchema.safeParse(request.params);
       if (!params.success) throw platformValidationError(params.error);
       const principal = principalFrom(request);
-      await platformConfiguration.getRequirementProject(
-        principal,
-        params.data.projectKey,
-      );
+      await ensureProjectForInitialization(principal, params.data.projectKey);
       const initialization = await projectInitializations.get(
         principal,
         params.data.projectKey,
       );
       return reply.header("Cache-Control", "no-store").send({
-        data: projectInitializationView(params.data.projectKey, initialization),
+        data: projectInitializationView(
+          params.data.projectKey,
+          initialization,
+          principal,
+        ),
       });
     },
   );
@@ -1610,17 +1652,18 @@ export const buildControlPlaneApi = (
       if (!params.success) throw platformValidationError(params.error);
       if (!command.success) throw platformValidationError(command.error);
       const principal = principalFrom(request);
-      await platformConfiguration.getRequirementProject(
-        principal,
-        params.data.projectKey,
-      );
+      await ensureProjectForInitialization(principal, params.data.projectKey);
       const initialization = await projectInitializations.initialize(
         principal,
         params.data.projectKey,
         command.data,
       );
       return reply.header("Cache-Control", "no-store").send({
-        data: projectInitializationView(params.data.projectKey, initialization),
+        data: projectInitializationView(
+          params.data.projectKey,
+          initialization,
+          principal,
+        ),
       });
     },
   );
@@ -2041,11 +2084,114 @@ export const buildControlPlaneApi = (
       params.data.projectKey,
     );
     return reply.send({
-      data: await extensionCatalogFor(params.data.projectKey).overviewForPeople(
-        principal,
-      ),
+      data: await extensionCatalogFor(
+        params.data.projectKey,
+        true,
+      ).overviewForPeople(principal),
     });
   });
+
+  app.get(
+    "/api/v1/projects/:projectKey/extensions/skills/:skillKey",
+    async (request, reply) => {
+      const params = scopedSkillExtensionParamsSchema.safeParse(request.params);
+      if (!params.success) throw platformValidationError(params.error);
+      const principal = principalFrom(request);
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      return reply.send({
+        data: await extensionCatalogFor(
+          params.data.projectKey,
+          true,
+        ).skillDetailForPeople(principal, params.data.skillKey),
+      });
+    },
+  );
+
+  app.get(
+    "/api/v1/projects/:projectKey/knowledge-bases/:knowledgeKey",
+    async (request, reply) => {
+      const params = scopedKnowledgeParamsSchema.safeParse(request.params);
+      if (!params.success) throw platformValidationError(params.error);
+      const principal = principalFrom(request);
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const item = await knowledgeServiceFor(
+        params.data.projectKey,
+      ).detailForPeople(principal, params.data.knowledgeKey);
+      return reply.send({
+        data: {
+          ...item.view,
+          sources: item.sources.map(({ sourceKey, ...source }) => ({
+            ...source,
+            links: {
+              self: `/api/v1/projects/${params.data.projectKey}/knowledge-bases/${item.knowledgeKey}/sources/${sourceKey}`,
+              actions: {},
+            },
+          })),
+          links: {
+            self: `/api/v1/projects/${params.data.projectKey}/knowledge-bases/${item.knowledgeKey}`,
+            actions: {},
+          },
+        },
+      });
+    },
+  );
+
+  app.get(
+    "/api/v1/projects/:projectKey/knowledge-bases/:knowledgeKey/sources/:sourceKey",
+    async (request, reply) => {
+      const params = scopedKnowledgeSourceParamsSchema.safeParse(
+        request.params,
+      );
+      if (!params.success) throw platformValidationError(params.error);
+      const principal = principalFrom(request);
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const item = await knowledgeServiceFor(
+        params.data.projectKey,
+      ).sourceForPeople(
+        principal,
+        params.data.knowledgeKey,
+        params.data.sourceKey,
+      );
+      const { sourceKey, ...source } = item.source;
+      return reply.send({
+        data: {
+          ...source,
+          links: {
+            self: `/api/v1/projects/${params.data.projectKey}/knowledge-bases/${item.knowledgeKey}/sources/${sourceKey}`,
+            actions: {},
+          },
+        },
+      });
+    },
+  );
+
+  app.get(
+    "/api/v1/projects/:projectKey/extensions/mcp/:serverKey",
+    async (request, reply) => {
+      const params = scopedMcpExtensionParamsSchema.safeParse(request.params);
+      if (!params.success) throw platformValidationError(params.error);
+      const principal = principalFrom(request);
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      return reply.send({
+        data: await extensionCatalogFor(
+          params.data.projectKey,
+          true,
+        ).mcpDetailForPeople(principal, params.data.serverKey),
+      });
+    },
+  );
 
   app.post(
     "/api/v1/extensions/skills",

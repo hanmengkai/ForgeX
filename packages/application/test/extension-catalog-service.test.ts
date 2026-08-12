@@ -81,6 +81,40 @@ describe("ExtensionCatalogApplicationService", () => {
     expect(JSON.stringify(overview)).not.toContain("extensionKey");
   });
 
+  it("项目作用域目录不暴露尚未贯通执行队列的 MCP 调用入口", async () => {
+    const serverKey = "44444444-4444-4444-8444-444444444444";
+    const service = new ExtensionCatalogApplicationService({
+      repository: new InMemoryExtensionCatalogRepository(),
+      skillRegistry: emptySkillRegistry,
+      mcpRegistry: {
+        listItemsForPeople: async () => [
+          {
+            serverKey,
+            view: {
+              name: "代码仓库工具",
+              summary: "读取项目结构并展示可用的外部能力",
+              status: "可使用" as const,
+              detail: "2 项业务能力",
+              supportingText: "项目调用链贯通后才可发起操作",
+            },
+          },
+        ],
+      },
+      projectKey,
+      routePrefix: `/api/v1/projects/${projectKey}`,
+    });
+
+    const overview = await service.overviewForPeople(principal);
+
+    expect(overview.links?.actions).toEqual({});
+    expect(overview.externalTools[0]?.links).toEqual({
+      self: `/api/v1/projects/${projectKey}/extensions/mcp/${serverKey}`,
+    });
+    expect(() =>
+      ExtensionCatalogResponseSchema.parse({ data: overview }),
+    ).not.toThrow();
+  });
+
   it("同一共享仓储不会把其他租户或项目的扩展混入当前目录", async () => {
     const repository = new InMemoryExtensionCatalogRepository();
     const entry = {

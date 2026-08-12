@@ -138,7 +138,7 @@ describe("平台资源配置 API", () => {
           { key: "skill", status: "action_required" },
           { key: "mcp", status: "action_required" },
         ],
-        links: { actions: { initialize: initializationUrl } },
+        links: { actions: {} },
       },
     });
 
@@ -190,6 +190,28 @@ describe("平台资源配置 API", () => {
     expect(extensions.json()).toMatchObject({
       data: { businessKnowledge: [], teamCapabilities: [], externalTools: [] },
     });
+    expect(extensions.json().data.links.actions).toEqual({});
+
+    const disabledProject = await app.inject({
+      method: "PATCH",
+      url: project.json().data.links.self,
+      headers: adminHeaders,
+      payload: {
+        schemaVersion: 1,
+        expectedRevision: 1,
+        name: "手串配置工具",
+        summary: "用于搭配和预览手串的个人项目",
+        enabled: false,
+      },
+    });
+    expect(disabledProject.statusCode).toBe(200);
+    expect(
+      await app.inject({
+        method: "GET",
+        url: initializationUrl,
+        headers: adminHeaders,
+      }),
+    ).toMatchObject({ statusCode: 200 });
 
     const missing = await app.inject({
       method: "GET",

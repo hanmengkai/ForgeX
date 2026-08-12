@@ -40,6 +40,10 @@ export interface ProjectInitializationRepository {
     tenantKey: string,
     projectKey: string,
   ): Promise<ProjectInitializationRecord | null>;
+  findByRequest(
+    tenantKey: string,
+    requestKey: string,
+  ): Promise<ProjectInitializationRecord | null>;
   createIfAbsent(
     record: ProjectInitializationRecord,
   ): Promise<ProjectInitializationRecord>;
@@ -90,6 +94,18 @@ export class InMemoryProjectInitializationRepository implements ProjectInitializ
   ): Promise<ProjectInitializationRecord | null> {
     const key = this.#key(tenantKey, projectKey);
     const record = this.#records.get(key);
+    return record ? cloneRecord(record) : null;
+  }
+
+  async findByRequest(
+    tenantKey: string,
+    requestKey: string,
+  ): Promise<ProjectInitializationRecord | null> {
+    const tenant = internalKeySchema.parse(tenantKey);
+    const request = internalKeySchema.parse(requestKey);
+    const projectKey = this.#requestProjects.get(`${tenant}:${request}`);
+    if (!projectKey) return null;
+    const record = this.#records.get(`${tenant}:${projectKey}`);
     return record ? cloneRecord(record) : null;
   }
 
@@ -163,6 +179,17 @@ export class ProjectInitializationService {
     }
     const project = internalKeySchema.parse(projectKey);
     const command = initializationCommandSchema.parse(input);
+    const requestRecord = await this.#repository.findByRequest(
+      principal.tenantKey,
+      command.requestKey,
+    );
+    if (requestRecord && requestRecord.projectKey !== project) {
+      throw new ApplicationError(
+        409,
+        "project_initialization_request_conflict",
+        "这个初始化请求已经用于另一个项目，请刷新后重试",
+      );
+    }
     const existing = await this.#repository.find(principal.tenantKey, project);
     if (existing) {
       this.#assertCompatible(existing, command);

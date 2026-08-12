@@ -64,6 +64,17 @@ export class PostgresProjectInitializationRepository implements ProjectInitializ
     return result.rows[0] ? recordFrom(result.rows[0]) : null;
   }
 
+  async findByRequest(
+    tenantKey: string,
+    requestKey: string,
+  ): Promise<ProjectInitializationRecord | null> {
+    const result = await this.pool.query(
+      `SELECT ${selectColumns} FROM forgex_project_initializations WHERE tenant_key = $1 AND request_key = $2 LIMIT 1`,
+      [tenantKey.toLowerCase(), requestKey.toLowerCase()],
+    );
+    return result.rows[0] ? recordFrom(result.rows[0]) : null;
+  }
+
   async createIfAbsent(
     record: ProjectInitializationRecord,
   ): Promise<ProjectInitializationRecord> {

@@ -722,6 +722,45 @@ describe("RequirementWorkbench", () => {
     expect(screen.queryByText("旧版交付模板")).toBeNull();
   });
 
+  it("读取团队能力期间切换项目不会把旧项目交付带到新项目", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const ready = {
+      ...items[0]!,
+      status: "已确认，等待交付" as const,
+      links: {
+        ...items[0]!.links,
+        actions: {
+          startDelivery: `${items[0]!.links.self}/start-delivery`,
+        },
+      },
+    };
+    const extensions =
+      deferred<Awaited<ReturnType<ForgeXClient["listExtensions"]>>>();
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [ready],
+      nextCursor: null,
+    });
+    vi.mocked(client.listExtensions).mockReturnValue(extensions.promise);
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "安排 AI 开始实现" }),
+    );
+    await user.selectOptions(screen.getByLabelText("当前项目"), "营销视频");
+    extensions.resolve({
+      businessKnowledge: [],
+      teamCapabilities: [],
+      externalTools: [],
+    });
+
+    expect(
+      await screen.findByText("当前项目已经切换，请在新项目下重新安排交付"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "选择团队能力" })).toBeNull();
+    expect(client.runRequirementAction).not.toHaveBeenCalled();
+  });
+
   it("目录有超过十项可用能力时仍允许只选择本次需要的能力", async () => {
     const user = userEvent.setup();
     const client = createClient();

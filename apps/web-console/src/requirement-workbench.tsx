@@ -848,6 +848,9 @@ export function RequirementWorkbench({
       ) ?? null,
     [selectedCustomer, selectedProjectName],
   );
+  const selectedProjectExtensionsRef = useRef<string | null>(null);
+  selectedProjectExtensionsRef.current =
+    selectedProject?.links.extensions ?? null;
 
   const writeRequirementContextUrl = useCallback(
     (customerName: string, projectName: string, replace = false) => {
@@ -1068,10 +1071,18 @@ export function RequirementWorkbench({
     actionActiveRef.current = true;
     setBusyAction(actionUrl);
     setError(null);
+    const deliveryExtensionsUrl = selectedProject?.links.extensions ?? null;
     try {
       const extensions = await client.listExtensions(
         selectedProject?.links.extensions,
       );
+      if (
+        deliveryExtensionsUrl === null ||
+        selectedProjectExtensionsRef.current !== deliveryExtensionsUrl
+      ) {
+        setError("当前项目已经切换，请在新项目下重新安排交付");
+        return;
+      }
       setPendingDelivery({
         actionUrl,
         body,

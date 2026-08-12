@@ -11,7 +11,7 @@ interface SkillSelectionDialogProps {
 
 const skillKeyFromLink = (selfUrl: string) => {
   const match = selfUrl.match(
-    /^\/api\/v1\/extensions\/skills\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu,
+    /^\/api\/v1\/(?:projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/)?extensions\/skills\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu,
   );
   if (!match?.[1]) throw new Error("团队能力目录返回了无法识别的链接");
   return match[1].toLowerCase();

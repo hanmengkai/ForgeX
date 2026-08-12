@@ -289,7 +289,7 @@ export interface ProjectInitializationView {
   links: {
     self: string;
     extensions: string;
-    actions: { initialize: string };
+    actions: { initialize?: string | undefined };
   };
 }
 
@@ -654,7 +654,10 @@ const projectInitializationResponseSchema = z
             extensions: z.string().regex(projectExtensionsPattern),
             actions: z
               .object({
-                initialize: z.string().regex(projectInitializationPattern),
+                initialize: z
+                  .string()
+                  .regex(projectInitializationPattern)
+                  .optional(),
               })
               .strict(),
           })
@@ -664,7 +667,10 @@ const projectInitializationResponseSchema = z
   })
   .strict()
   .superRefine((response, context) => {
-    if (response.data.links.actions.initialize !== response.data.links.self) {
+    if (
+      response.data.links.actions.initialize !== undefined &&
+      response.data.links.actions.initialize !== response.data.links.self
+    ) {
       context.addIssue({
         code: "custom",
         path: ["data", "links", "actions", "initialize"],
@@ -995,7 +1001,7 @@ const mcpInvocationSelfPattern =
 const internalKeyPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const mcpServerSelfPattern =
-  /^\/api\/v1\/extensions\/mcp\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^\/api\/v1\/(?:projects\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/)?extensions\/mcp\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const mcpToolFormPattern = new RegExp(
   `${mcpServerSelfPattern.source.slice(0, -1)}/tools/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/form$`,
   "i",
@@ -1605,6 +1611,9 @@ export const createHttpForgeXClient = (
       if (!parsed.success) {
         throw new Error("项目初始化状态格式不正确，请联系管理员");
       }
+      if (parsed.data.data.links.self !== initializationUrl) {
+        throw new Error("项目初始化状态与当前项目不匹配，请刷新后重试");
+      }
       return parsed.data.data;
     },
     initializeProject: async (initializationUrl, input) => {
@@ -1624,6 +1633,9 @@ export const createHttpForgeXClient = (
       );
       if (!parsed.success) {
         throw new Error("项目初始化结果格式不正确，请联系管理员");
+      }
+      if (parsed.data.data.links.self !== initializationUrl) {
+        throw new Error("项目初始化结果与当前项目不匹配，请刷新后重试");
       }
       return parsed.data.data;
     },

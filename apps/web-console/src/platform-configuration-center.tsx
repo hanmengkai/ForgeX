@@ -83,45 +83,69 @@ function ProjectInitializationPanel({
   const [loading, setLoading] = useState(true);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const generationRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const load = useCallback(async () => {
+    const generation = ++generationRef.current;
     setLoading(true);
     setError(null);
     try {
-      setInitialization(
-        await client.getProjectInitialization(project.links.initialization),
+      const result = await client.getProjectInitialization(
+        project.links.initialization,
       );
+      if (mountedRef.current && generation === generationRef.current) {
+        setInitialization(result);
+      }
     } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "暂时无法读取项目准备状态",
-      );
+      if (mountedRef.current && generation === generationRef.current) {
+        setError(
+          caught instanceof Error ? caught.message : "暂时无法读取项目准备状态",
+        );
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && generation === generationRef.current) {
+        setLoading(false);
+      }
     }
   }, [client, project.links.initialization]);
 
   useEffect(() => {
+    mountedRef.current = true;
     void load();
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+    };
   }, [load]);
 
   const initialize = async () => {
     if (applying) return;
     setApplying(true);
     setError(null);
+    const generation = ++generationRef.current;
     try {
-      setInitialization(
-        await client.initializeProject(project.links.actions.initialize, {
+      const result = await client.initializeProject(
+        project.links.actions.initialize,
+        {
           presetKey: "standard-delivery",
           presetVersion: 1,
           requestKey: createBrowserUuid(),
-        }),
+        },
       );
+      if (mountedRef.current && generation === generationRef.current) {
+        setInitialization(result);
+      }
     } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "标准交付预设没有应用成功",
-      );
+      if (mountedRef.current && generation === generationRef.current) {
+        setError(
+          caught instanceof Error ? caught.message : "标准交付预设没有应用成功",
+        );
+      }
     } finally {
-      setApplying(false);
+      if (mountedRef.current && generation === generationRef.current) {
+        setApplying(false);
+      }
     }
   };
 

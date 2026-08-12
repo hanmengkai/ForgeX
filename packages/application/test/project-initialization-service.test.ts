@@ -142,6 +142,40 @@ describe("项目标准交付初始化", () => {
     });
   });
 
+  it("目标项目已有记录时仍拒绝复用另一个项目的请求键", async () => {
+    const service = createService({
+      knowledgeReady: false,
+      skillReady: false,
+      mcpReady: false,
+    });
+    const firstProjectRequest = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const secondProject = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    await service.initialize(administrator, projectKey, {
+      schemaVersion: 1,
+      presetKey: "standard-delivery",
+      presetVersion: 1,
+      requestKey: firstProjectRequest,
+    });
+    await service.initialize(administrator, secondProject, {
+      schemaVersion: 1,
+      presetKey: "standard-delivery",
+      presetVersion: 1,
+      requestKey: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    });
+
+    await expect(
+      service.initialize(administrator, secondProject, {
+        schemaVersion: 1,
+        presetKey: "standard-delivery",
+        presetVersion: 1,
+        requestKey: firstProjectRequest,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "project_initialization_request_conflict",
+    });
+  });
+
   it("只有可信知识、已激活 Skill 和健康 MCP 全部存在时才就绪", async () => {
     let readiness: ProjectInitializationReadiness = {
       knowledgeReady: true,

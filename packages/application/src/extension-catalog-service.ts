@@ -27,6 +27,7 @@ export interface ExtensionCatalogApplicationServiceOptions {
   mcpRegistry: TrustedMcpDirectory;
   knowledgeDirectory?: TrustedKnowledgeDirectory;
   projectKey: string;
+  routePrefix?: string;
 }
 
 export interface TrustedSkillDirectory {
@@ -54,6 +55,7 @@ export class ExtensionCatalogApplicationService {
   readonly #mcpRegistry: TrustedMcpDirectory;
   readonly #knowledgeDirectory: TrustedKnowledgeDirectory | null;
   readonly #projectKey: string;
+  readonly #routePrefix: string;
 
   constructor(options: ExtensionCatalogApplicationServiceOptions) {
     if (!internalKeyPattern.test(options.projectKey)) {
@@ -64,6 +66,7 @@ export class ExtensionCatalogApplicationService {
     this.#mcpRegistry = options.mcpRegistry;
     this.#knowledgeDirectory = options.knowledgeDirectory ?? null;
     this.#projectKey = options.projectKey.toLowerCase();
+    this.#routePrefix = options.routePrefix ?? "/api/v1";
   }
 
   async overviewForPeople(
@@ -82,17 +85,21 @@ export class ExtensionCatalogApplicationService {
       teamCapabilities: [],
       externalTools: [],
       links: {
-        actions: {
-          ...(this.#knowledgeDirectory && canManageKnowledgeBases(principal)
-            ? { createKnowledge: "/api/v1/knowledge-bases" }
-            : {}),
-          ...(principal.roles.includes("administrator")
+        actions:
+          this.#routePrefix === "/api/v1"
             ? {
-                publishSkill: "/api/v1/extensions/skills",
-                publishMcp: "/api/v1/extensions/mcp",
+                ...(this.#knowledgeDirectory &&
+                canManageKnowledgeBases(principal)
+                  ? { createKnowledge: "/api/v1/knowledge-bases" }
+                  : {}),
+                ...(principal.roles.includes("administrator")
+                  ? {
+                      publishSkill: "/api/v1/extensions/skills",
+                      publishMcp: "/api/v1/extensions/mcp",
+                    }
+                  : {}),
               }
-            : {}),
-        },
+            : {},
       },
     };
     for (const item of catalog.listForPeople()) {
@@ -117,7 +124,9 @@ export class ExtensionCatalogApplicationService {
         "可使用" | "需要处理",
       detail: item.view.detail,
       supportingText: `${item.view.classification} · 检索结果始终标注资料来源`,
-      links: { self: `/api/v1/knowledge-bases/${item.knowledgeKey}` },
+      links: {
+        self: `${this.#routePrefix}/knowledge-bases/${item.knowledgeKey}`,
+      },
     }));
     overview.businessKnowledge = this.#knowledgeDirectory
       ? trustedKnowledgeViews.slice(0, 100)
@@ -131,7 +140,7 @@ export class ExtensionCatalogApplicationService {
         : item.view.quality,
       supportingText: item.view.safety,
       links: {
-        self: `/api/v1/extensions/skills/${item.skillKey}`,
+        self: `${this.#routePrefix}/extensions/skills/${item.skillKey}`,
       },
     }));
     overview.externalTools = trustedMcpServers.map((item) => ({
@@ -141,8 +150,12 @@ export class ExtensionCatalogApplicationService {
       detail: item.view.detail,
       supportingText: item.view.supportingText,
       links: {
-        self: `/api/v1/extensions/mcp/${item.serverKey}`,
-        tools: `/api/v1/extensions/mcp/${item.serverKey}/tools`,
+        self: `${this.#routePrefix}/extensions/mcp/${item.serverKey}`,
+        ...(this.#routePrefix === "/api/v1"
+          ? {
+              tools: `${this.#routePrefix}/extensions/mcp/${item.serverKey}/tools`,
+            }
+          : {}),
       },
     }));
     return overview;
@@ -203,7 +216,9 @@ export class ExtensionCatalogApplicationService {
         ? `版本 ${item.view.activeVersion} · ${item.view.quality}`
         : item.view.quality,
       supportingText: item.view.safety,
-      links: { self: `/api/v1/extensions/skills/${item.skillKey}` },
+      links: {
+        self: `${this.#routePrefix}/extensions/skills/${item.skillKey}`,
+      },
     };
   }
 
@@ -229,8 +244,12 @@ export class ExtensionCatalogApplicationService {
       detail: item.view.detail,
       supportingText: item.view.supportingText,
       links: {
-        self: `/api/v1/extensions/mcp/${item.serverKey}`,
-        tools: `/api/v1/extensions/mcp/${item.serverKey}/tools`,
+        self: `${this.#routePrefix}/extensions/mcp/${item.serverKey}`,
+        ...(this.#routePrefix === "/api/v1"
+          ? {
+              tools: `${this.#routePrefix}/extensions/mcp/${item.serverKey}/tools`,
+            }
+          : {}),
       },
     };
   }

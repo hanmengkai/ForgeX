@@ -545,6 +545,7 @@ export const WorkerMcpCompletionSchema = z.discriminatedUnion("outcome", [
 
 const extensionKeyPath =
   "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const optionalExtensionProjectPath = `(?:projects/${extensionKeyPath}/)?`;
 const extensionItemFields = {
   name: z.string().trim().min(2).max(100),
   summary: z.string().trim().min(4).max(500),
@@ -561,12 +562,15 @@ const extensionItemSchema = (path: RegExp) =>
     .strict();
 const knowledgeExtensionItemSchema = extensionItemSchema(
   new RegExp(
-    `^/api/v1/(?:extensions|knowledge-bases)/${extensionKeyPath}$`,
+    `^/api/v1/(?:${optionalExtensionProjectPath}(?:extensions|knowledge-bases)|extensions|knowledge-bases)/${extensionKeyPath}$`,
     "i",
   ),
 );
 const skillExtensionItemSchema = extensionItemSchema(
-  new RegExp(`^/api/v1/extensions/skills/${extensionKeyPath}$`, "i"),
+  new RegExp(
+    `^/api/v1/${optionalExtensionProjectPath}extensions/skills/${extensionKeyPath}$`,
+    "i",
+  ),
 );
 const mcpExtensionItemSchema = z
   .object({
@@ -576,22 +580,29 @@ const mcpExtensionItemSchema = z
         self: z
           .string()
           .regex(
-            new RegExp(`^/api/v1/extensions/mcp/${extensionKeyPath}$`, "i"),
+            new RegExp(
+              `^/api/v1/${optionalExtensionProjectPath}extensions/mcp/${extensionKeyPath}$`,
+              "i",
+            ),
           ),
         tools: z
           .string()
           .regex(
             new RegExp(
-              `^/api/v1/extensions/mcp/${extensionKeyPath}/tools$`,
+              `^/api/v1/${optionalExtensionProjectPath}extensions/mcp/${extensionKeyPath}/tools$`,
               "i",
             ),
-          ),
+          )
+          .optional(),
       })
       .strict(),
   })
   .strict()
   .superRefine((item, context) => {
-    if (item.links.tools !== `${item.links.self}/tools`) {
+    if (
+      item.links.tools !== undefined &&
+      item.links.tools !== `${item.links.self}/tools`
+    ) {
       context.addIssue({
         code: "custom",
         path: ["links", "tools"],
