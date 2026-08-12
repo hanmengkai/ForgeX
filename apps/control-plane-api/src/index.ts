@@ -2079,10 +2079,7 @@ export const buildControlPlaneApi = (
     const params = platformProjectParamsSchema.safeParse(request.params);
     if (!params.success) throw platformValidationError(params.error);
     const principal = principalFrom(request);
-    await platformConfiguration.getRequirementProject(
-      principal,
-      params.data.projectKey,
-    );
+    await ensureProjectForInitialization(principal, params.data.projectKey);
     return reply.send({
       data: await extensionCatalogFor(
         params.data.projectKey,
@@ -2097,10 +2094,7 @@ export const buildControlPlaneApi = (
       const params = scopedSkillExtensionParamsSchema.safeParse(request.params);
       if (!params.success) throw platformValidationError(params.error);
       const principal = principalFrom(request);
-      await platformConfiguration.getRequirementProject(
-        principal,
-        params.data.projectKey,
-      );
+      await ensureProjectForInitialization(principal, params.data.projectKey);
       return reply.send({
         data: await extensionCatalogFor(
           params.data.projectKey,
@@ -2116,10 +2110,7 @@ export const buildControlPlaneApi = (
       const params = scopedKnowledgeParamsSchema.safeParse(request.params);
       if (!params.success) throw platformValidationError(params.error);
       const principal = principalFrom(request);
-      await platformConfiguration.getRequirementProject(
-        principal,
-        params.data.projectKey,
-      );
+      await ensureProjectForInitialization(principal, params.data.projectKey);
       const item = await knowledgeServiceFor(
         params.data.projectKey,
       ).detailForPeople(principal, params.data.knowledgeKey);
@@ -2150,10 +2141,7 @@ export const buildControlPlaneApi = (
       );
       if (!params.success) throw platformValidationError(params.error);
       const principal = principalFrom(request);
-      await platformConfiguration.getRequirementProject(
-        principal,
-        params.data.projectKey,
-      );
+      await ensureProjectForInitialization(principal, params.data.projectKey);
       const item = await knowledgeServiceFor(
         params.data.projectKey,
       ).sourceForPeople(
@@ -2180,10 +2168,7 @@ export const buildControlPlaneApi = (
       const params = scopedMcpExtensionParamsSchema.safeParse(request.params);
       if (!params.success) throw platformValidationError(params.error);
       const principal = principalFrom(request);
-      await platformConfiguration.getRequirementProject(
-        principal,
-        params.data.projectKey,
-      );
+      await ensureProjectForInitialization(principal, params.data.projectKey);
       return reply.send({
         data: await extensionCatalogFor(
           params.data.projectKey,

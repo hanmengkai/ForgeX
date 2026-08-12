@@ -212,6 +212,13 @@ describe("平台资源配置 API", () => {
         headers: adminHeaders,
       }),
     ).toMatchObject({ statusCode: 200 });
+    expect(
+      await app.inject({
+        method: "GET",
+        url: scopedExtensionsUrl,
+        headers: adminHeaders,
+      }),
+    ).toMatchObject({ statusCode: 200 });
 
     const missing = await app.inject({
       method: "GET",
