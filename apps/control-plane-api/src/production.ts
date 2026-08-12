@@ -23,6 +23,7 @@ import {
   PostgresWorkerFleetRepository,
   PostgresAccountRepository,
   PostgresPlatformConfigurationRepository,
+  PostgresProjectInitializationRepository,
   type PostgresPool,
   type PostgresMigration,
   type PostgresQueryResult,
@@ -70,6 +71,8 @@ export const createProductionControlPlane = (
     ),
     platformConfigurationRepository:
       new PostgresPlatformConfigurationRepository(options.pool),
+    projectInitializationRepository:
+      new PostgresProjectInitializationRepository(options.pool),
     authenticator: new HashedSessionAuthenticator(options.config.sessions),
     browserSessionManager: new PostgresBrowserSessionManager(options.pool, {
       projectKey: options.config.projectKey,

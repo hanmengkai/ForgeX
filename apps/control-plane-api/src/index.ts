@@ -12,6 +12,7 @@ import {
   DeliveryCoordinatorService,
   ExtensionCatalogApplicationService,
   InMemoryPlatformConfigurationRepository,
+  InMemoryProjectInitializationRepository,
   KnowledgeBaseApplicationService,
   KnowledgeBaseCreateCommandSchema,
   KnowledgeSearchCommandSchema,
@@ -19,6 +20,7 @@ import {
   McpInvocationApplicationService,
   McpRegistryApplicationService,
   PlatformConfigurationService,
+  ProjectInitializationService,
   RequirementApplicationService,
   AuthenticatedRunnerSchema,
   RunnerVerificationFailureCommandSchema,
@@ -40,6 +42,8 @@ import {
   type McpInvocationRepository,
   type PlatformRole,
   type PlatformConfigurationRepository,
+  type ProjectInitializationView,
+  type ProjectInitializationRepository,
   type PreviewArtifactStore,
   type RequirementRepository,
   type RunnerSessionAuthenticator,
@@ -115,6 +119,7 @@ export interface ControlPlaneApiOptions {
   previewArtifactStore: PreviewArtifactStore;
   workerFleetRepository: WorkerFleetRepository;
   platformConfigurationRepository?: PlatformConfigurationRepository;
+  projectInitializationRepository?: ProjectInitializationRepository;
   projectKey: string;
   repositoryKey: string;
   readiness?: () => Promise<void>;
@@ -427,6 +432,17 @@ const platformCustomerParamsSchema = z
 const platformProjectParamsSchema = z
   .object({
     projectKey: z
+      .string()
+      .uuid()
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+const projectInitializationCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    presetKey: z.string().trim().min(1).max(100),
+    presetVersion: z.number().int().positive(),
+    requestKey: z
       .string()
       .uuid()
       .transform((value) => value.toLowerCase()),
@@ -824,38 +840,54 @@ export const buildControlPlaneApi = (
     repositoryKey: options.repositoryKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
-  const knowledgeBases = new KnowledgeBaseApplicationService({
-    repository: options.knowledgeBaseRepository,
-    projectKey: options.projectKey,
-    ...(options.clock ? { clock: options.clock } : {}),
-  });
-  const skills = new SkillRegistryApplicationService({
-    repository: options.skillRegistryRepository,
-    artifactStore: options.skillArtifactStore,
-    evaluationAuthority: options.skillEvaluationAuthority,
-    projectKey: options.projectKey,
-    ...(options.clock ? { clock: options.clock } : {}),
-  });
-  const mcpServers = new McpRegistryApplicationService({
-    repository: options.mcpRegistryRepository,
-    healthAuthority: options.mcpHealthAuthority,
-    projectKey: options.projectKey,
-    ...(options.clock ? { clock: options.clock } : {}),
-  });
-  const mcpInvocations = new McpInvocationApplicationService({
-    repository: options.mcpInvocationRepository,
-    schemaStore: options.mcpInputSchemaStore,
-    toolDirectory: mcpServers,
-    projectKey: options.projectKey,
-    ...(options.clock ? { clock: options.clock } : {}),
-  });
-  const extensions = new ExtensionCatalogApplicationService({
-    repository: options.extensionCatalogRepository,
-    skillRegistry: skills,
-    mcpRegistry: mcpServers,
-    knowledgeDirectory: knowledgeBases,
-    projectKey: options.projectKey,
-  });
+  const knowledgeServiceFor = (projectKey: string) =>
+    new KnowledgeBaseApplicationService({
+      repository: options.knowledgeBaseRepository,
+      projectKey,
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
+  const skillServiceFor = (projectKey: string) =>
+    new SkillRegistryApplicationService({
+      repository: options.skillRegistryRepository,
+      artifactStore: options.skillArtifactStore,
+      evaluationAuthority: options.skillEvaluationAuthority,
+      projectKey,
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
+  const mcpRegistryFor = (projectKey: string) =>
+    new McpRegistryApplicationService({
+      repository: options.mcpRegistryRepository,
+      healthAuthority: options.mcpHealthAuthority,
+      projectKey,
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
+  const mcpInvocationFor = (projectKey: string) => {
+    const registry = mcpRegistryFor(projectKey);
+    return new McpInvocationApplicationService({
+      repository: options.mcpInvocationRepository,
+      schemaStore: options.mcpInputSchemaStore,
+      toolDirectory: registry,
+      projectKey,
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
+  };
+  const extensionCatalogFor = (projectKey: string) => {
+    const projectSkills = skillServiceFor(projectKey);
+    const projectMcp = mcpRegistryFor(projectKey);
+    const projectKnowledge = knowledgeServiceFor(projectKey);
+    return new ExtensionCatalogApplicationService({
+      repository: options.extensionCatalogRepository,
+      skillRegistry: projectSkills,
+      mcpRegistry: projectMcp,
+      knowledgeDirectory: projectKnowledge,
+      projectKey,
+    });
+  };
+  const knowledgeBases = knowledgeServiceFor(options.projectKey);
+  const skills = skillServiceFor(options.projectKey);
+  const mcpServers = mcpRegistryFor(options.projectKey);
+  const mcpInvocations = mcpInvocationFor(options.projectKey);
+  const extensions = extensionCatalogFor(options.projectKey);
   const workers = new WorkerFleetService({
     repository: options.workerFleetRepository,
     ...(options.clock ? { clock: options.clock } : {}),
@@ -864,6 +896,38 @@ export const buildControlPlaneApi = (
     options.platformConfigurationRepository ??
       new InMemoryPlatformConfigurationRepository(),
   );
+  const projectInitializations = new ProjectInitializationService({
+    repository:
+      options.projectInitializationRepository ??
+      new InMemoryProjectInitializationRepository(),
+    readiness: {
+      inspect: async (tenantKey, projectKey) => {
+        const principal: AuthenticatedPrincipal = {
+          actorKey: "00000000-0000-4000-8000-000000000000",
+          actorName: "项目初始化检查",
+          tenantKey,
+          roles: ["administrator"],
+        };
+        const [knowledge, projectSkills, projectMcp] = await Promise.all([
+          knowledgeServiceFor(projectKey).listItemsForPeople(principal),
+          skillServiceFor(projectKey).listItemsForPeople(principal),
+          mcpRegistryFor(projectKey).listItemsForPeople(principal),
+        ]);
+        return {
+          knowledgeReady: knowledge.some(
+            (item) => item.view.status === "可使用",
+          ),
+          skillReady: projectSkills.some(
+            (item) => item.view.status === "可使用",
+          ),
+          mcpReady: projectMcp.some(
+            (item) => item.view.status === "可使用",
+          ),
+        };
+      },
+    },
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
   const requirementServiceFor = (
     projectKey: string,
     repositoryKey = options.repositoryKey,
@@ -1306,11 +1370,43 @@ export const buildControlPlaneApi = (
     repositories: project.repositories.map(platformRepositoryView),
     links: {
       self: `/api/v1/platform/projects/${project.projectKey}`,
+      initialization: `/api/v1/platform/projects/${project.projectKey}/initialization`,
+      extensions: `/api/v1/projects/${project.projectKey}/extensions`,
       actions: {
         createRepository: `/api/v1/platform/projects/${project.projectKey}/repositories`,
+        initialize: `/api/v1/platform/projects/${project.projectKey}/initialization`,
       },
     },
   });
+  const projectInitializationView = (
+    projectKey: string,
+    initialization: ProjectInitializationView,
+  ) => {
+    const initializationPath =
+      `/api/v1/platform/projects/${projectKey}/initialization`;
+    const extensionsPath = `/api/v1/projects/${projectKey}/extensions`;
+    return {
+      status: initialization.status,
+      preset: initialization.preset,
+      record: initialization.record
+        ? {
+            presetKey: initialization.record.presetKey,
+            presetVersion: initialization.record.presetVersion,
+            initializedBy: initialization.record.createdByName,
+            initializedAt: initialization.record.createdAt,
+          }
+        : null,
+      tasks: initialization.tasks.map((task) => ({
+        ...task,
+        links: { nextStep: extensionsPath },
+      })),
+      links: {
+        self: initializationPath,
+        extensions: extensionsPath,
+        actions: { initialize: initializationPath },
+      },
+    };
+  };
   const platformCustomerView = (customer: {
     customerKey: string;
     name: string;
@@ -1354,6 +1450,7 @@ export const buildControlPlaneApi = (
       })),
       links: {
         requirements: `/api/v1/projects/${project.projectKey}/requirements`,
+        extensions: `/api/v1/projects/${project.projectKey}/extensions`,
       },
     })),
   });
@@ -1483,6 +1580,57 @@ export const buildControlPlaneApi = (
         { expectedRevision: command.data.expectedRevision },
       );
       return reply.header("Cache-Control", "no-store").status(204).send();
+    },
+  );
+
+  app.get(
+    "/api/v1/platform/projects/:projectKey/initialization",
+    async (request, reply) => {
+      const params = platformProjectParamsSchema.safeParse(request.params);
+      if (!params.success) throw platformValidationError(params.error);
+      const principal = principalFrom(request);
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const initialization = await projectInitializations.get(
+        principal,
+        params.data.projectKey,
+      );
+      return reply.header("Cache-Control", "no-store").send({
+        data: projectInitializationView(
+          params.data.projectKey,
+          initialization,
+        ),
+      });
+    },
+  );
+
+  app.put(
+    "/api/v1/platform/projects/:projectKey/initialization",
+    async (request, reply) => {
+      const params = platformProjectParamsSchema.safeParse(request.params);
+      const command = projectInitializationCommandSchema.safeParse(
+        request.body,
+      );
+      if (!params.success) throw platformValidationError(params.error);
+      if (!command.success) throw platformValidationError(command.error);
+      const principal = principalFrom(request);
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const initialization = await projectInitializations.initialize(
+        principal,
+        params.data.projectKey,
+        command.data,
+      );
+      return reply.header("Cache-Control", "no-store").send({
+        data: projectInitializationView(
+          params.data.projectKey,
+          initialization,
+        ),
+      });
     },
   );
 
@@ -1892,6 +2040,24 @@ export const buildControlPlaneApi = (
       data: await extensions.overviewForPeople(principal),
     });
   });
+
+  app.get(
+    "/api/v1/projects/:projectKey/extensions",
+    async (request, reply) => {
+      const params = platformProjectParamsSchema.safeParse(request.params);
+      if (!params.success) throw platformValidationError(params.error);
+      const principal = principalFrom(request);
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      return reply.send({
+        data: await extensionCatalogFor(
+          params.data.projectKey,
+        ).overviewForPeople(principal),
+      });
+    },
+  );
 
   app.post(
     "/api/v1/extensions/skills",
