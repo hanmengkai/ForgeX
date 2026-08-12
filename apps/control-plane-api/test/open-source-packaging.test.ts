@@ -29,7 +29,8 @@ describe("开源交付包装", () => {
       webDockerfile,
       dockerignore,
       nginx,
-      runtimeConfig,
+      localRuntimeConfig,
+      productionRuntimeConfig,
       readme,
     ] = await Promise.all([
       read("deploy/compose.yaml"),
@@ -38,6 +39,7 @@ describe("开源交付包装", () => {
       read(".dockerignore"),
       read("deploy/nginx.conf"),
       read("deploy/config/control-plane.example.json"),
+      read("deploy/config/control-plane.production.example.json"),
       read("README.md"),
     ]);
 
@@ -63,14 +65,25 @@ describe("开源交付包装", () => {
     expect(nginx.slice(nginx.indexOf("location /api/"))).toContain(
       "Content-Security-Policy",
     );
-    expect(runtimeConfig).toContain("tokenSha256");
-    expect(runtimeConfig).not.toMatch(/"(?:token|password|sessionKey)"\s*:/u);
+    expect(localRuntimeConfig).toContain("tokenSha256");
+    expect(localRuntimeConfig).toContain(
+      '"publicOrigin": "http://localhost:8080"',
+    );
+    expect(localRuntimeConfig).toContain('"sessionCookieSecure": false');
+    expect(productionRuntimeConfig).toContain(
+      '"publicOrigin": "https://forgex.example.com"',
+    );
+    expect(productionRuntimeConfig).toContain('"sessionCookieSecure": true');
+    expect(`${localRuntimeConfig}${productionRuntimeConfig}`).not.toMatch(
+      /"(?:token|password|sessionKey)"\s*:/u,
+    );
     expect(readme).toContain("docker compose");
     expect(readme).toContain("npm run db:migrate");
     expect(readme).toContain("0014_browser_sessions.sql");
     expect(readme).toContain("0015_worker_enrollments.sql");
     expect(readme).toContain("0016_requirement_revisions.sql");
     expect(readme).toContain("0017_delivery_skills.sql");
+    expect(readme).toContain("0020_requirement_repository_context.sql");
   });
 
   it("CI 对格式、类型、测试和生产构建执行统一门禁", async () => {
@@ -79,17 +92,25 @@ describe("开源交付包装", () => {
       "npm ci",
       "npm run format:check",
       "npm run typecheck",
-      "npm test",
+      "npm run test:coverage",
       "npm run build:all",
       "npm run --workspace @forgex/verification-runner build:verifier",
       "npx playwright install --with-deps chromium",
       "npm run test:e2e",
+      "npm run test:e2e:postgres",
     ]) {
       expect(workflow).toContain(command);
     }
     expect(workflow).toContain("services:");
     expect(workflow).toContain("postgres:17-alpine");
     expect(workflow).toContain("FORGEX_TEST_DATABASE_URL");
+
+    const vitestConfig = await read("vitest.config.ts");
+    expect(vitestConfig).toContain("thresholds:");
+    expect(vitestConfig).toContain("statements: 80");
+    expect(vitestConfig).toContain("lines: 80");
+    expect(vitestConfig).toContain("functions: 80");
+    expect(vitestConfig).toContain("branches: 69");
   });
 
   it("仓库交付可构建且不执行候选脚本的独立验证镜像", async () => {

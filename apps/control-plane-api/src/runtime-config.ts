@@ -17,6 +17,23 @@ const internalKey = z
   .transform((value) => value.toLowerCase());
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
 const publicKeyBase64 = z.string().min(40).max(1_000);
+const publicOrigin = z
+  .string()
+  .trim()
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    const url = new URL(value);
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      !url.username &&
+      !url.password &&
+      url.pathname === "/" &&
+      !url.search &&
+      !url.hash
+    );
+  }, "公开访问地址必须是无凭据、路径、查询参数和片段的 HTTP(S) Origin")
+  .transform((value) => new URL(value).origin);
 const platformRole = z.enum([
   "product_owner",
   "requirement_analyst",
@@ -64,6 +81,7 @@ export const ControlPlaneRuntimeConfigSchema = z
       .max(253)
       .regex(/^[A-Za-z0-9:.-]+$/u),
     port: z.number().int().min(1).max(65_535),
+    publicOrigin: publicOrigin.optional(),
     sessionCookieSecure: z.boolean().default(true),
     sessionCookieMaxAgeSeconds: z
       .number()
@@ -139,6 +157,37 @@ export const ControlPlaneRuntimeConfigSchema = z
   })
   .strict()
   .superRefine((config, context) => {
+    const originUrl = config.publicOrigin
+      ? new URL(config.publicOrigin)
+      : undefined;
+    const browserHostname = (originUrl?.hostname ?? config.host).toLowerCase();
+    const isLoopbackBrowser = [
+      "127.0.0.1",
+      "[::1]",
+      "::1",
+      "localhost",
+    ].includes(browserHostname);
+    if (!config.sessionCookieSecure && !originUrl) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicOrigin"],
+        message: "关闭 Secure Cookie 时必须显式声明回环 publicOrigin",
+      });
+    }
+    if (!config.sessionCookieSecure && !isLoopbackBrowser) {
+      context.addIssue({
+        code: "custom",
+        path: ["sessionCookieSecure"],
+        message: "非回环公开地址必须启用 Secure Cookie 并通过 HTTPS 访问",
+      });
+    }
+    if (originUrl && !isLoopbackBrowser && originUrl.protocol !== "https:") {
+      context.addIssue({
+        code: "custom",
+        path: ["publicOrigin"],
+        message: "非回环公开地址必须使用 HTTPS",
+      });
+    }
     const peopleDigests = new Set(
       config.sessions.map((session) => session.tokenSha256),
     );

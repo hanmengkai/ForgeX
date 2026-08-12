@@ -40,7 +40,7 @@ FORGEX_DATABASE_URL=postgresql://forgex:password@localhost:5432/forgex npm run d
 ## Docker Compose 本地部署
 
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，用 `openssl rand -hex 32` 生成 64 位十六进制数据库密码，并把同一个值分别写入 `FORGEX_POSTGRES_PASSWORD` 与已经 URL 编码的 `FORGEX_DATABASE_URL`。如使用其他字符集，必须先对 URL 用户信息部分做 percent-encoding，不能直接把原始密码拼进 URI。
-2. 复制 `deploy/config/control-plane.example.json` 为 `deploy/config/control-plane.json`。
+2. 仅本机访问时，复制 `deploy/config/control-plane.example.json` 为 `deploy/config/control-plane.json`；该模板通过 `publicOrigin: http://localhost:8080` 明确限定浏览器回环访问，因此可以关闭 Secure Cookie。公开部署必须改用 `deploy/config/control-plane.production.example.json`，把 `publicOrigin` 替换为真实 HTTPS Origin，并在 Web 前配置 TLS 终止点；非回环 HTTP 或关闭 Secure Cookie 的配置会在启动时被拒绝。
 3. 在 `deploy/.env` 设置 `FORGEX_BOOTSTRAP_ADMIN_USERNAME`、`FORGEX_BOOTSTRAP_ADMIN_NAME` 和至少 12 位的随机强密码 `FORGEX_BOOTSTRAP_ADMIN_PASSWORD`。它只在当前租户还没有任何平台账号时创建首个超级管理员；初始化完成后应从部署环境移除明文密码。`control-plane.json` 中的摘要令牌继续供受控的非浏览器客户端使用，人员令牌与 Runner 令牌不得复用。
 4. 对最终的 `control-plane.json` 计算 SHA-256，并写入 `FORGEX_CONTROL_PLANE_CONFIG_SHA256`。Linux 可用 `sha256sum deploy/config/control-plane.json`，PowerShell 可用 `(Get-FileHash deploy/config/control-plane.json -Algorithm SHA256).Hash.ToLowerInvariant()`。任何授权配置变化都必须同步更新该摘要，并会立即令旧浏览器会话失效。
 5. 从仓库根目录启动：
@@ -49,7 +49,7 @@ FORGEX_DATABASE_URL=postgresql://forgex:password@localhost:5432/forgex npm run d
 docker compose --env-file deploy/.env -f deploy/compose.yaml up --build
 ```
 
-Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须在 Web 前增加 TLS，并把示例标识、摘要和数据库密码全部替换。
+Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须让浏览器始终通过与 `publicOrigin` 完全一致的 HTTPS 地址访问，并把示例域名、标识、摘要和数据库密码全部替换；TLS 可以终止在 Web 前的可信反向代理，上游 Compose 内网仍可使用 HTTP。
 
 ## 可信 Skill 发布与激活
 
@@ -186,8 +186,8 @@ Web Console 默认运行在 `http://localhost:4173`，并把 `/api` 转发到本
 
 浏览器使用平台账号和密码调用同源会话入口；服务端以 `scrypt` 校验数据库中的盐值哈希，并交换为随机 opaque 会话。数据库不保存明文密码，只保存密码哈希、会话摘要、服务端到期时间和当前授权配置版本。返回的 `forgex_session` Cookie 使用 `HttpOnly`、`SameSite=Strict`、`Path=/`；除明确用于本机 HTTP 的配置外还必须启用 `Secure`。同一人员重新登录会撤销其旧会话，注销、服务端到期、账号修改或删除以及替换运行配置摘要都会让旧 Cookie 返回 401。Web 不把密码写入 `localStorage`、构建变量或普通日志，成功登录后立即清空输入；Cookie 写请求要求 `X-ForgeX-CSRF: 1`。超级管理员可在“平台管理 / 账号管理”中增删改查本租户所有账号，并为账号重置密码；系统会阻止停用或删除最后一个可用超级管理员。非浏览器客户端仍可使用 `Authorization: Bearer ...`。组织级 SSO 可在相同 `SessionAuthenticator` 边界接入。
 
-生产接入前必须运行 `npm run db:migrate`。统一迁移器会按编号校验并执行从 [0001_worker_fleet.sql](packages/postgres/migrations/0001_worker_fleet.sql) 到 [0019_platform_configuration.sql](packages/postgres/migrations/0019_platform_configuration.sql) 的完整迁移链，禁止改写已登记迁移或跳过中间版本；Control Plane 的 readiness 也会核对名称与 SHA-256，不完整或漂移时返回 503。所有 API 副本必须连接同一数据库，并使用稳定且与设备端一致的 `projectKey`、`repositoryKey`。需求、Runner、Skill 与 MCP 的验证器必须保留历史公钥，并把退役密钥设置为仅核验历史记录。当前仍是预发布版本，不应直接用于生产交付。
+生产接入前必须运行 `npm run db:migrate`。统一迁移器会按编号校验并执行从 [0001_worker_fleet.sql](packages/postgres/migrations/0001_worker_fleet.sql) 到 [0020_requirement_repository_context.sql](packages/postgres/migrations/0020_requirement_repository_context.sql) 的完整迁移链，禁止改写已登记迁移或跳过中间版本；Control Plane 的 readiness 也会核对名称与 SHA-256，不完整或漂移时返回 503。所有 API 副本必须连接同一数据库，并使用稳定且与设备端一致的 `projectKey`、`repositoryKey`。需求、Runner、Skill 与 MCP 的验证器必须保留历史公钥，并把退役密钥设置为仅核验历史记录。当前仍是预发布版本，不应直接用于生产交付。
 
-当前完整顺序为 `0001_worker_fleet.sql`、`0002_requirement_control_plane.sql`、`0003_requirement_acceptance_audit.sql`、`0004_preview_artifacts.sql`、`0005_extension_catalog.sql`、`0006_skill_registry.sql`、`0007_mcp_registry.sql`、`0008_mcp_invocations.sql`、`0009_worker_work_kinds.sql`、`0010_knowledge_bases.sql`、`0011_delivery_runs.sql`、`0012_runner_verification.sql`、`0013_verification_failures.sql`、`0014_browser_sessions.sql`、`0015_worker_enrollments.sql`、`0016_requirement_revisions.sql`、`0017_delivery_skills.sql`、`0018_platform_accounts.sql`、`0019_platform_configuration.sql`。生产装配共享 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository`、`PostgresPreviewArtifactStore`、`PostgresExtensionCatalogRepository`、`PostgresSkillRegistryRepository`、`PostgresSkillArtifactStore`、`PostgresMcpRegistryRepository`、`PostgresMcpInputSchemaStore`、`PostgresMcpInvocationRepository`、`PostgresKnowledgeBaseRepository`、`PostgresAccountRepository` 与 `PostgresPlatformConfigurationRepository`，并由 `PostgresBrowserSessionManager` 保存有界、可撤销的浏览器会话摘要，由 `PostgresWorkerEnrollmentManager` 保存短期且绑定设备身份的接入授权。
+当前完整顺序为 `0001_worker_fleet.sql`、`0002_requirement_control_plane.sql`、`0003_requirement_acceptance_audit.sql`、`0004_preview_artifacts.sql`、`0005_extension_catalog.sql`、`0006_skill_registry.sql`、`0007_mcp_registry.sql`、`0008_mcp_invocations.sql`、`0009_worker_work_kinds.sql`、`0010_knowledge_bases.sql`、`0011_delivery_runs.sql`、`0012_runner_verification.sql`、`0013_verification_failures.sql`、`0014_browser_sessions.sql`、`0015_worker_enrollments.sql`、`0016_requirement_revisions.sql`、`0017_delivery_skills.sql`、`0018_platform_accounts.sql`、`0019_platform_configuration.sql`、`0020_requirement_repository_context.sql`。生产装配共享 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository`、`PostgresPreviewArtifactStore`、`PostgresExtensionCatalogRepository`、`PostgresSkillRegistryRepository`、`PostgresSkillArtifactStore`、`PostgresMcpRegistryRepository`、`PostgresMcpInputSchemaStore`、`PostgresMcpInvocationRepository`、`PostgresKnowledgeBaseRepository`、`PostgresAccountRepository` 与 `PostgresPlatformConfigurationRepository`，并由 `PostgresBrowserSessionManager` 保存有界、可撤销的浏览器会话摘要，由 `PostgresWorkerEnrollmentManager` 保存短期且绑定设备身份的接入授权。
 
 详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。

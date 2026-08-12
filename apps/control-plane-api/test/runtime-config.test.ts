@@ -23,6 +23,84 @@ const digest = (value: string) =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
 describe("Control Plane 运行配置", () => {
+  const runtimeConfig = (
+    host: string,
+    sessionCookieSecure: boolean,
+    publicOrigin?: string,
+  ) => ({
+    schemaVersion: 1 as const,
+    host,
+    port: 3000,
+    sessionCookieSecure,
+    ...(publicOrigin ? { publicOrigin } : {}),
+    projectKey,
+    repositoryKey,
+    sessions: [
+      {
+        tokenSha256: digest("people-session-token-with-enough-entropy"),
+        principal: {
+          actorKey,
+          actorName: "产品负责人",
+          tenantKey,
+          roles: ["product_owner" as const],
+        },
+      },
+    ],
+    runnerSessions: [],
+    trustedRunners: [],
+    skillEvaluators: [],
+    mcpVerifiers: [],
+  });
+
+  it("按浏览器公开 Origin 限制不安全 Cookie", () => {
+    expect(
+      ControlPlaneRuntimeConfigSchema.safeParse(
+        runtimeConfig("127.0.0.1", false, "http://127.0.0.1:3000"),
+      ).success,
+    ).toBe(true);
+    expect(
+      ControlPlaneRuntimeConfigSchema.safeParse(
+        runtimeConfig("::1", false, "http://[::1]:3000"),
+      ).success,
+    ).toBe(true);
+    expect(
+      ControlPlaneRuntimeConfigSchema.safeParse(
+        runtimeConfig("0.0.0.0", false, "http://localhost:8080"),
+      ).success,
+    ).toBe(true);
+
+    const publicHttp = ControlPlaneRuntimeConfigSchema.safeParse(
+      runtimeConfig("0.0.0.0", false, "http://forgex.example.com"),
+    );
+    expect(publicHttp.success).toBe(false);
+    if (!publicHttp.success) {
+      expect(publicHttp.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["sessionCookieSecure"],
+          message: "非回环公开地址必须启用 Secure Cookie 并通过 HTTPS 访问",
+        }),
+      );
+    }
+    expect(
+      ControlPlaneRuntimeConfigSchema.safeParse(
+        runtimeConfig("0.0.0.0", true, "https://forgex.example.com"),
+      ).success,
+    ).toBe(true);
+
+    const missingOrigin = ControlPlaneRuntimeConfigSchema.safeParse(
+      runtimeConfig("127.0.0.1", false),
+    );
+    expect(missingOrigin.success).toBe(false);
+    if (!missingOrigin.success) {
+      expect(missingOrigin.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["publicOrigin"],
+          message: "关闭 Secure Cookie 时必须显式声明回环 publicOrigin",
+        }),
+      );
+    }
+  });
+
   it("从文件加载严格配置并拒绝缺失或非 PostgreSQL 数据库地址", async () => {
     const directory = await mkdtemp(join(tmpdir(), "forgex-control-plane-"));
     const path = join(directory, "runtime.json");
