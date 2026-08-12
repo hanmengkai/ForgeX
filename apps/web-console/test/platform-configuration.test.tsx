@@ -210,7 +210,7 @@ describe("平台资源配置", () => {
       overview.customers[0]!.projects[0]!.links.initialization,
     );
     expect(initializeProject).not.toHaveBeenCalled();
-    expect(screen.getByText("补充项目规则资料")).toBeInTheDocument();
+    expect(await screen.findByText("补充项目规则资料")).toBeInTheDocument();
     expect(screen.getByText("安装并评测团队 Skill")).toBeInTheDocument();
     expect(screen.getByText("连接并验证外部工具")).toBeInTheDocument();
 
