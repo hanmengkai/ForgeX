@@ -34,3 +34,7 @@ export {
   PostgresPlatformConfigurationRepository,
   type PostgresPlatformConfigurationPool,
 } from "./postgres-platform-configuration-repository.js";
+export {
+  PostgresProjectInitializationRepository,
+  type PostgresProjectInitializationPool,
+} from "./postgres-project-initialization-repository.js";
