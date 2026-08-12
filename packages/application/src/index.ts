@@ -212,3 +212,16 @@ export {
   SkillRegistryApplicationService,
   type SkillRegistryApplicationServiceOptions,
 } from "./skill-registry-service.js";
+export {
+  InMemoryProjectInitializationRepository,
+  ProjectInitializationService,
+  STANDARD_DELIVERY_PRESET,
+  type ProjectInitializationCommand,
+  type ProjectInitializationReadiness,
+  type ProjectInitializationReadinessInspector,
+  type ProjectInitializationRecord,
+  type ProjectInitializationRepository,
+  type ProjectInitializationServiceOptions,
+  type ProjectInitializationTask,
+  type ProjectInitializationView,
+} from "./project-initialization-service.js";
