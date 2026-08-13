@@ -174,7 +174,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
             throw new Error("事务不能写入其他范围的 Codex 过程事件");
           }
           const inserted = await client.query(
-            "INSERT INTO forgex_requirement_execution_events (event_key, tenant_key, project_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb) ON CONFLICT DO NOTHING RETURNING event_key",
+            "INSERT INTO forgex_requirement_execution_events (event_key, tenant_key, project_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event) VALUES ($1, $2, $3, $4, $5, $6, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM forgex_requirement_execution_events WHERE tenant_key = $2 AND assignment_key = $6), $7, $8::jsonb) ON CONFLICT DO NOTHING RETURNING event_key",
             [
               parsed.eventKey,
               tenant,
@@ -182,15 +182,14 @@ export class PostgresRequirementRepository implements RequirementRepository {
               parsed.requirementKey,
               parsed.requirementRevision,
               parsed.assignmentKey,
-              parsed.sequence,
               parsed.occurredAt,
               JSON.stringify(parsed.event),
             ],
           );
           if (inserted.rows.length > 0) return true;
           const existing = await client.query(
-            "SELECT event_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event FROM forgex_requirement_execution_events WHERE tenant_key = $1 AND (event_key = $2 OR (assignment_key = $3 AND sequence = $4))",
-            [tenant, parsed.eventKey, parsed.assignmentKey, parsed.sequence],
+            "SELECT event_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event FROM forgex_requirement_execution_events WHERE tenant_key = $1 AND event_key = $2",
+            [tenant, parsed.eventKey],
           );
           const row = existing.rows[0];
           if (!row) throw new Error("Codex 过程事件写入冲突");
@@ -199,7 +198,12 @@ export class PostgresRequirementRepository implements RequirementRepository {
             tenant,
             project,
           );
-          if (JSON.stringify(stored) !== JSON.stringify(parsed)) {
+          const { sequence: _storedSequence, ...storedComparable } = stored;
+          const { sequence: _parsedSequence, ...parsedComparable } = parsed;
+          if (
+            JSON.stringify(storedComparable) !==
+            JSON.stringify(parsedComparable)
+          ) {
             throw new Error("同一 Codex 过程事件不能绑定不同内容");
           }
           return false;
@@ -214,7 +218,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
             throw new Error("Codex 过程事件查询上限无效");
           }
           const result = await client.query(
-            "SELECT event_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event FROM forgex_requirement_execution_events WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4 ORDER BY sequence DESC, occurred_at DESC LIMIT $5",
+            "SELECT event_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event FROM forgex_requirement_execution_events WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4 ORDER BY occurred_at DESC, sequence DESC LIMIT $5",
             [tenant, project, requirement, requirementRevision, limit],
           );
           return result.rows

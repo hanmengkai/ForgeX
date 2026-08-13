@@ -172,22 +172,34 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           pendingDeliveryExecutionEvents.get(eventKey) ??
           this.#deliveryExecutionEvents.get(eventKey);
         if (existing) {
-          if (JSON.stringify(existing) === JSON.stringify(parsed)) return false;
+          const { sequence: _existingSequence, ...existingComparable } =
+            existing;
+          const { sequence: _parsedSequence, ...parsedComparable } = parsed;
+          if (
+            JSON.stringify(existingComparable) ===
+            JSON.stringify(parsedComparable)
+          ) {
+            return false;
+          }
           throw new Error("同一过程事件标识不能绑定不同内容");
         }
-        const sequenceConflict = [
+        const assignmentEvents = [
           ...this.#deliveryExecutionEvents.values(),
           ...pendingDeliveryExecutionEvents.values(),
-        ].find(
-          (event) =>
-            event.tenantKey === normalizedTenantKey &&
-            event.assignmentKey === parsed.assignmentKey &&
-            event.sequence === parsed.sequence,
+        ].filter(
+          (item) =>
+            item.tenantKey === normalizedTenantKey &&
+            item.assignmentKey === parsed.assignmentKey,
         );
-        if (sequenceConflict) {
-          throw new Error("同一设备任务不能重复使用过程事件序号");
-        }
-        pendingDeliveryExecutionEvents.set(eventKey, structuredClone(parsed));
+        const nextSequence =
+          assignmentEvents.reduce(
+            (maximum, item) => Math.max(maximum, item.sequence),
+            0,
+          ) + 1;
+        pendingDeliveryExecutionEvents.set(eventKey, {
+          ...structuredClone(parsed),
+          sequence: nextSequence,
+        });
         return true;
       },
       listDeliveryExecutionEvents: async (
@@ -211,8 +223,8 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           )
           .sort(
             (left, right) =>
-              left.sequence - right.sequence ||
-              left.occurredAt.localeCompare(right.occurredAt),
+              left.occurredAt.localeCompare(right.occurredAt) ||
+              left.sequence - right.sequence,
           )
           .slice(-limit)
           .map((event) => structuredClone(event));

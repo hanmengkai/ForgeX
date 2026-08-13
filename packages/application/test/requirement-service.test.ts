@@ -60,6 +60,19 @@ describe("RequirementApplicationService", () => {
       event: { kind: "lifecycle", status: "started" },
     });
     await service.recordExecutionEvent(tenantKey, {
+      eventKey: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      sequence: 1,
+      occurredAt: "2026-08-13T04:00:00.500Z",
+      event: {
+        kind: "tool",
+        tool: "list_workspace",
+        status: "started",
+      },
+    });
+    await service.recordExecutionEvent(tenantKey, {
       eventKey: "88888888-8888-4888-8888-888888888888",
       assignmentKey: "77777777-7777-4777-8777-777777777777",
       requirementKey: created.requirementKey,
@@ -130,6 +143,11 @@ describe("RequirementApplicationService", () => {
           title: "Codex 开始分析需求",
           detail: "已进入受控项目工作区",
           occurredAt: "2026-08-13T04:00:00.000Z",
+        },
+        {
+          title: "浏览项目结构",
+          detail: "正在执行",
+          occurredAt: "2026-08-13T04:00:00.500Z",
         },
         {
           title: "检索相关代码",

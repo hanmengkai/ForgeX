@@ -851,6 +851,20 @@ describe("PostgresRequirementRepository", () => {
         status: "completed",
       }),
     );
+    expect(
+      database.queries.find((query) =>
+        query.text.startsWith(
+          "INSERT INTO forgex_requirement_execution_events",
+        ),
+      )?.text,
+    ).toContain("COALESCE(MAX(sequence), 0) + 1");
+    expect(
+      database.queries.find((query) =>
+        query.text.startsWith(
+          "SELECT event_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event FROM forgex_requirement_execution_events WHERE tenant_key",
+        ),
+      )?.text,
+    ).toContain("ORDER BY occurred_at DESC, sequence DESC");
   });
 
   it("过程事件迁移只保存结构化摘要，并按任务序号防止重复", () => {
