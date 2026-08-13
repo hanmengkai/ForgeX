@@ -429,6 +429,8 @@ describe("RequirementWorkbench", () => {
       refresh();
     });
     expect(client.listRequirements).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("访客预约")).toBeInTheDocument();
+    expect(screen.queryByText("正在整理需求进度…")).not.toBeInTheDocument();
 
     pending.resolve({ items, nextCursor: null });
     await waitFor(() =>

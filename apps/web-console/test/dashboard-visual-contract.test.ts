@@ -65,4 +65,13 @@ describe("工作台精致紧凑视觉契约", () => {
     );
     expect(styles).toMatch(/\.dialog\s*\{[^}]*padding:\s*22px;/);
   });
+
+  it("业务范围控件允许在有限工作区内收缩且不互相遮挡", () => {
+    expect(styles).toMatch(
+      /\.requirement-context-panel > div,\s*\.requirement-context-panel label,\s*\.context-repository-count\s*\{[^}]*min-width:\s*0;/,
+    );
+    expect(styles).toMatch(
+      /\.requirement-context-panel select\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/,
+    );
+  });
 });
