@@ -177,6 +177,21 @@ const executionEventView = (
   };
 };
 
+const currentExecutionAttempt = (
+  records: DeliveryExecutionEventRecord[],
+): DeliveryExecutionEventRecord[] => {
+  let latestStartedIndex = -1;
+  records.forEach((record, index) => {
+    if (
+      record.event.kind === "lifecycle" &&
+      record.event.status === "started"
+    ) {
+      latestStartedIndex = index;
+    }
+  });
+  return latestStartedIndex < 0 ? records : records.slice(latestStartedIndex);
+};
+
 export interface RequirementListQuery {
   cursor?: string;
   limit?: number;
@@ -847,7 +862,8 @@ export class RequirementApplicationService {
             verificationFailed: verificationFailure !== null,
             acceptance,
           }),
-          executionEvents: executionEvents.map(executionEventView),
+          executionEvents:
+            currentExecutionAttempt(executionEvents).map(executionEventView),
         };
       },
     );
