@@ -2531,7 +2531,10 @@ h1 {
 
 .requirement-context-panel {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) repeat(2, minmax(180px, 260px)) auto;
+  grid-template-columns: minmax(150px, 1fr) repeat(
+      2,
+      minmax(160px, 260px)
+    ) minmax(135px, max-content);
   gap: 18px;
   align-items: end;
   padding: 16px 18px;

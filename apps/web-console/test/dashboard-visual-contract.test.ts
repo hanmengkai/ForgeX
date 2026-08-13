@@ -68,7 +68,7 @@ describe("工作台精致紧凑视觉契约", () => {
 
   it("业务范围控件允许在有限工作区内收缩且不互相遮挡", () => {
     expect(styles).toMatch(
-      /\.requirement-context-panel\s*\{[^}]*grid-template-columns:\s*minmax\(150px, 1fr\) repeat\(2, minmax\(160px, 260px\)\) minmax\(135px, max-content\);/,
+      /\.requirement-context-panel\s*\{[^}]*grid-template-columns:\s*minmax\(150px, 1fr\)\s*repeat\(\s*2,\s*minmax\(160px, 260px\)\s*\)\s*minmax\(\s*135px,\s*max-content\s*\);/,
     );
     expect(styles).toMatch(
       /\.requirement-context-panel > div,\s*\.requirement-context-panel label,\s*\.context-repository-count\s*\{[^}]*min-width:\s*0;/,
