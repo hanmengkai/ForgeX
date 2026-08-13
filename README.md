@@ -1,5 +1,7 @@
 # ForgeX
 
+[简体中文](README.md) | [English](README.en.md)
+
 ForgeX 是一个开源的 AI 软件交付控制面。它把需求澄清、方案、开发、验证、Preview 和人工审批组织成可追踪的交付流程，并能够调度多台分别登录 Codex 的客户设备并行处理需求。
 
 > 当前状态：`0.1.0` 预发布版。仓库提供完整的本地部署、持久化控制面、Web、设备 Worker 与独立验证 Runner；公开上线前仍需由部署者接入组织身份源、TLS、备份和监控。
@@ -20,16 +22,37 @@ ForgeX 是一个开源的 AI 软件交付控制面。它把需求澄清、方案
 4. CI 和独立 Runner 产生验证结论，Agent 不能自证通过。
 5. 不可逆操作必须经过明确的人工审批。
 
+## 系统结构
+
+```text
+产品与需求人员 -> Web Console -> Control Plane -> PostgreSQL
+                                  |       |
+                                  |       +-> 独立 Verification Runner
+                                  +----------> 客户设备 Worker -> 本机 Codex / MCP
+```
+
+- `apps/web-console`：面向普通用户的 React 工作台。
+- `apps/control-plane-api`：认证、需求、项目、调度、扩展和审计 API。
+- `services/device-worker`：在客户设备上隔离运行 Codex，并保留本地凭据。
+- `services/verification-runner`：从权威提交运行固定验证套件并发布 Preview。
+- `services/extension-admin`：在受控管理员环境中发布和验证 Skill、MCP。
+- `packages/*`：领域、应用、契约、扩展和 PostgreSQL 适配层。
+
 ## 本地验证
 
 需要 Node.js 22.13 或更高版本，推荐使用当前 Node.js 24 LTS。
 
 ```bash
-npm install
-npm test
+npm ci
+npm run format:check
 npm run typecheck
+npm run test:coverage
+npm run build:all
+npm run test:e2e
 npm run --workspace @forgex/web-console dev
 ```
+
+真实 PostgreSQL 浏览器闭环还需要可用的 `FORGEX_TEST_DATABASE_URL`，且隔离测试数据库名称必须以 `_test` 结尾，然后运行 `npm run test:e2e:postgres`。完整命令说明见 [贡献指南](CONTRIBUTING.md)。
 
 数据库迁移由带校验和账本和 PostgreSQL advisory lock 的统一命令执行，不要再逐个手工运行 SQL：
 
@@ -50,6 +73,10 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml up --build
 ```
 
 Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网暴露。迁移服务成功退出后 API 才会启动，Web 又会等待数据库就绪探针通过。公开部署必须让浏览器始终通过与 `publicOrigin` 完全一致的 HTTPS 地址访问，并把示例域名、标识、摘要和数据库密码全部替换；TLS 可以终止在 Web 前的可信反向代理，上游 Compose 内网仍可使用 HTTP。
+
+## 标准项目初始化
+
+平台管理员可以在“平台管理 / 客户与项目”中为项目启用 `standard-delivery@1`。初始化会写入租户与项目范围内的幂等台账，并展示三项后续工作：补充项目知识、安装并评测团队 Skill、连接并验证 MCP。`action_required` 表示仍需管理员配置，不代表初始化失败；系统不会复制 MCP 凭据，也不会自动启用本地连接。
 
 ## 可信 Skill 发布与激活
 
@@ -109,6 +136,8 @@ npm run --workspace @forgex/extension-admin admin -- mcp-health-release \
 
 生成的 bundle 不含 URL 请求头、环境变量、stdio 参数里的本地秘密或其他连接凭据，只包含业务清单、规范 Schema 和由独立 MCP 探测私钥签名的健康证明。发布命令严格按“发布清单与 Schema、登记健康证明、启用修订”执行；响应丢失时必须重放同一个 bundle，不能重新探测或重新生成标识。健康证明最多使用 24 小时；应在到期前定时执行 `mcp-health-pack` 与 `mcp-health-release`。前者先从控制面读取当前探测链头，再对同一受保护连接重新协商并精确核对原服务身份、协议和全部 Schema；后者普通续期只登记新证明，只有携带控制面熔断恢复挑战时才重新启用。健康续期响应丢失时同样重放稳定的 health bundle，已经持久化的完全相同证明即使后来超过新写时效也能幂等确认，新生成的过期证明仍会拒绝。第 2 版起必须在输入中沿用原 `serverKey` 与各 `toolKey`，从而保留可审计历史。服务身份是 MCP 协议自报信息，签名证明的是“受保护的本地连接在该时刻实际协商并暴露了这些能力”，不把它提升为第三方身份认证。控制面派发时会把该身份摘要和协议版本固化到任务信封，Worker 在向本地连接发送任何工具调用前必须用真实 `initialize` 结果精确复核，替换成同名同 Schema 的另一服务也会失败关闭。
 
+## 独立验证 Runner
+
 独立验证 Runner 使用受保护的本地会话、Ed25519 私钥和日志完整性密钥，从权威 Git 仓库取出精确提交，再在无网络、非 root、资源受限的 Docker 容器中运行固定套件。验证镜像必须使用 registry digest 或本机 `sha256:<image-id>` 固定，Docker 与 Git 程序也会在每次使用前核对本地 SHA-256；Runner 不执行仓库提供的 shell 字符串，也不会把容器错误原文或秘密写入普通日志。验证全部通过后，Runner 会从同一权威提交中读取计划精确绑定的产品 HTML，按普通文件、路径、大小、UTF-8 和自包含资源边界校验，再把原始字节作为内容寻址 Preview 发布。控制面只在无网络、无表单提交、无跳转、无同源权限的 sandbox iframe 中展示它。Runner 只证明 Preview 与已验证提交精确绑定且能安全打开，不用标签或候选脚本替用户断言“交互已通过”；产品负责人必须实际操作该页面后再验收，固定套件证据仍独立证明业务条件。
 
 仓库随附一个真正可构建的最小独立验证镜像。它只读取只读候选工作树，检查锁文件、严格 TypeScript 基线、文件数量与大小、符号链接和敏感文件，不调用候选自己的 `npm scripts`。先构建镜像并记录内容寻址 ID：
@@ -155,6 +184,8 @@ npm run --workspace @forgex/verification-runner admin -- plan \
 FORGEX_RUNNER_CONFIG=/private/runner/runner.config.json npm run --workspace @forgex/verification-runner start
 ```
 
+## 客户设备 Worker
+
 客户设备 Worker 使用本机 Codex 登录，不把 Codex 凭据上传控制面。每个 Codex 账户应使用独立受限操作系统账号或容器和该隔离身份独占的空 `codexHomePath`，先把 Codex CLI 配置为系统 keyring 凭据存储并完成登录；该目录不得出现 `auth.json`、个人 `config.toml`、第三方 MCP、Skills、Hooks 或插件，隔离系统镜像也不得预装额外 Codex 配置。仓库随设备包交付 `forgex-codex-isolation-launcher`（构建产物为 `dist/isolation-launcher-main.js`），它在同一次 `--forgex-codex-run` 中先验证身份和文件边界，再调用固定版本的官方 `@openai/codex-sdk`；同控制器身份运行会直接失败。每次任务都把仓库标记为不可信，使仓库内 `.codex/config.toml` 不能扩展工具面。模型侧关闭通用 Shell、统一执行、图片读取、浏览器、桌面操作、应用、插件、记忆、Hooks、工作区依赖、网络和 Web 搜索，只保留内置 `apply_patch` 与 ForgeX 自带的只读工作树 MCP；启动前会读取真实 Codex CLI feature inventory，任何未分类的默认启用能力都会失败关闭，并用同一组运行参数读取真实 MCP inventory，要求唯一启用的服务及其命令、参数和工具白名单都与 ForgeX 可信清单完全一致。该 MCP 只提供有界的列目录、读普通业务文本和字面量搜索，不执行命令、不读取 `.git`、凭据文件、符号链接或工作树外路径。生产需用 root/管理员持有且其他用户不可写的 OS 包装器，在独立账号或容器内调用该 launcher。复制 [设备配置示例](services/device-worker/worker.config.example.json)，填入包装器路径与真实 SHA-256，再替换设备连接信息、项目与仓库标识以及本机绝对路径，然后执行：
 
 ```bash
@@ -177,6 +208,7 @@ Web Console 默认运行在 `http://localhost:4173`，并把 `/api` 转发到本
 - Codex 设备网关：账户数量不设产品上限，支持出站心跳、定向轮询、租约续期、fencing、重连回收和幂等完成。
 - Codex 设备 Worker：使用官方 TypeScript Codex SDK，在仓库外独立 worktree 中执行已确认需求；仓库身份、需求版本、基线提交、新提交、分支和永久完成证明形成可恢复审计链，开发测试不能替代独立验收证据。
 - 扩展控制面：按“业务资料、团队能力、外部工具”管理知识库、Skills 和 MCP 元数据，页面不暴露传输方式、凭据或内部标识。
+- 项目标准交付初始化：用 `standard-delivery@1` 建立项目级初始化台账，逐项呈现知识、Skill 与 MCP 的就绪状态，并保留管理员、时间和幂等请求审计。
 - 引用优先的业务知识库：需求分析师可发布和归档纯文本或 Markdown 资料，系统保留内容摘要与版本审计，并以带资料名、版本和段落的引用返回检索结果；资料内容始终按参考信息处理，不能覆盖平台指令或审批边界。
 - 可信 Skill 发布：规范包、内容哈希、独立 Ed25519 评测、管理员激活、可验证回滚与 PostgreSQL 审计；退役公钥仅用于恢复历史状态。
 - 可信 MCP 注册：设备本地连接绑定、独立 Ed25519 身份与能力探测、只读自动/变更确认策略、可验证回滚与 PostgreSQL 审计；页面不展示连接或工具编码。
@@ -186,8 +218,8 @@ Web Console 默认运行在 `http://localhost:4173`，并把 `/api` 转发到本
 
 浏览器使用平台账号和密码调用同源会话入口；服务端以 `scrypt` 校验数据库中的盐值哈希，并交换为随机 opaque 会话。数据库不保存明文密码，只保存密码哈希、会话摘要、服务端到期时间和当前授权配置版本。返回的 `forgex_session` Cookie 使用 `HttpOnly`、`SameSite=Strict`、`Path=/`；除明确用于本机 HTTP 的配置外还必须启用 `Secure`。同一人员重新登录会撤销其旧会话，注销、服务端到期、账号修改或删除以及替换运行配置摘要都会让旧 Cookie 返回 401。Web 不把密码写入 `localStorage`、构建变量或普通日志，成功登录后立即清空输入；Cookie 写请求要求 `X-ForgeX-CSRF: 1`。超级管理员可在“平台管理 / 账号管理”中增删改查本租户所有账号，并为账号重置密码；系统会阻止停用或删除最后一个可用超级管理员。非浏览器客户端仍可使用 `Authorization: Bearer ...`。组织级 SSO 可在相同 `SessionAuthenticator` 边界接入。
 
-生产接入前必须运行 `npm run db:migrate`。统一迁移器会按编号校验并执行从 [0001_worker_fleet.sql](packages/postgres/migrations/0001_worker_fleet.sql) 到 [0020_requirement_repository_context.sql](packages/postgres/migrations/0020_requirement_repository_context.sql) 的完整迁移链，禁止改写已登记迁移或跳过中间版本；Control Plane 的 readiness 也会核对名称与 SHA-256，不完整或漂移时返回 503。所有 API 副本必须连接同一数据库，并使用稳定且与设备端一致的 `projectKey`、`repositoryKey`。需求、Runner、Skill 与 MCP 的验证器必须保留历史公钥，并把退役密钥设置为仅核验历史记录。当前仍是预发布版本，不应直接用于生产交付。
+生产接入前必须运行 `npm run db:migrate`。统一迁移器会按编号校验并执行从 [0001_worker_fleet.sql](packages/postgres/migrations/0001_worker_fleet.sql) 到 [0021_project_initializations.sql](packages/postgres/migrations/0021_project_initializations.sql) 的完整迁移链，禁止改写已登记迁移或跳过中间版本；Control Plane 的 readiness 也会核对名称与 SHA-256，不完整或漂移时返回 503。所有 API 副本必须连接同一数据库，并使用稳定且与设备端一致的 `projectKey`、`repositoryKey`。需求、Runner、Skill 与 MCP 的验证器必须保留历史公钥，并把退役密钥设置为仅核验历史记录。当前仍是预发布版本，不应直接用于生产交付。
 
-当前完整顺序为 `0001_worker_fleet.sql`、`0002_requirement_control_plane.sql`、`0003_requirement_acceptance_audit.sql`、`0004_preview_artifacts.sql`、`0005_extension_catalog.sql`、`0006_skill_registry.sql`、`0007_mcp_registry.sql`、`0008_mcp_invocations.sql`、`0009_worker_work_kinds.sql`、`0010_knowledge_bases.sql`、`0011_delivery_runs.sql`、`0012_runner_verification.sql`、`0013_verification_failures.sql`、`0014_browser_sessions.sql`、`0015_worker_enrollments.sql`、`0016_requirement_revisions.sql`、`0017_delivery_skills.sql`、`0018_platform_accounts.sql`、`0019_platform_configuration.sql`、`0020_requirement_repository_context.sql`。生产装配共享 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository`、`PostgresPreviewArtifactStore`、`PostgresExtensionCatalogRepository`、`PostgresSkillRegistryRepository`、`PostgresSkillArtifactStore`、`PostgresMcpRegistryRepository`、`PostgresMcpInputSchemaStore`、`PostgresMcpInvocationRepository`、`PostgresKnowledgeBaseRepository`、`PostgresAccountRepository` 与 `PostgresPlatformConfigurationRepository`，并由 `PostgresBrowserSessionManager` 保存有界、可撤销的浏览器会话摘要，由 `PostgresWorkerEnrollmentManager` 保存短期且绑定设备身份的接入授权。
+当前完整顺序为 `0001_worker_fleet.sql`、`0002_requirement_control_plane.sql`、`0003_requirement_acceptance_audit.sql`、`0004_preview_artifacts.sql`、`0005_extension_catalog.sql`、`0006_skill_registry.sql`、`0007_mcp_registry.sql`、`0008_mcp_invocations.sql`、`0009_worker_work_kinds.sql`、`0010_knowledge_bases.sql`、`0011_delivery_runs.sql`、`0012_runner_verification.sql`、`0013_verification_failures.sql`、`0014_browser_sessions.sql`、`0015_worker_enrollments.sql`、`0016_requirement_revisions.sql`、`0017_delivery_skills.sql`、`0018_platform_accounts.sql`、`0019_platform_configuration.sql`、`0020_requirement_repository_context.sql`、`0021_project_initializations.sql`。生产装配共享 `PostgresWorkerFleetRepository`、`PostgresRequirementRepository`、`PostgresPreviewArtifactStore`、`PostgresExtensionCatalogRepository`、`PostgresSkillRegistryRepository`、`PostgresSkillArtifactStore`、`PostgresMcpRegistryRepository`、`PostgresMcpInputSchemaStore`、`PostgresMcpInvocationRepository`、`PostgresKnowledgeBaseRepository`、`PostgresAccountRepository`、`PostgresPlatformConfigurationRepository` 与 `PostgresProjectInitializationRepository`，并由 `PostgresBrowserSessionManager` 保存有界、可撤销的浏览器会话摘要，由 `PostgresWorkerEnrollmentManager` 保存短期且绑定设备身份的接入授权。
 
-详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。
+详细范围见 [产品章程](docs/product/PRODUCT_CHARTER.md) 和 [用户旅程](docs/product/USER_JOURNEYS.md)。参与贡献前请阅读 [贡献指南](CONTRIBUTING.md)、[安全政策](SECURITY.md) 和 [社区行为准则](CODE_OF_CONDUCT.md)。

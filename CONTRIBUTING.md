@@ -12,13 +12,23 @@
 
 需要 Node.js 22.13 或更高版本，推荐 Node.js 24 LTS。
 
-```bash
-npm ci
-npm run format:check
-npm run typecheck
-npm test
-npm run build:all
-```
+<!-- AUTO-GENERATED: package.json scripts -->
+
+| 命令                        | 用途                                   |
+| --------------------------- | -------------------------------------- |
+| `npm ci`                    | 按锁文件安装依赖。                     |
+| `npm run format:check`      | 检查 Prettier 格式。                   |
+| `npm run typecheck`         | 检查工作区和测试类型。                 |
+| `npm test`                  | 运行 Vitest 测试。                     |
+| `npm run test:coverage`     | 运行测试并检查覆盖率门禁。             |
+| `npm run build:all`         | 构建 TypeScript 工作区和 Web Console。 |
+| `npm run test:e2e`          | 运行默认 Playwright 浏览器测试。       |
+| `npm run test:e2e:postgres` | 构建后运行真实 PostgreSQL 浏览器闭环。 |
+| `npm run db:migrate`        | 校验并执行 PostgreSQL 顺序迁移。       |
+
+<!-- END AUTO-GENERATED -->
+
+提交前至少运行 `npm run format:check`、`npm run typecheck`、`npm run test:coverage` 和 `npm run build:all`。涉及浏览器旅程或 PostgreSQL 装配时，还要运行对应 E2E 命令。
 
 修复缺陷和新增行为应先添加能够失败的回归测试，再提交最小实现。提交信息使用简体中文，技术标识符保持原样。
 
