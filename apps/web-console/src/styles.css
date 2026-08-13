@@ -662,6 +662,15 @@ h1 {
   color: var(--success);
   background: var(--success-soft);
 }
+.status-pill.terminated,
+.status-dot.terminated {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+}
+
+.text-action.danger {
+  color: var(--danger);
+}
 
 .card-actions {
   display: flex;
@@ -709,6 +718,99 @@ h1 {
 
 .card-detail li span {
   line-height: 1.55;
+}
+
+.delivery-progress {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--brand-soft) 38%, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.delivery-progress-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.delivery-progress-heading > div {
+  display: grid;
+  gap: 5px;
+}
+
+.delivery-progress-heading > strong {
+  color: var(--brand);
+  font-size: 22px;
+}
+
+.delivery-progress-track {
+  height: 8px;
+  overflow: hidden;
+  background: var(--surface-strong);
+  border-radius: 999px;
+}
+
+.delivery-progress-track > span {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+  border-radius: inherit;
+  transition: width 220ms ease;
+}
+
+.card-detail .delivery-progress-stages {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.card-detail .delivery-progress-stages li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  padding: 9px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.delivery-progress-stages li > span {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  background: var(--line-strong);
+  border-radius: 50%;
+}
+
+.delivery-progress-stages li.completed > span {
+  background: var(--success);
+}
+
+.delivery-progress-stages li.active > span {
+  background: var(--brand);
+  box-shadow: 0 0 0 4px var(--brand-soft);
+}
+
+.delivery-progress-stages li.terminated > span {
+  background: var(--danger);
+}
+
+.delivery-progress-stages li div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.delivery-progress-stages small {
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .detail-error {
@@ -2478,6 +2580,67 @@ h1 {
   gap: 16px;
 }
 
+.query-toolbar {
+  display: flex;
+  gap: 14px;
+  align-items: end;
+  padding: 14px;
+  margin-bottom: 16px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+}
+
+.query-field {
+  display: grid;
+  min-width: 180px;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.query-field.grow {
+  flex: 1;
+}
+
+.query-field input,
+.query-field select {
+  min-height: 40px;
+  padding: 8px 11px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+}
+
+.live-status {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+}
+
+.live-status > span {
+  width: 8px;
+  height: 8px;
+  background: var(--line-strong);
+  border-radius: 50%;
+}
+
+.live-status.connected > span {
+  background: var(--success);
+  box-shadow: 0 0 0 4px var(--success-soft);
+}
+
+.live-status.reconnecting > span,
+.live-status.connecting > span {
+  background: var(--warning);
+}
+
 .platform-resource-editor form,
 .integration-fields {
   display: grid;
@@ -2503,6 +2666,82 @@ h1 {
 .repository-list {
   display: grid;
   gap: 12px;
+}
+
+.platform-resource-list {
+  padding: 18px;
+}
+
+.platform-resource-table {
+  display: grid;
+  border: 1px solid var(--line);
+}
+
+.platform-resource-table-head,
+.platform-resource-table-row {
+  display: grid;
+  grid-template-columns:
+    minmax(210px, 1.1fr) minmax(240px, 1.4fr)
+    110px 80px 120px;
+  gap: 14px;
+  align-items: center;
+}
+
+.platform-resource-table-head {
+  padding: 10px 14px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 750;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.platform-resource-table-row {
+  min-height: 86px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.platform-resource-table-row:last-child {
+  border-bottom: 0;
+}
+
+.platform-resource-table-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.platform-resource-table-row small {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-resource-actions.compact-actions {
+  display: flex;
+  margin-top: 3px;
+}
+
+.platform-resource-actions.compact-actions button {
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+.platform-resource-table-row .row-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.platform-project-detail-dialog {
+  width: min(1100px, 100%);
+}
+
+.platform-project-detail-dialog .detail-actions {
+  justify-content: flex-end;
+  margin: 12px 0;
 }
 
 .customer-card,
@@ -2802,6 +3041,23 @@ h1 {
   }
 
   .binding-key-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .query-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .platform-resource-table-head {
+    display: none;
+  }
+
+  .platform-resource-table-row {
+    grid-template-columns: 1fr;
+  }
+
+  .card-detail .delivery-progress-stages {
     grid-template-columns: 1fr;
   }
 }

@@ -32,13 +32,54 @@ describe("createHttpForgeXClient", () => {
     expect(eventSourceFactory).toHaveBeenCalledWith(
       `${requirementsUrl}/events`,
     );
-    expect(onStatus.mock.calls).toEqual([
-      ["connected"],
-      ["reconnecting"],
-    ]);
+    expect(onStatus.mock.calls).toEqual([["connected"], ["reconnecting"]]);
     expect(onRefresh).toHaveBeenCalledTimes(1);
     stop();
     expect(source.close).toHaveBeenCalledTimes(1);
+    expect(() =>
+      client.watchRequirementEvents!(
+        "/api/v1/requirements",
+        onRefresh,
+        onStatus,
+      ),
+    ).toThrow("需求实时进度入口已经失效");
+  });
+
+  it("开发 Bearer 模式通过可携带鉴权头的流订阅实时进度", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode('event: refresh\ndata: {"schemaVersion":1}\n\n'),
+        );
+      },
+    });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(stream, { status: 200 }));
+    const eventSourceFactory = vi.fn();
+    const client = createHttpForgeXClient({
+      authorization: "Bearer development-token",
+      eventSourceFactory,
+      fetcher,
+    });
+    const onRefresh = vi.fn();
+    const onStatus = vi.fn();
+
+    const stop = client.watchRequirementEvents!(
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements",
+      onRefresh,
+      onStatus,
+    );
+    await vi.waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+
+    expect(eventSourceFactory).not.toHaveBeenCalled();
+    const [, init] = fetcher.mock.calls[0]!;
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer development-token",
+    );
+    expect(onStatus).toHaveBeenCalledWith("connected");
+    stop();
   });
 
   it("只通过项目动作链接读取并显式初始化标准交付预设", async () => {

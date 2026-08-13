@@ -41,6 +41,7 @@ const auditActions = new Set<RequirementAuditAction>([
   "requirement.accepted",
   "delivery.requested",
   "delivery.dispatched",
+  "delivery.terminated",
   "delivery.completed",
   "verification.preview_recorded",
   "verification.failed",
@@ -179,8 +180,44 @@ export class PostgresRequirementRepository implements RequirementRepository {
             return true;
           }
           const updated = await client.query(
-            "UPDATE forgex_delivery_outbox SET dispatched_at = $4 WHERE tenant_key = $1 AND project_key = $2 AND dispatch_key = $3 AND dispatched_at IS NULL RETURNING dispatch_key",
+            "UPDATE forgex_delivery_outbox SET dispatched_at = $4 WHERE tenant_key = $1 AND project_key = $2 AND dispatch_key = $3 AND dispatched_at IS NULL AND cancelled_at IS NULL RETURNING dispatch_key",
             [tenant, project, key, parseIsoDate(dispatchedAt, "派发时间")],
+          );
+          return updated.rows.length > 0;
+        },
+        markDeliveryCancelled: async (dispatchKey, cancelledAt) => {
+          const key = parseInternalKey(dispatchKey, "派发标识");
+          const cancelled = parseIsoDate(cancelledAt, "终止时间");
+          const pending = pendingDispatches.get(key);
+          if (pending) {
+            if (pending.cancelledAt) return false;
+            pendingDispatches.set(key, { ...pending, cancelledAt: cancelled });
+            return true;
+          }
+          const updated = await client.query(
+            "UPDATE forgex_delivery_outbox SET cancelled_at = $4 WHERE tenant_key = $1 AND project_key = $2 AND dispatch_key = $3 AND cancelled_at IS NULL RETURNING dispatch_key",
+            [tenant, project, key, cancelled],
+          );
+          return updated.rows.length > 0;
+        },
+        markDeliveryCancellationCompleted: async (dispatchKey, completedAt) => {
+          const key = parseInternalKey(dispatchKey, "派发标识");
+          const completed = parseIsoDate(completedAt, "设备撤销完成时间");
+          const pending = pendingDispatches.get(key);
+          if (pending) {
+            if (!pending.cancelledAt) {
+              throw new Error("交付尚未登记终止，不能确认设备撤销");
+            }
+            if (pending.cancellationCompletedAt) return false;
+            pendingDispatches.set(key, {
+              ...pending,
+              cancellationCompletedAt: completed,
+            });
+            return true;
+          }
+          const updated = await client.query(
+            "UPDATE forgex_delivery_outbox SET cancellation_completed_at = $4 WHERE tenant_key = $1 AND project_key = $2 AND dispatch_key = $3 AND cancelled_at IS NOT NULL AND cancellation_completed_at IS NULL RETURNING dispatch_key",
+            [tenant, project, key, completed],
           );
           return updated.rows.length > 0;
         },
@@ -193,7 +230,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
           );
           if (pending) return this.#copyDispatch(pending);
           const result = await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
             [tenant, project, requirement, requirementRevision],
           );
           const row = result.rows[0];
@@ -374,7 +411,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       }
       for (const dispatch of pendingDispatches.values()) {
         await client.query(
-          "INSERT INTO forgex_delivery_outbox (dispatch_key, tenant_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)",
+          "INSERT INTO forgex_delivery_outbox (dispatch_key, tenant_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)",
           [
             dispatch.dispatchKey,
             tenant,
@@ -387,6 +424,8 @@ export class PostgresRequirementRepository implements RequirementRepository {
             JSON.stringify(dispatch.skills),
             dispatch.requestedAt,
             dispatch.dispatchedAt,
+            dispatch.cancelledAt ?? null,
+            dispatch.cancellationCompletedAt ?? null,
           ],
         );
       }
@@ -624,13 +663,30 @@ export class PostgresRequirementRepository implements RequirementRepository {
     return this.#withClient(async (client) => {
       const result = project
         ? await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $3",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND dispatched_at IS NULL AND cancelled_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $3",
             [tenant, project, limit],
           )
         : await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND dispatched_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $2",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND dispatched_at IS NULL AND cancelled_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $2",
             [tenant, limit],
           );
+      return result.rows.map((row) => this.#dispatchFromRow(row, tenant));
+    });
+  }
+
+  async listPendingDeliveryCancellations(
+    tenantKey: string,
+    limit: number,
+  ): Promise<DeliveryDispatchRecord[]> {
+    const tenant = parseInternalKey(tenantKey, "租户标识");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("待撤销记录查询上限必须在 1 到 100 之间");
+    }
+    return this.#withClient(async (client) => {
+      const result = await client.query(
+        "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND cancelled_at IS NOT NULL AND cancellation_completed_at IS NULL ORDER BY cancelled_at ASC, dispatch_key ASC LIMIT $2",
+        [tenant, limit],
+      );
       return result.rows.map((row) => this.#dispatchFromRow(row, tenant));
     });
   }
@@ -776,6 +832,8 @@ export class PostgresRequirementRepository implements RequirementRepository {
   #copyDispatch(dispatch: DeliveryDispatchRecord): DeliveryDispatchRecord {
     return {
       ...dispatch,
+      cancelledAt: dispatch.cancelledAt ?? null,
+      cancellationCompletedAt: dispatch.cancellationCompletedAt ?? null,
       requiredCapabilities: [...dispatch.requiredCapabilities],
       skills: dispatch.skills.map((skill) => ({ ...skill })),
     };
@@ -862,6 +920,22 @@ export class PostgresRequirementRepository implements RequirementRepository {
         throw new Error("派发时间不能早于交付请求时间");
       }
     }
+    if (dispatch.cancelledAt) {
+      const cancelledAt = parseIsoDate(dispatch.cancelledAt, "终止时间");
+      if (Date.parse(cancelledAt) < Date.parse(requestedAt)) {
+        throw new Error("终止时间不能早于交付请求时间");
+      }
+      if (
+        dispatch.cancellationCompletedAt &&
+        Date.parse(
+          parseIsoDate(dispatch.cancellationCompletedAt, "设备撤销完成时间"),
+        ) < Date.parse(cancelledAt)
+      ) {
+        throw new Error("设备撤销完成时间不能早于终止时间");
+      }
+    } else if (dispatch.cancellationCompletedAt) {
+      throw new Error("设备撤销完成时间必须绑定终止记录");
+    }
   }
 
   #dispatchFromRow(row: unknown, tenantKey: string): DeliveryDispatchRecord {
@@ -894,11 +968,33 @@ export class PostgresRequirementRepository implements RequirementRepository {
       row.dispatched_at === null
         ? null
         : parseIsoDate(row.dispatched_at, "派发时间");
+    const cancelledAt =
+      row.cancelled_at === null || row.cancelled_at === undefined
+        ? null
+        : parseIsoDate(row.cancelled_at, "终止时间");
+    const cancellationCompletedAt =
+      row.cancellation_completed_at === null ||
+      row.cancellation_completed_at === undefined
+        ? null
+        : parseIsoDate(row.cancellation_completed_at, "设备撤销完成时间");
     if (
       dispatchedAt !== null &&
       Date.parse(dispatchedAt) < Date.parse(requestedAt)
     ) {
       throw new Error("数据库中的交付派发时间无效");
+    }
+    if (
+      cancelledAt !== null &&
+      Date.parse(cancelledAt) < Date.parse(requestedAt)
+    ) {
+      throw new Error("数据库中的交付终止时间无效");
+    }
+    if (
+      cancellationCompletedAt !== null &&
+      (cancelledAt === null ||
+        Date.parse(cancellationCompletedAt) < Date.parse(cancelledAt))
+    ) {
+      throw new Error("数据库中的设备撤销完成时间无效");
     }
     return {
       dispatchKey: parseInternalKey(String(row.dispatch_key), "派发标识"),
@@ -912,6 +1008,8 @@ export class PostgresRequirementRepository implements RequirementRepository {
       skills: skills.data.map((skill) => ({ ...skill })),
       requestedAt,
       dispatchedAt,
+      cancelledAt,
+      cancellationCompletedAt,
     };
   }
 

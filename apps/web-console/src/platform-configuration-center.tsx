@@ -1,9 +1,11 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
+  type RefObject,
 } from "react";
 
 import type {
@@ -70,6 +72,71 @@ const createCustomerEditor = (): ResourceEditor => ({
   name: "",
   summary: "",
 });
+
+const focusableSelector = [
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "textarea:not([disabled])",
+  "select:not([disabled])",
+  "a[href]",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
+
+const useModalKeyboard = (
+  open: boolean,
+  dialogRef: RefObject<HTMLElement | null>,
+  canClose: boolean,
+  onClose: () => void,
+) => {
+  const canCloseRef = useRef(canClose);
+  const onCloseRef = useRef(onClose);
+  canCloseRef.current = canClose;
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const opener =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const dialog = dialogRef.current;
+    const focusable = dialog?.querySelector<HTMLElement>(focusableSelector);
+    (focusable ?? dialog)?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && canCloseRef.current) {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const candidates = Array.from(
+        dialog.querySelectorAll<HTMLElement>(focusableSelector),
+      );
+      if (candidates.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = candidates[0]!;
+      const last = candidates.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last ||
+          !dialog.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      opener?.focus();
+    };
+  }, [dialogRef, open]);
+};
 
 function ProjectInitializationPanel({
   client,
@@ -222,7 +289,27 @@ export function PlatformConfigurationCenter({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<ResourceEditor | null>(null);
+  const [query, setQuery] = useState("");
+  const [enabledFilter, setEnabledFilter] = useState<
+    "all" | "enabled" | "disabled"
+  >("all");
+  const [selectedProject, setSelectedProject] = useState<{
+    customer: PlatformCustomerItem;
+    project: PlatformProjectItem;
+  } | null>(null);
   const generationRef = useRef(0);
+  const editorDialogRef = useRef<HTMLElement>(null);
+  const projectDetailDialogRef = useRef<HTMLElement>(null);
+
+  useModalKeyboard(editor !== null, editorDialogRef, !saving, () =>
+    setEditor(null),
+  );
+  useModalKeyboard(
+    selectedProject !== null,
+    projectDetailDialogRef,
+    !saving,
+    () => setSelectedProject(null),
+  );
 
   const load = useCallback(async () => {
     const generation = ++generationRef.current;
@@ -317,6 +404,7 @@ export function PlatformConfigurationCenter({
         );
       }
       setEditor(null);
+      setSelectedProject(null);
       await load();
     } catch (caught) {
       setError(
@@ -332,6 +420,7 @@ export function PlatformConfigurationCenter({
     operation: () => Promise<void>,
   ): Promise<void> => {
     if (!window.confirm(`确定删除“${label}”吗？`)) return;
+    setSelectedProject(null);
     setSaving(true);
     setError(null);
     try {
@@ -355,6 +444,39 @@ export function PlatformConfigurationCenter({
             : "代码仓库"
       }`
     : "";
+
+  const resourceRows = useMemo<
+    Array<{
+      customer: PlatformCustomerItem;
+      project: PlatformProjectItem | null;
+    }>
+  >(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+    const rows: Array<{
+      customer: PlatformCustomerItem;
+      project: PlatformProjectItem | null;
+    }> = [];
+    for (const customer of customers) {
+      if (customer.projects.length === 0) {
+        rows.push({ customer, project: null });
+      } else {
+        rows.push(
+          ...customer.projects.map((project) => ({ customer, project })),
+        );
+      }
+    }
+    return rows.filter(({ customer, project }) => {
+      const enabled = customer.enabled && (project?.enabled ?? true);
+      if (enabledFilter === "enabled" && !enabled) return false;
+      if (enabledFilter === "disabled" && enabled) return false;
+      if (!normalizedQuery) return true;
+      return `${customer.name} ${customer.summary} ${project?.name ?? ""} ${
+        project?.summary ?? ""
+      }`
+        .toLocaleLowerCase("zh-CN")
+        .includes(normalizedQuery);
+    });
+  }, [customers, enabledFilter, query]);
 
   return (
     <div className="platform-configuration-center">
@@ -383,139 +505,155 @@ export function PlatformConfigurationCenter({
       ) : null}
 
       {editor ? (
-        <section className="content-section platform-resource-editor">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">CONFIGURATION</span>
-              <h2>{editorTitle}</h2>
+        <div
+          className="dialog-backdrop"
+          onMouseDown={() => !saving && setEditor(null)}
+        >
+          <section
+            ref={editorDialogRef}
+            className="dialog platform-resource-editor"
+            role="dialog"
+            tabIndex={-1}
+            aria-modal="true"
+            aria-labelledby="platform-resource-editor-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">CONFIGURATION</span>
+                <h2 id="platform-resource-editor-title">{editorTitle}</h2>
+              </div>
             </div>
-          </div>
-          <form onSubmit={(event) => void save(event)}>
-            <label className="field" htmlFor="platform-resource-name">
-              {editor.kind === "customer"
-                ? "客户名称"
-                : editor.kind === "project"
-                  ? "项目名称"
-                  : "仓库名称"}
-              <input
-                id="platform-resource-name"
-                required
-                minLength={2}
-                maxLength={100}
-                value={editor.name}
-                disabled={saving}
-                onChange={(event) =>
-                  setEditor({ ...editor, name: event.target.value })
-                }
-              />
-            </label>
-            {editor.kind !== "repository" ? (
-              <label
-                className="field wide-field"
-                htmlFor="platform-resource-summary"
-              >
-                {editor.kind === "customer" ? "客户说明" : "项目说明"}
-                <textarea
-                  id="platform-resource-summary"
+            <form onSubmit={(event) => void save(event)}>
+              <label className="field" htmlFor="platform-resource-name">
+                {editor.kind === "customer"
+                  ? "客户名称"
+                  : editor.kind === "project"
+                    ? "项目名称"
+                    : "仓库名称"}
+                <input
+                  id="platform-resource-name"
                   required
-                  minLength={4}
-                  maxLength={500}
-                  rows={3}
-                  value={editor.summary}
+                  minLength={2}
+                  maxLength={100}
+                  value={editor.name}
                   disabled={saving}
                   onChange={(event) =>
-                    setEditor({ ...editor, summary: event.target.value })
+                    setEditor({ ...editor, name: event.target.value })
                   }
                 />
               </label>
-            ) : (
-              <>
-                <label className="field wide-field" htmlFor="platform-git-url">
-                  Git 地址
-                  <input
-                    id="platform-git-url"
-                    required
-                    value={editor.gitUrl}
-                    disabled={saving}
-                    placeholder="https://gitee.com/team/project.git"
-                    onChange={(event) =>
-                      setEditor({ ...editor, gitUrl: event.target.value })
-                    }
-                  />
-                </label>
+              {editor.kind !== "repository" ? (
                 <label
                   className="field wide-field"
-                  htmlFor="platform-local-path"
+                  htmlFor="platform-resource-summary"
                 >
-                  本地绝对路径
-                  <input
-                    id="platform-local-path"
+                  {editor.kind === "customer" ? "客户说明" : "项目说明"}
+                  <textarea
+                    id="platform-resource-summary"
                     required
-                    value={editor.localPath}
+                    minLength={4}
+                    maxLength={500}
+                    rows={3}
+                    value={editor.summary}
                     disabled={saving}
-                    placeholder="D:\\forgex\\project 或 /srv/forgex/project"
                     onChange={(event) =>
-                      setEditor({ ...editor, localPath: event.target.value })
+                      setEditor({ ...editor, summary: event.target.value })
                     }
                   />
                 </label>
-                <label className="field" htmlFor="platform-default-branch">
-                  默认分支
+              ) : (
+                <>
+                  <label
+                    className="field wide-field"
+                    htmlFor="platform-git-url"
+                  >
+                    Git 地址
+                    <input
+                      id="platform-git-url"
+                      required
+                      value={editor.gitUrl}
+                      disabled={saving}
+                      placeholder="https://gitee.com/team/project.git"
+                      onChange={(event) =>
+                        setEditor({ ...editor, gitUrl: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label
+                    className="field wide-field"
+                    htmlFor="platform-local-path"
+                  >
+                    本地绝对路径
+                    <input
+                      id="platform-local-path"
+                      required
+                      value={editor.localPath}
+                      disabled={saving}
+                      placeholder="D:\\forgex\\project 或 /srv/forgex/project"
+                      onChange={(event) =>
+                        setEditor({ ...editor, localPath: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="field" htmlFor="platform-default-branch">
+                    默认分支
+                    <input
+                      id="platform-default-branch"
+                      required
+                      value={editor.defaultBranch}
+                      disabled={saving}
+                      placeholder="main"
+                      onChange={(event) =>
+                        setEditor({
+                          ...editor,
+                          defaultBranch: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              {editor.mode === "edit" ? (
+                <label className="platform-enabled-toggle">
                   <input
-                    id="platform-default-branch"
-                    required
-                    value={editor.defaultBranch}
+                    type="checkbox"
+                    checked={editor.enabled}
                     disabled={saving}
-                    placeholder="main"
                     onChange={(event) =>
-                      setEditor({
-                        ...editor,
-                        defaultBranch: event.target.value,
-                      })
+                      setEditor({ ...editor, enabled: event.target.checked })
                     }
                   />
+                  当前配置可用
                 </label>
-              </>
-            )}
-            {editor.mode === "edit" ? (
-              <label className="platform-enabled-toggle">
-                <input
-                  type="checkbox"
-                  checked={editor.enabled}
+              ) : null}
+              <div className="dialog-actions">
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() => setEditor(null)}
+                >
+                  取消
+                </button>
+                <button
+                  className="button primary"
+                  type="submit"
                   disabled={saving}
-                  onChange={(event) =>
-                    setEditor({ ...editor, enabled: event.target.checked })
-                  }
-                />
-                当前配置可用
-              </label>
-            ) : null}
-            <div className="dialog-actions">
-              <button
-                className="button secondary"
-                type="button"
-                onClick={() => setEditor(null)}
-              >
-                取消
-              </button>
-              <button
-                className="button primary"
-                type="submit"
-                disabled={saving}
-              >
-                {saving
-                  ? "正在保存…"
-                  : `保存${
-                      editor.kind === "customer"
-                        ? "客户"
-                        : editor.kind === "project"
-                          ? "项目"
-                          : "仓库"
-                    }`}
-              </button>
-            </div>
-          </form>
-        </section>
+                >
+                  {saving
+                    ? "正在保存…"
+                    : `保存${
+                        editor.kind === "customer"
+                          ? "客户"
+                          : editor.kind === "project"
+                            ? "项目"
+                            : "仓库"
+                      }`}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
       ) : null}
 
       {loading && customers.length === 0 ? (
@@ -528,191 +666,296 @@ export function PlatformConfigurationCenter({
           <p>先新建客户，再逐层添加项目和代码仓库。</p>
         </div>
       ) : (
-        <div className="customer-grid">
-          {customers.map((customer) => (
-            <section className="customer-card" key={customer.links.self}>
-              <div className="platform-resource-heading">
-                <div>
-                  <span className="eyebrow">客户</span>
-                  <h2>{customer.name}</h2>
-                  <p>{customer.summary}</p>
-                </div>
-                <div className="platform-resource-actions">
-                  <span
-                    className={`status-pill ${customer.enabled ? "success" : "neutral"}`}
-                  >
-                    {customer.enabled ? "可使用" : "已停用"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setEditor({
-                        kind: "customer",
-                        mode: "edit",
-                        item: customer,
-                        name: customer.name,
-                        summary: customer.summary,
-                        enabled: customer.enabled,
-                      })
-                    }
-                  >
-                    编辑
-                  </button>
-                  <button
-                    className="danger-action"
-                    type="button"
-                    disabled={saving}
-                    onClick={() =>
-                      void remove(customer.name, () =>
-                        client.deletePlatformCustomer(
-                          customer.links.self,
-                          customer.revision,
-                        ),
-                      )
-                    }
-                  >
-                    删除
-                  </button>
-                </div>
-              </div>
-              <div className="project-list">
-                {customer.projects.map((project) => (
-                  <article className="project-card" key={project.links.self}>
-                    <div className="platform-resource-heading compact-heading">
-                      <div>
-                        <span className="eyebrow">项目</span>
-                        <h3>{project.name}</h3>
-                        <p>{project.summary}</p>
-                      </div>
-                      <div className="platform-resource-actions">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setEditor({
-                              kind: "project",
-                              mode: "edit",
-                              item: project,
-                              name: project.name,
-                              summary: project.summary,
-                              enabled: project.enabled,
-                            })
-                          }
-                        >
-                          编辑项目
-                        </button>
-                        <button
-                          className="danger-action"
-                          type="button"
-                          disabled={saving}
-                          onClick={() =>
-                            void remove(project.name, () =>
-                              client.deletePlatformProject(
-                                project.links.self,
-                                project.revision,
-                              ),
-                            )
-                          }
-                        >
-                          删除项目
-                        </button>
-                      </div>
-                    </div>
-                    <ProjectInitializationPanel
-                      client={client}
-                      project={project}
-                    />
-                    <div className="repository-list">
-                      {project.repositories.map((repository) => (
-                        <div
-                          className="repository-row"
-                          key={repository.links.self}
-                        >
-                          <div>
-                            <strong>{repository.name}</strong>
-                            <span>{repository.gitUrl}</span>
-                            <code>{repository.localPath}</code>
-                          </div>
-                          <span className="repository-branch">
-                            {repository.defaultBranch}
-                          </span>
-                          <div className="platform-resource-actions">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditor({
-                                  kind: "repository",
-                                  mode: "edit",
-                                  item: repository,
-                                  name: repository.name,
-                                  gitUrl: repository.gitUrl,
-                                  localPath: repository.localPath,
-                                  defaultBranch: repository.defaultBranch,
-                                  enabled: repository.enabled,
-                                })
-                              }
-                            >
-                              编辑
-                            </button>
-                            <button
-                              className="danger-action"
-                              type="button"
-                              disabled={saving}
-                              onClick={() =>
-                                void remove(repository.name, () =>
-                                  client.deleteProjectRepository(
-                                    repository.links.self,
-                                    repository.revision,
-                                  ),
-                                )
-                              }
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <button
-                      className="button secondary compact-button"
-                      type="button"
-                      aria-label={`为 ${project.name} 新增代码仓库`}
-                      onClick={() =>
-                        setEditor({
-                          kind: "repository",
-                          mode: "create",
-                          project,
-                          name: "",
-                          gitUrl: "",
-                          localPath: "",
-                          defaultBranch: "main",
-                        })
-                      }
-                    >
-                      新增代码仓库
-                    </button>
-                  </article>
-                ))}
-              </div>
-              <button
-                className="button secondary compact-button"
-                type="button"
-                aria-label={`为 ${customer.name} 新建项目`}
-                onClick={() =>
-                  setEditor({
-                    kind: "project",
-                    mode: "create",
-                    customer,
-                    name: "",
-                    summary: "",
-                  })
+        <section className="content-section platform-resource-list">
+          <div className="query-toolbar" role="search">
+            <label className="query-field grow">
+              <span>查询客户或项目</span>
+              <input
+                type="search"
+                aria-label="查询客户或项目"
+                placeholder="输入客户名称、项目名称或说明"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            <label className="query-field">
+              <span>可用状态</span>
+              <select
+                aria-label="可用状态"
+                value={enabledFilter}
+                onChange={(event) =>
+                  setEnabledFilter(
+                    event.target.value as "all" | "enabled" | "disabled",
+                  )
                 }
               >
-                新建项目
-              </button>
-            </section>
-          ))}
-        </div>
+                <option value="all">全部状态</option>
+                <option value="enabled">仅看可用</option>
+                <option value="disabled">仅看停用</option>
+              </select>
+            </label>
+          </div>
+
+          {resourceRows.length === 0 ? (
+            <div className="empty-state compact">
+              <h2>没有符合条件的客户或项目</h2>
+              <p>可以调整查询词或可用状态。</p>
+            </div>
+          ) : (
+            <div className="platform-resource-table" role="table">
+              <div className="platform-resource-table-head" role="row">
+                <span role="columnheader">客户</span>
+                <span role="columnheader">项目</span>
+                <span role="columnheader">状态</span>
+                <span role="columnheader">仓库</span>
+                <span role="columnheader">操作</span>
+              </div>
+              {resourceRows.map(({ customer, project }) => (
+                <div
+                  className="platform-resource-table-row"
+                  role="row"
+                  key={project?.links.self ?? customer.links.self}
+                >
+                  <div role="cell">
+                    <strong>{customer.name}</strong>
+                    <small>{customer.summary}</small>
+                    <div className="platform-resource-actions compact-actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditor({
+                            kind: "customer",
+                            mode: "edit",
+                            item: customer,
+                            name: customer.name,
+                            summary: customer.summary,
+                            enabled: customer.enabled,
+                          })
+                        }
+                      >
+                        编辑客户
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`为 ${customer.name} 新建项目`}
+                        onClick={() =>
+                          setEditor({
+                            kind: "project",
+                            mode: "create",
+                            customer,
+                            name: "",
+                            summary: "",
+                          })
+                        }
+                      >
+                        新建项目
+                      </button>
+                      <button
+                        className="danger-action"
+                        type="button"
+                        disabled={saving}
+                        onClick={() =>
+                          void remove(customer.name, () =>
+                            client.deletePlatformCustomer(
+                              customer.links.self,
+                              customer.revision,
+                            ),
+                          )
+                        }
+                      >
+                        删除客户
+                      </button>
+                    </div>
+                  </div>
+                  <div role="cell">
+                    {project ? (
+                      <>
+                        <strong>{project.name}</strong>
+                        <small>{project.summary}</small>
+                      </>
+                    ) : (
+                      <span>尚未新建项目</span>
+                    )}
+                  </div>
+                  <div role="cell">
+                    <span
+                      className={`status-pill ${
+                        customer.enabled && (project?.enabled ?? true)
+                          ? "success"
+                          : "neutral"
+                      }`}
+                    >
+                      {customer.enabled && (project?.enabled ?? true)
+                        ? "可使用"
+                        : "已停用"}
+                    </span>
+                  </div>
+                  <div role="cell">
+                    {project ? `${project.repositories.length} 个` : "—"}
+                  </div>
+                  <div
+                    className="platform-resource-actions row-actions"
+                    role="cell"
+                  >
+                    {project ? (
+                      <button
+                        className="button secondary compact-button"
+                        type="button"
+                        aria-label={`查看${project.name}详情`}
+                        onClick={() =>
+                          setSelectedProject({ customer, project })
+                        }
+                      >
+                        查看详情
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       )}
+
+      {selectedProject ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={() => setSelectedProject(null)}
+        >
+          <section
+            ref={projectDetailDialogRef}
+            className="dialog platform-project-detail-dialog"
+            role="dialog"
+            tabIndex={-1}
+            aria-modal="true"
+            aria-labelledby="platform-project-detail-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="dialog-heading platform-resource-heading">
+              <div>
+                <span className="eyebrow">{selectedProject.customer.name}</span>
+                <h2 id="platform-project-detail-title">
+                  {selectedProject.project.name}详情
+                </h2>
+                <p>{selectedProject.project.summary}</p>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="关闭项目详情"
+                onClick={() => setSelectedProject(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="platform-resource-actions detail-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedProject(null);
+                  setEditor({
+                    kind: "project",
+                    mode: "edit",
+                    item: selectedProject.project,
+                    name: selectedProject.project.name,
+                    summary: selectedProject.project.summary,
+                    enabled: selectedProject.project.enabled,
+                  });
+                }}
+              >
+                编辑项目
+              </button>
+              <button
+                className="danger-action"
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  void remove(selectedProject.project.name, () =>
+                    client.deletePlatformProject(
+                      selectedProject.project.links.self,
+                      selectedProject.project.revision,
+                    ),
+                  )
+                }
+              >
+                删除项目
+              </button>
+            </div>
+            <ProjectInitializationPanel
+              client={client}
+              project={selectedProject.project}
+            />
+            <div className="repository-list">
+              {selectedProject.project.repositories.map((repository) => (
+                <div className="repository-row" key={repository.links.self}>
+                  <div>
+                    <strong>{repository.name}</strong>
+                    <span>{repository.gitUrl}</span>
+                    <code>{repository.localPath}</code>
+                  </div>
+                  <span className="repository-branch">
+                    {repository.defaultBranch}
+                  </span>
+                  <div className="platform-resource-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedProject(null);
+                        setEditor({
+                          kind: "repository",
+                          mode: "edit",
+                          item: repository,
+                          name: repository.name,
+                          gitUrl: repository.gitUrl,
+                          localPath: repository.localPath,
+                          defaultBranch: repository.defaultBranch,
+                          enabled: repository.enabled,
+                        });
+                      }}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      className="danger-action"
+                      type="button"
+                      disabled={saving}
+                      onClick={() =>
+                        void remove(repository.name, () =>
+                          client.deleteProjectRepository(
+                            repository.links.self,
+                            repository.revision,
+                          ),
+                        )
+                      }
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              className="button secondary compact-button"
+              type="button"
+              aria-label={`为 ${selectedProject.project.name} 新增代码仓库`}
+              onClick={() => {
+                setSelectedProject(null);
+                setEditor({
+                  kind: "repository",
+                  mode: "create",
+                  project: selectedProject.project,
+                  name: "",
+                  gitUrl: "",
+                  localPath: "",
+                  defaultBranch: "main",
+                });
+              }}
+            >
+              新增代码仓库
+            </button>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

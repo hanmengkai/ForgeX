@@ -6,6 +6,7 @@ export type RequirementAuthorizedAction =
   | "submitForConfirmation"
   | "confirm"
   | "startDelivery"
+  | "terminateDelivery"
   | "accept"
   | "viewPreview";
 
@@ -27,6 +28,7 @@ const rolesByAction = {
   ]),
   confirm: new Set<PlatformRole>(["product_owner", "administrator"]),
   startDelivery: new Set<PlatformRole>(["product_owner", "administrator"]),
+  terminateDelivery: new Set<PlatformRole>(["product_owner", "administrator"]),
   accept: new Set<PlatformRole>(["product_owner", "administrator"]),
   viewPreview: new Set<PlatformRole>([
     "product_owner",

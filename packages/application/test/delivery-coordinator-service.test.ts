@@ -77,6 +77,8 @@ class FailFirstDispatchMarkRepository implements RequirementRepository {
   listAuditEvents = this.#inner.listAuditEvents.bind(this.#inner);
   listPendingDeliveryDispatches =
     this.#inner.listPendingDeliveryDispatches.bind(this.#inner);
+  listPendingDeliveryCancellations =
+    this.#inner.listPendingDeliveryCancellations.bind(this.#inner);
   listPendingDeliveryRunResults =
     this.#inner.listPendingDeliveryRunResults.bind(this.#inner);
   findDeliveryRunResultByProof = this.#inner.findDeliveryRunResultByProof.bind(
@@ -334,6 +336,116 @@ describe("DeliveryCoordinatorService", () => {
     expect(
       audit.filter((event) => event.action === "delivery.dispatched"),
     ).toHaveLength(1);
+  });
+
+  it("设备撤销失败时持久化待办，并在下一次 Worker 交互前幂等收敛", async () => {
+    const requirementRepository = new InMemoryRequirementRepository();
+    const requirements = new RequirementApplicationService({
+      repository: requirementRepository,
+      projectKey,
+      repositoryKey,
+    });
+    const workers = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+    });
+    const coordinator = new DeliveryCoordinatorService({
+      requirements,
+      requirementRepository,
+      workers,
+      projectKey,
+    });
+    const connection = (
+      await workers.connect(principal, {
+        schemaVersion: 1,
+        deviceName: "研发电脑",
+        accountName: "Codex 账户",
+        accountFingerprint: "d".repeat(64),
+        capabilities: [],
+      })
+    ).connection;
+    const created = await requirements.create(principal, spec);
+    await requirements.submitForConfirmation(principal, created.requirementKey);
+    await requirements.confirm(principal, created.requirementKey);
+    await coordinator.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+    const assignment = (await workers.poll(connection)).assignment!;
+    vi.spyOn(workers, "cancelRequirementDelivery").mockRejectedValueOnce(
+      new Error("模拟 Worker 仓库临时不可用"),
+    );
+
+    await expect(
+      coordinator.terminateDelivery(principal, created.requirementKey),
+    ).resolves.toMatchObject({ view: { status: "已强制终止" } });
+    await expect(
+      requirementRepository.listPendingDeliveryCancellations(tenantKey, 10),
+    ).resolves.toHaveLength(1);
+    await expect(
+      coordinator.flushPendingCancellations(tenantKey),
+    ).resolves.toBe(1);
+    await expect(
+      coordinator.flushPendingCancellations(tenantKey),
+    ).resolves.toBe(0);
+    await expect(
+      workers.renew(connection, {
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_lease" });
+  });
+
+  it("一次补偿会跨页清空超过一百条的设备撤销待办", async () => {
+    const requirementRepository = new InMemoryRequirementRepository();
+    const workers = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+    });
+    const cancel = vi
+      .spyOn(workers, "cancelRequirementDelivery")
+      .mockResolvedValue(false);
+    const coordinator = new DeliveryCoordinatorService({
+      requirements: new RequirementApplicationService({
+        repository: requirementRepository,
+        projectKey,
+        repositoryKey,
+      }),
+      requirementRepository,
+      workers,
+      projectKey,
+    });
+    for (let index = 0; index < 101; index += 1) {
+      const key = randomUUID();
+      await requirementRepository.transaction(
+        tenantKey,
+        projectKey,
+        async (transaction) => {
+          transaction.appendDeliveryDispatch({
+            dispatchKey: key,
+            tenantKey,
+            projectKey,
+            repositoryKey,
+            requirementKey: randomUUID(),
+            requirementRevision: 1,
+            title: `待撤销交付 ${index + 1}`,
+            requiredCapabilities: [],
+            skills: [],
+            requestedAt: "2026-08-10T06:00:00.000Z",
+            dispatchedAt: "2026-08-10T06:00:01.000Z",
+            cancelledAt: "2026-08-10T06:00:02.000Z",
+            cancellationCompletedAt: null,
+          });
+        },
+      );
+    }
+
+    await expect(
+      coordinator.flushPendingCancellations(tenantKey),
+    ).resolves.toBe(101);
+    expect(cancel).toHaveBeenCalledTimes(101);
+    await expect(
+      requirementRepository.listPendingDeliveryCancellations(tenantKey, 100),
+    ).resolves.toEqual([]);
   });
 
   it("设备执行信封拒绝错项目、错版本和调用方伪造的标题", async () => {

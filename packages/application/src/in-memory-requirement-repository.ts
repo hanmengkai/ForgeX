@@ -170,6 +170,44 @@ export class InMemoryRequirementRepository implements RequirementRepository {
         });
         return true;
       },
+      markDeliveryCancelled: async (dispatchKey, cancelledAt) => {
+        const key = scopedKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          dispatchKey,
+        );
+        const current =
+          pendingDeliveryDispatches.get(key) ??
+          this.#deliveryDispatches.get(key);
+        if (!current) {
+          throw new Error("没有找到待终止的交付记录");
+        }
+        if (current.cancelledAt) return false;
+        pendingDeliveryDispatches.set(key, {
+          ...this.#copyDeliveryDispatch(current),
+          cancelledAt,
+        });
+        return true;
+      },
+      markDeliveryCancellationCompleted: async (dispatchKey, completedAt) => {
+        const key = scopedKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          dispatchKey,
+        );
+        const current =
+          pendingDeliveryDispatches.get(key) ??
+          this.#deliveryDispatches.get(key);
+        if (!current?.cancelledAt) {
+          throw new Error("交付尚未登记终止，不能确认设备撤销");
+        }
+        if (current.cancellationCompletedAt) return false;
+        pendingDeliveryDispatches.set(key, {
+          ...this.#copyDeliveryDispatch(current),
+          cancellationCompletedAt: completedAt,
+        });
+        return true;
+      },
       findDeliveryDispatch: async (requirementKey, requirementRevision) => {
         const matches = [
           ...this.#deliveryDispatches.values(),
@@ -441,11 +479,36 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           record.tenantKey === normalizedTenantKey &&
           (normalizedProjectKey === null ||
             record.projectKey === normalizedProjectKey) &&
-          record.dispatchedAt === null,
+          record.dispatchedAt === null &&
+          !record.cancelledAt,
       )
       .sort(
         (left, right) =>
           left.requestedAt.localeCompare(right.requestedAt) ||
+          left.dispatchKey.localeCompare(right.dispatchKey),
+      )
+      .slice(0, limit)
+      .map((record) => this.#copyDeliveryDispatch(record));
+  }
+
+  async listPendingDeliveryCancellations(
+    tenantKey: string,
+    limit: number,
+  ): Promise<DeliveryDispatchRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("待撤销记录查询上限必须在 1 到 100 之间");
+    }
+    const normalizedTenantKey = tenantKey.toLowerCase();
+    return [...this.#deliveryDispatches.values()]
+      .filter(
+        (record) =>
+          record.tenantKey === normalizedTenantKey &&
+          Boolean(record.cancelledAt) &&
+          !record.cancellationCompletedAt,
+      )
+      .sort(
+        (left, right) =>
+          left.cancelledAt!.localeCompare(right.cancelledAt!) ||
           left.dispatchKey.localeCompare(right.dispatchKey),
       )
       .slice(0, limit)
@@ -551,6 +614,8 @@ export class InMemoryRequirementRepository implements RequirementRepository {
   ): DeliveryDispatchRecord {
     return {
       ...record,
+      cancelledAt: record.cancelledAt ?? null,
+      cancellationCompletedAt: record.cancellationCompletedAt ?? null,
       requiredCapabilities: [...record.requiredCapabilities],
       skills: record.skills.map((skill) => ({ ...skill })),
     };

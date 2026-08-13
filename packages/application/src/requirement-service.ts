@@ -9,6 +9,7 @@ import {
 import {
   type RequirementAllowedAction,
   type RequirementAcceptanceView,
+  type RequirementStatus,
   RequirementStateConflictError,
   RequirementWorkflow,
   type RequirementPeopleView,
@@ -50,6 +51,29 @@ export interface RequirementDetailResult extends RequirementCommandResult {
   spec: RequirementSpec;
   acceptance: RequirementAcceptanceView | null;
   revisions: RequirementRevisionPeopleView[];
+  progress: RequirementProgressView;
+}
+
+export type RequirementProgressStageKey =
+  | "confirmation"
+  | "queue"
+  | "implementation"
+  | "commit"
+  | "verification"
+  | "acceptance";
+
+export interface RequirementProgressStageView {
+  key: RequirementProgressStageKey;
+  label: string;
+  status: "completed" | "active" | "pending" | "terminated";
+  detail: string;
+}
+
+export interface RequirementProgressView {
+  percent: number;
+  currentStage: string;
+  updatedAt: string;
+  stages: RequirementProgressStageView[];
 }
 
 export interface RequirementListQuery {
@@ -95,6 +119,152 @@ const decodeCursor = (cursor: string): number => {
       "这个翻页位置已失效，请从第一页重新查看",
     );
   }
+};
+
+const progressStages = [
+  ["confirmation", "需求确认"],
+  ["queue", "设备排队"],
+  ["implementation", "AI 实现"],
+  ["commit", "本地提交"],
+  ["verification", "独立验证"],
+  ["acceptance", "产品验收"],
+] as const satisfies ReadonlyArray<
+  readonly [RequirementProgressStageKey, string]
+>;
+
+const requirementProgress = (input: {
+  status: RequirementStatus;
+  createdAt: string;
+  dispatch: DeliveryDispatchRecord | null;
+  run: import("./requirement-repository.js").DeliveryRunResult | null;
+  verificationFailed: boolean;
+  acceptance: RequirementAcceptanceView | null;
+}): RequirementProgressView => {
+  const details: Record<RequirementProgressStageKey, string> = {
+    confirmation: "等待负责人确认需求范围",
+    queue: "等待空闲设备领取任务",
+    implementation: "等待 AI 开始分析代码",
+    commit: "等待设备生成本地提交",
+    verification: "等待独立 Runner 验证",
+    acceptance: "等待产品负责人体验并验收",
+  };
+  const statuses = new Map<
+    RequirementProgressStageKey,
+    RequirementProgressStageView["status"]
+  >(progressStages.map(([key]) => [key, "pending"]));
+  let percent = 10;
+  let currentStage = "整理与确认需求";
+  let updatedAt = input.createdAt;
+
+  const complete = (key: RequirementProgressStageKey, detail: string) => {
+    statuses.set(key, "completed");
+    details[key] = detail;
+  };
+  const activate = (key: RequirementProgressStageKey, detail: string) => {
+    statuses.set(key, "active");
+    details[key] = detail;
+  };
+
+  if (
+    [
+      "confirmed",
+      "inDelivery",
+      "terminated",
+      "awaitingAcceptance",
+      "completed",
+      "verificationFailedAtLimit",
+    ].includes(input.status)
+  ) {
+    complete("confirmation", "负责人已确认当前需求版本");
+    percent = 20;
+    currentStage = "等待安排交付";
+  } else {
+    activate("confirmation", details.confirmation);
+  }
+
+  if (input.dispatch) {
+    updatedAt =
+      input.dispatch.cancelledAt ??
+      input.dispatch.dispatchedAt ??
+      input.dispatch.requestedAt;
+    if (input.dispatch.dispatchedAt) {
+      complete("queue", "设备已领取交付任务");
+      percent = 45;
+      currentStage = "AI 分析与修改";
+      activate("implementation", "正在分析代码并完成需求修改");
+    } else {
+      activate("queue", "交付任务正在等待空闲设备");
+      percent = 25;
+      currentStage = "等待设备领取";
+    }
+  }
+
+  if (input.run) {
+    complete("queue", "设备已领取交付任务");
+    complete("implementation", "AI 已完成工作树修改");
+    complete("commit", "设备已生成受控本地提交");
+    updatedAt = input.run.completedAt ?? input.run.submittedAt;
+    percent = input.run.status === "completed" ? 75 : 65;
+    currentStage =
+      input.run.status === "completed" ? "独立验证中" : "登记本地提交";
+    activate(
+      "verification",
+      input.run.status === "completed"
+        ? "独立 Runner 正在验证真实交付结果"
+        : "等待本地提交完成登记",
+    );
+  }
+
+  if (input.verificationFailed) {
+    statuses.set("verification", "terminated");
+    details.verification = "独立验证未通过，需要修订后重新确认";
+    percent = 75;
+    currentStage = "独立验证未通过";
+  }
+
+  if (input.acceptance || input.status === "awaitingAcceptance") {
+    for (const key of [
+      "queue",
+      "implementation",
+      "commit",
+      "verification",
+    ] as const) {
+      complete(key, details[key]);
+    }
+    activate("acceptance", "独立验证已通过，等待产品验收");
+    updatedAt = input.acceptance?.verifiedAt ?? updatedAt;
+    percent = 90;
+    currentStage = "等待产品验收";
+  }
+
+  if (input.status === "completed") {
+    for (const [key] of progressStages) complete(key, details[key]);
+    percent = 100;
+    currentStage = "交付已完成";
+  }
+
+  if (input.status === "terminated") {
+    complete("confirmation", "负责人已确认当前需求版本");
+    if (input.dispatch?.dispatchedAt) complete("queue", "设备曾领取交付任务");
+    statuses.set("implementation", "terminated");
+    details.implementation = input.dispatch?.cancellationCompletedAt
+      ? "设备租约已撤销，未提交修改不会进入交付结果"
+      : "终止指令已生效，设备任务正在撤销";
+    percent = 35;
+    currentStage = "交付已强制终止";
+  }
+
+  return {
+    percent,
+    currentStage,
+    updatedAt,
+    stages: progressStages.map(([key, label]) => ({
+      key,
+      label,
+      status: statuses.get(key) ?? "pending",
+      detail: details[key],
+    })),
+  };
 };
 
 export class RequirementApplicationService {
@@ -336,6 +506,8 @@ export class RequirementApplicationService {
           skills: parsedSkills.data.map((skill) => ({ ...skill })),
           requestedAt: this.#nowIso(),
           dispatchedAt: null,
+          cancelledAt: null,
+          cancellationCompletedAt: null,
         };
         transaction.save(record);
         transaction.appendDeliveryDispatch(dispatch);
@@ -365,6 +537,97 @@ export class RequirementApplicationService {
             actorName: principal.actorName,
           },
         }),
+    );
+  }
+
+  async terminateDelivery(
+    principal: AuthenticatedPrincipal,
+    requirementKey: string,
+    cancelAssignment: (
+      dispatch: DeliveryDispatchRecord,
+    ) => Promise<unknown> = async () => undefined,
+  ): Promise<RequirementCommandResult> {
+    this.#requireAction(principal, "terminateDelivery");
+    const outcome = await this.#repository.transaction(
+      principal.tenantKey,
+      this.#projectKey,
+      async (transaction) => {
+        const record = await transaction.find(requirementKey);
+        if (!record || record.projectKey !== this.#projectKey) {
+          throw new ApplicationError(
+            404,
+            "requirement_not_found",
+            "没有找到这个需求",
+          );
+        }
+        const dispatch = await transaction.findDeliveryDispatch(
+          record.requirementKey,
+          record.workflow.currentRevision,
+        );
+        if (!dispatch) {
+          throw new ApplicationError(
+            409,
+            "delivery_dispatch_not_found",
+            "当前交付还没有形成可终止的设备任务",
+          );
+        }
+        try {
+          record.workflow.terminateDelivery();
+        } catch (error) {
+          if (error instanceof RequirementStateConflictError) {
+            throw new ApplicationError(
+              409,
+              "requirement_state_conflict",
+              error.message,
+            );
+          }
+          throw error;
+        }
+        const recordedAt = this.#nowIso();
+        await transaction.markDeliveryCancelled(
+          dispatch.dispatchKey,
+          recordedAt,
+        );
+        transaction.save(record);
+        this.#appendAudit(
+          transaction,
+          record,
+          principal,
+          "delivery.terminated",
+          recordedAt,
+        );
+        return {
+          dispatch: structuredClone(dispatch),
+          result: {
+            requirementKey: record.requirementKey,
+            repositoryKey: record.repositoryKey ?? null,
+            view: record.workflow.toPeopleView(),
+            allowedActions: record.workflow.listAllowedActions(),
+          },
+        };
+      },
+    );
+    try {
+      await cancelAssignment(outcome.dispatch);
+      await this.acknowledgeDeliveryCancellation(outcome.dispatch);
+    } catch {
+      // 已落库的撤销待办会在 Worker poll/renew 前幂等重试。
+    }
+    return outcome.result;
+  }
+
+  async acknowledgeDeliveryCancellation(
+    dispatch: DeliveryDispatchRecord,
+  ): Promise<void> {
+    await this.#repository.transaction(
+      dispatch.tenantKey,
+      dispatch.projectKey,
+      async (transaction) => {
+        await transaction.markDeliveryCancellationCompleted(
+          dispatch.dispatchKey,
+          this.#nowIso(),
+        );
+      },
     );
   }
 
@@ -410,14 +673,37 @@ export class RequirementApplicationService {
             "没有找到这个需求",
           );
         }
+        const [dispatch, run, verificationFailure] = await Promise.all([
+          transaction.findDeliveryDispatch(
+            record.requirementKey,
+            record.workflow.currentRevision,
+          ),
+          transaction.findDeliveryRunResult(
+            record.requirementKey,
+            record.workflow.currentRevision,
+          ),
+          transaction.findVerificationFailure(
+            record.requirementKey,
+            record.workflow.currentRevision,
+          ),
+        ]);
+        const acceptance = record.workflow.toAcceptanceView();
         return {
           requirementKey: record.requirementKey,
           repositoryKey: record.repositoryKey ?? null,
           view: record.workflow.toPeopleView(),
           allowedActions: record.workflow.listAllowedActions(),
           spec: structuredClone(record.spec),
-          acceptance: record.workflow.toAcceptanceView(),
+          acceptance,
           revisions: record.workflow.listRevisionsForPeople(),
+          progress: requirementProgress({
+            status: record.workflow.toSnapshot().status,
+            createdAt: record.createdAt,
+            dispatch,
+            run,
+            verificationFailed: verificationFailure !== null,
+            acceptance,
+          }),
         };
       },
     );
@@ -508,6 +794,7 @@ export class RequirementApplicationService {
     record: RequirementRecord,
     principal: AuthenticatedPrincipal,
     action: RequirementAuditAction,
+    recordedAt = this.#nowIso(),
   ): void {
     transaction.appendAudit({
       eventKey: randomUUID(),
@@ -517,7 +804,7 @@ export class RequirementApplicationService {
       action,
       actorKey: principal.actorKey,
       actorName: principal.actorName,
-      recordedAt: this.#nowIso(),
+      recordedAt,
     });
   }
 

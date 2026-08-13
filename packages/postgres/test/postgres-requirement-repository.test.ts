@@ -663,6 +663,54 @@ describe("PostgresRequirementRepository", () => {
     expect(query?.values).toEqual([tenantKey, projectKey, projectKey, 20]);
   });
 
+  it("读取待撤销交付并持久化 Worker 撤销完成时间", async () => {
+    const cancelledAt = "2026-08-10T06:01:00.000Z";
+    const completedAt = "2026-08-10T06:02:00.000Z";
+    const database = fakeDatabase({
+      respond: (text) =>
+        text.includes("cancelled_at IS NOT NULL") && text.startsWith("SELECT")
+          ? [
+              {
+                dispatch_key: dispatchKey,
+                project_key: projectKey,
+                repository_key: projectKey,
+                requirement_key: requirementKey,
+                requirement_revision: 1,
+                title: spec.title,
+                required_capabilities: [],
+                skills: [],
+                requested_at: now,
+                dispatched_at: now,
+                cancelled_at: cancelledAt,
+                cancellation_completed_at: null,
+              },
+            ]
+          : undefined,
+    });
+    const repository = new PostgresRequirementRepository(database.pool);
+
+    await expect(
+      repository.listPendingDeliveryCancellations(tenantKey, 10),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        dispatchKey,
+        cancelledAt,
+        cancellationCompletedAt: null,
+      }),
+    ]);
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      await expect(
+        transaction.markDeliveryCancellationCompleted(dispatchKey, completedAt),
+      ).resolves.toBe(true);
+    });
+
+    expect(
+      database.queries.find((query) =>
+        query.text.includes("SET cancellation_completed_at"),
+      )?.values,
+    ).toEqual([tenantKey, projectKey, dispatchKey, completedAt]);
+  });
+
   it("迁移脚本建立需求、审计和可靠 outbox 的数据库约束", () => {
     const migration = readFileSync(
       new URL(
@@ -698,5 +746,17 @@ describe("PostgresRequirementRepository", () => {
       "dispatched_at IS NULL OR dispatched_at >= requested_at",
     );
     expect(migration).toContain("WHERE dispatched_at IS NULL");
+  });
+
+  it("终止迁移同时保存撤销意图和撤销完成事实", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0022_delivery_termination.sql", import.meta.url),
+      "utf8",
+    );
+
+    expect(migration).toContain("cancelled_at timestamptz");
+    expect(migration).toContain("cancellation_completed_at timestamptz");
+    expect(migration).toContain("cancellation_completed_at >= cancelled_at");
+    expect(migration).toContain("'delivery.terminated'");
   });
 });

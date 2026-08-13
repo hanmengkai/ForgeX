@@ -18,6 +18,7 @@ export type RequirementAuditAction =
   | "requirement.accepted"
   | "delivery.requested"
   | "delivery.dispatched"
+  | "delivery.terminated"
   | "delivery.completed"
   | "verification.preview_recorded"
   | "verification.failed"
@@ -40,6 +41,8 @@ export interface DeliveryDispatchRecord {
   skills: DeliverySkillBinding[];
   requestedAt: string;
   dispatchedAt: string | null;
+  cancelledAt?: string | null;
+  cancellationCompletedAt?: string | null;
 }
 
 export const DeliverySkillBindingSchema = z
@@ -238,6 +241,14 @@ export interface RequirementTransaction {
     dispatchKey: string,
     dispatchedAt: string,
   ): Promise<boolean>;
+  markDeliveryCancelled(
+    dispatchKey: string,
+    cancelledAt: string,
+  ): Promise<boolean>;
+  markDeliveryCancellationCompleted(
+    dispatchKey: string,
+    completedAt: string,
+  ): Promise<boolean>;
   findDeliveryDispatch(
     requirementKey: string,
     requirementRevision: number,
@@ -279,6 +290,10 @@ export interface RequirementRepository {
   listPendingDeliveryDispatches(
     tenantKey: string,
     projectKey: string | null,
+    limit: number,
+  ): Promise<DeliveryDispatchRecord[]>;
+  listPendingDeliveryCancellations(
+    tenantKey: string,
     limit: number,
   ): Promise<DeliveryDispatchRecord[]>;
   listPendingDeliveryRunResults(

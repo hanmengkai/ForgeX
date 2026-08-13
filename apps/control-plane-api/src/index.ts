@@ -670,6 +670,7 @@ const requirementLinks = (
     submitConfirmation?: string;
     confirm?: string;
     startDelivery?: string;
+    terminateDelivery?: string;
     accept?: string;
   } = {};
   if (
@@ -695,6 +696,12 @@ const requirementLinks = (
     canPerformRequirementAction(principal, "startDelivery")
   ) {
     actions.startDelivery = `${self}/start-delivery`;
+  }
+  if (
+    allowedActions.includes("terminateDelivery") &&
+    canPerformRequirementAction(principal, "terminateDelivery")
+  ) {
+    actions.terminateDelivery = `${self}/terminate-delivery`;
   }
   if (
     allowedActions.includes("accept") &&
@@ -2068,6 +2075,48 @@ export const buildControlPlaneApi = (
     },
   );
 
+  app.get(
+    "/api/v1/projects/:projectKey/requirements/events",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementProjectParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "实时进度入口需要调整",
+          validationDetails(params.error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "X-Accel-Buffering": "no",
+      });
+      const sendRefresh = () => {
+        if (reply.raw.destroyed) return;
+        reply.raw.write(
+          `event: refresh\ndata: ${JSON.stringify({
+            schemaVersion: 1,
+            observedAt: new Date().toISOString(),
+          })}\n\n`,
+        );
+      };
+      sendRefresh();
+      const interval = setInterval(sendRefresh, 2_000);
+      interval.unref();
+      reply.raw.once("close", () => clearInterval(interval));
+      return reply;
+    },
+  );
+
   app.get("/api/v1/extensions", async (request, reply) => {
     const principal = principalFrom(request);
     return reply.send({
@@ -3095,6 +3144,7 @@ export const buildControlPlaneApi = (
           spec: result.spec,
           acceptance: result.acceptance,
           revisions: result.revisions,
+          progress: result.progress,
           links: requirementLinks(
             result.requirementKey,
             result.repositoryKey == null ||
@@ -3312,6 +3362,35 @@ export const buildControlPlaneApi = (
   );
 
   app.post(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/terminate-delivery",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      const body = emptyCommandSchema.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        const error = !params.success ? params.error : body.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "强制终止请求需要调整",
+          validationDetails(error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const service = requirementServiceFor(params.data.projectKey);
+      const result = await deliveries.terminateDelivery(
+        principal,
+        params.data.requirementKey,
+        { projectKey: params.data.projectKey, requirements: service },
+      );
+      return reply.send({ data: result.view });
+    },
+  );
+
+  app.post(
     "/api/v1/projects/:projectKey/requirements/:requirementKey/accept",
     async (request, reply) => {
       const principal = principalFrom(request);
@@ -3359,6 +3438,7 @@ export const buildControlPlaneApi = (
         spec: result.spec,
         acceptance: result.acceptance,
         revisions: result.revisions,
+        progress: result.progress,
         links: requirementLinks(
           result.requirementKey,
           result.allowedActions,
@@ -3696,6 +3776,35 @@ export const buildControlPlaneApi = (
     },
   );
 
+  app.post(
+    "/api/v1/requirements/:requirementKey/terminate-delivery",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      const body = emptyCommandSchema.safeParse(request.body ?? {});
+      if (!params.success) {
+        throw new ApplicationError(
+          404,
+          "requirement_not_found",
+          "没有找到这个需求",
+        );
+      }
+      if (!body.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "强制终止请求需要调整",
+          validationDetails(body.error),
+        );
+      }
+      const result = await deliveries.terminateDelivery(
+        principal,
+        params.data.requirementKey,
+      );
+      return reply.send({ data: result.view });
+    },
+  );
+
   app.post("/api/v1/worker-connection/heartbeat", async (request, reply) => {
     const body = emptyCommandSchema.safeParse(request.body ?? {});
     if (!body.success) {
@@ -3723,6 +3832,7 @@ export const buildControlPlaneApi = (
     }
     const connection = workerConnectionFrom(request);
     await workers.assertConnection(connection);
+    await deliveries.flushPendingCancellations(connection.tenantKey);
     await deliveries.flushCompleted(connection.tenantKey);
     await deliveries.flushPending(connection.tenantKey);
     await mcpInvocations.flushQueuedToWorkers(connection.tenantKey, workers);
@@ -3808,8 +3918,18 @@ export const buildControlPlaneApi = (
       );
     }
     const connection = workerConnectionFrom(request);
-    const result = await workers.renew(connection, command.data);
+    await deliveries.flushPendingCancellations(connection.tenantKey);
     const assignment = await workers.getCurrentLease(connection, command.data);
+    if (assignment.workKind === "requirement_delivery") {
+      await deliveries.assertRequirementDeliveryActive(connection.tenantKey, {
+        workKind: "requirement_delivery",
+        projectKey: assignment.projectKey,
+        requirementKey: assignment.requirementKey,
+        requirementRevision: assignment.requirementRevision,
+        title: assignment.title,
+      });
+    }
+    const result = await workers.renew(connection, command.data);
     try {
       await mcpInvocations.renewExecutionLease(
         connection.tenantKey,

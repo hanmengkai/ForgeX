@@ -16,7 +16,26 @@ export interface RequirementActionLinks {
   submitConfirmation?: string | undefined;
   confirm?: string | undefined;
   startDelivery?: string | undefined;
+  terminateDelivery?: string | undefined;
   accept?: string | undefined;
+}
+
+export interface RequirementProgress {
+  percent: number;
+  currentStage: string;
+  updatedAt: string;
+  stages: Array<{
+    key:
+      | "confirmation"
+      | "queue"
+      | "implementation"
+      | "commit"
+      | "verification"
+      | "acceptance";
+    label: string;
+    status: "completed" | "active" | "pending" | "terminated";
+    detail: string;
+  }>;
 }
 
 export interface RequirementListItem {
@@ -29,6 +48,7 @@ export interface RequirementListItem {
     | "已确认，等待交付"
     | "内容已更新，等待重新确认"
     | "AI 正在实现"
+    | "已强制终止"
     | "等待产品验收"
     | "已完成"
     | "验证失败，版本已封存";
@@ -50,6 +70,7 @@ export interface RequirementDetail extends RequirementListItem {
     checks: Array<{ title: string; status: "已通过" }>;
   } | null;
   revisions: RequirementRevision[];
+  progress?: RequirementProgress | undefined;
 }
 
 export interface RequirementRevision {
@@ -428,6 +449,11 @@ export interface ForgeXClient {
     query: string,
   ): Promise<KnowledgeSearchResult[]>;
   getRequirement(selfUrl: string): Promise<RequirementDetail>;
+  watchRequirementEvents?(
+    requirementsUrl: string,
+    onRefresh: () => void,
+    onStatus?: (status: "connected" | "reconnecting") => void,
+  ): () => void;
   createRequirement(spec: RequirementSpecInput): Promise<void>;
   createRequirement(
     actionUrl: string,
@@ -452,6 +478,7 @@ const requirementStatuses = [
   "已确认，等待交付",
   "内容已更新，等待重新确认",
   "AI 正在实现",
+  "已强制终止",
   "等待产品验收",
   "已完成",
   "验证失败，版本已封存",
@@ -743,6 +770,7 @@ const actionSuffixes = {
   submitConfirmation: "/submit-confirmation",
   confirm: "/confirm",
   startDelivery: "/start-delivery",
+  terminateDelivery: "/terminate-delivery",
   accept: "/accept",
 } as const;
 
@@ -757,6 +785,7 @@ const requirementLinksSchema = z
         submitConfirmation: z.string().optional(),
         confirm: z.string().optional(),
         startDelivery: z.string().optional(),
+        terminateDelivery: z.string().optional(),
         accept: z.string().optional(),
       })
       .strict(),
@@ -856,6 +885,38 @@ const requirementDetailResponseSchema = z
       .extend({
         spec: requirementSpecSchema,
         revisions: z.array(requirementRevisionSchema).min(1).max(100),
+        progress: z
+          .object({
+            percent: z.number().int().min(0).max(100),
+            currentStage: z.string().trim().min(1).max(100),
+            updatedAt: z.iso.datetime(),
+            stages: z
+              .array(
+                z
+                  .object({
+                    key: z.enum([
+                      "confirmation",
+                      "queue",
+                      "implementation",
+                      "commit",
+                      "verification",
+                      "acceptance",
+                    ]),
+                    label: z.string().trim().min(1).max(100),
+                    status: z.enum([
+                      "completed",
+                      "active",
+                      "pending",
+                      "terminated",
+                    ]),
+                    detail: z.string().trim().min(1).max(500),
+                  })
+                  .strict(),
+              )
+              .length(6),
+          })
+          .strict()
+          .optional(),
         acceptance: z
           .object({
             verifiedBy: z.string().trim().min(2).max(100),
@@ -1360,10 +1421,18 @@ const assertMcpCancellationUrl = (url: string | undefined): string => {
   return url;
 };
 
+interface RequirementEventSource {
+  onopen: ((event: Event) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  addEventListener(name: string, listener: () => void): void;
+  close(): void;
+}
+
 interface HttpClientOptions {
   baseUrl?: string;
   authorization?: string;
   fetcher?: typeof fetch;
+  eventSourceFactory?: (url: string) => RequirementEventSource;
 }
 
 const readErrorMessage = async (response: Response): Promise<string> => {
@@ -1385,6 +1454,9 @@ export const createHttpForgeXClient = (
 ): ForgeXClient => {
   const fetcher = options.fetcher ?? fetch;
   const baseUrl = options.baseUrl?.replace(/\/$/, "") ?? "";
+  const eventSourceFactory =
+    options.eventSourceFactory ??
+    ((url: string): RequirementEventSource => new EventSource(url));
   const request = async (
     path: string,
     init: RequestInit = {},
@@ -1414,7 +1486,77 @@ export const createHttpForgeXClient = (
     return response;
   };
 
+  const watchAuthorizedRequirementEvents = (
+    eventsUrl: string,
+    onRefresh: () => void,
+    onStatus?: (status: "connected" | "reconnecting") => void,
+  ): (() => void) => {
+    let stopped = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    const connect = async () => {
+      controller = new AbortController();
+      try {
+        const headers = new Headers({ Accept: "text/event-stream" });
+        headers.set("Authorization", options.authorization!);
+        const response = await fetcher(eventsUrl, {
+          headers,
+          credentials: "include",
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          throw new Error("需求实时进度连接失败");
+        }
+        onStatus?.("connected");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!stopped) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          const frames = buffer.split(/\r?\n\r?\n/);
+          buffer = frames.pop() ?? "";
+          for (const frame of frames) {
+            if (/^event:\s*refresh\s*$/m.test(frame)) onRefresh();
+          }
+        }
+      } catch (error) {
+        if (
+          stopped ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
+      }
+      if (!stopped) {
+        onStatus?.("reconnecting");
+        retryTimer = setTimeout(() => void connect(), 1_000);
+      }
+    };
+    void connect();
+    return () => {
+      stopped = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      controller?.abort();
+    };
+  };
+
   return {
+    watchRequirementEvents: (requirementsUrl, onRefresh, onStatus) => {
+      if (!projectRequirementsPattern.test(requirementsUrl)) {
+        throw new Error("需求实时进度入口已经失效，请刷新页面后重试");
+      }
+      const eventsUrl = `${baseUrl}${requirementsUrl}/events`;
+      if (options.authorization) {
+        return watchAuthorizedRequirementEvents(eventsUrl, onRefresh, onStatus);
+      }
+      const source = eventSourceFactory(eventsUrl);
+      source.onopen = () => onStatus?.("connected");
+      source.onerror = () => onStatus?.("reconnecting");
+      source.addEventListener("refresh", onRefresh);
+      return () => source.close();
+    },
     startSession: async (input) => {
       const username = input.username.trim().toLowerCase();
       if (

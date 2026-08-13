@@ -140,6 +140,9 @@ export {
   type RequirementDetailResult,
   type RequirementListQuery,
   type RequirementListResult,
+  type RequirementProgressStageKey,
+  type RequirementProgressStageView,
+  type RequirementProgressView,
 } from "./requirement-service.js";
 export {
   DeliverySkillBindingSchema,

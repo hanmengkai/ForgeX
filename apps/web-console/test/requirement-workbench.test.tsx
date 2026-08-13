@@ -3,6 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -257,20 +258,26 @@ describe("RequirementWorkbench", () => {
   });
 
   it("优先恢复浏览器保存的当前项目，并在切换后持续记住", async () => {
+    const storageKey = "forgex.requirement-context.v1:product.owner";
     window.localStorage.setItem(
-      "forgex.requirement-context.v1",
+      storageKey,
       JSON.stringify({ customerName: "保险客户", projectName: "营销视频" }),
     );
     const client = createClient();
-    render(<RequirementWorkbench client={client} />);
+    render(
+      <RequirementWorkbench client={client} actorUsername="product.owner" />,
+    );
 
     expect(await screen.findByLabelText("当前项目")).toHaveValue("营销视频");
     expect(window.location.search).toContain(
       "project=%E8%90%A5%E9%94%80%E8%A7%86%E9%A2%91",
     );
 
-    await userEvent.selectOptions(screen.getByLabelText("当前项目"), "智能质检");
-    expect(JSON.parse(window.localStorage.getItem("forgex.requirement-context.v1")!)).toEqual({
+    await userEvent.selectOptions(
+      screen.getByLabelText("当前项目"),
+      "智能质检",
+    );
+    expect(JSON.parse(window.localStorage.getItem(storageKey)!)).toEqual({
       customerName: "保险客户",
       projectName: "智能质检",
     });
@@ -339,12 +346,42 @@ describe("RequirementWorkbench", () => {
         currentStage: "AI 分析与修改",
         updatedAt: "2026-08-13T02:00:00.000Z",
         stages: [
-          { key: "confirmation", label: "需求确认", status: "completed", detail: "已确认" },
-          { key: "queue", label: "设备排队", status: "completed", detail: "已领取" },
-          { key: "implementation", label: "AI 实现", status: "active", detail: "分析代码并修改" },
-          { key: "commit", label: "本地提交", status: "pending", detail: "尚未开始" },
-          { key: "verification", label: "独立验证", status: "pending", detail: "尚未开始" },
-          { key: "acceptance", label: "产品验收", status: "pending", detail: "尚未开始" },
+          {
+            key: "confirmation",
+            label: "需求确认",
+            status: "completed",
+            detail: "已确认",
+          },
+          {
+            key: "queue",
+            label: "设备排队",
+            status: "completed",
+            detail: "已领取",
+          },
+          {
+            key: "implementation",
+            label: "AI 实现",
+            status: "active",
+            detail: "分析代码并修改",
+          },
+          {
+            key: "commit",
+            label: "本地提交",
+            status: "pending",
+            detail: "尚未开始",
+          },
+          {
+            key: "verification",
+            label: "独立验证",
+            status: "pending",
+            detail: "尚未开始",
+          },
+          {
+            key: "acceptance",
+            label: "产品验收",
+            status: "pending",
+            detail: "尚未开始",
+          },
         ],
       },
     });
@@ -358,15 +395,44 @@ describe("RequirementWorkbench", () => {
     expect(screen.getByText("45%")).toBeInTheDocument();
     expect(screen.getByText("独立验证")).toBeInTheDocument();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "强制终止交付" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "强制终止交付" }));
     expect(confirm).toHaveBeenCalledWith(
-      "强制终止会立即撤销设备任务，当前未提交的修改不会进入交付结果。确定继续吗？",
+      "强制终止会撤销设备任务，当前未提交的修改不会进入交付结果。确定继续吗？",
     );
     expect(client.runRequirementAction).toHaveBeenCalledWith(
       running.links.actions.terminateDelivery,
       {},
+    );
+  });
+
+  it("实时事件密集到达时只保留一个在途刷新和一次补偿刷新", async () => {
+    const client = createClient();
+    let refresh = () => undefined;
+    client.watchRequirementEvents = vi.fn((_url, onRefresh, onStatus) => {
+      refresh = onRefresh;
+      onStatus?.("connected");
+      return vi.fn();
+    });
+    render(<RequirementWorkbench client={client} />);
+    await screen.findByText("访客预约");
+    const pending = deferred<{
+      items: RequirementListItem[];
+      nextCursor: null;
+    }>();
+    vi.mocked(client.listRequirements).mockImplementationOnce(
+      () => pending.promise,
+    );
+
+    act(() => {
+      refresh();
+      refresh();
+      refresh();
+    });
+    expect(client.listRequirements).toHaveBeenCalledTimes(2);
+
+    pending.resolve({ items, nextCursor: null });
+    await waitFor(() =>
+      expect(client.listRequirements).toHaveBeenCalledTimes(3),
     );
   });
 

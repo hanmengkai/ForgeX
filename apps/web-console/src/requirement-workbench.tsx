@@ -71,6 +71,52 @@ const pathByView: Record<ConsoleView, string> = {
   integrations: "/platform/integrations",
 };
 
+const REQUIREMENT_CONTEXT_STORAGE_KEY = "forgex.requirement-context.v1";
+
+const readStoredRequirementContext = (
+  storageKey: string,
+): {
+  customerName: string;
+  projectName: string;
+} | null => {
+  try {
+    const value: unknown = JSON.parse(
+      window.localStorage.getItem(storageKey) ?? "null",
+    );
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "customerName" in value &&
+      typeof value.customerName === "string" &&
+      "projectName" in value &&
+      typeof value.projectName === "string"
+    ) {
+      return {
+        customerName: value.customerName,
+        projectName: value.projectName,
+      };
+    }
+  } catch {
+    // 浏览器缓存损坏时回退到第一个可用项目。
+  }
+  return null;
+};
+
+const storeRequirementContext = (
+  storageKey: string,
+  customerName: string,
+  projectName: string,
+) => {
+  try {
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({ customerName, projectName }),
+    );
+  } catch {
+    // 缓存不可用时仍允许通过当前 URL 保持业务范围。
+  }
+};
+
 const viewFromPath = (path: string): ConsoleView => {
   const entry = Object.entries(pathByView).find(
     ([, candidate]) => candidate === path,
@@ -136,6 +182,7 @@ const formatVerifiedAt = (value: string) =>
 const statusTone = (status: RequirementListItem["status"]) => {
   if (status === "已完成") return "success";
   if (status === "AI 正在实现") return "running";
+  if (status === "已强制终止") return "terminated";
   if (status === "验证失败，版本已封存") return "attention";
   if (status.includes("等待") || status.includes("确认")) return "attention";
   return "neutral";
@@ -610,6 +657,41 @@ function RequirementCard({
           {detailError ? <p className="detail-error">{detailError}</p> : null}
           {detail ? (
             <>
+              {detail.progress ? (
+                <section
+                  className="delivery-progress"
+                  aria-label="交付实时进度"
+                >
+                  <div className="delivery-progress-heading">
+                    <div>
+                      <span className="detail-label">当前进展</span>
+                      <strong>{detail.progress.currentStage}</strong>
+                    </div>
+                    <strong>{detail.progress.percent}%</strong>
+                  </div>
+                  <div
+                    className="delivery-progress-track"
+                    role="progressbar"
+                    aria-label="交付完成度"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={detail.progress.percent}
+                  >
+                    <span style={{ width: `${detail.progress.percent}%` }} />
+                  </div>
+                  <ol className="delivery-progress-stages">
+                    {detail.progress.stages.map((stage) => (
+                      <li className={stage.status} key={stage.key}>
+                        <span aria-hidden="true" />
+                        <div>
+                          <strong>{stage.label}</strong>
+                          <small>{stage.detail}</small>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
               <div>
                 <span className="detail-label">要解决的问题</span>
                 <p>{detail.spec.goal}</p>
@@ -763,7 +845,7 @@ function RequirementCard({
           ) : null}
         </div>
       ) : null}
-      {actions.length > 0 ? (
+      {actions.length > 0 || item.links.actions.terminateDelivery ? (
         <div className="card-actions">
           {actions.map((action) => (
             <button
@@ -776,6 +858,26 @@ function RequirementCard({
               {busyAction === action.url ? "正在处理…" : action.label}
             </button>
           ))}
+          {item.links.actions.terminateDelivery ? (
+            <button
+              className="text-action danger"
+              type="button"
+              disabled={actionsBusy}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "强制终止会撤销设备任务，当前未提交的修改不会进入交付结果。确定继续吗？",
+                  )
+                ) {
+                  void onAction(item.links.actions.terminateDelivery!, {});
+                }
+              }}
+            >
+              {busyAction === item.links.actions.terminateDelivery
+                ? "正在终止…"
+                : "强制终止交付"}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </article>
@@ -792,12 +894,20 @@ export function RequirementWorkbench({
   signingOut = false,
 }: RequirementWorkbenchProps) {
   const isAdministrator = roles.includes("administrator");
+  const requirementContextStorageKey = actorUsername
+    ? `${REQUIREMENT_CONTEXT_STORAGE_KEY}:${actorUsername}`
+    : REQUIREMENT_CONTEXT_STORAGE_KEY;
   const [contextCustomers, setContextCustomers] = useState<
     RequirementContextCustomer[]
   >([]);
   const [selectedCustomerName, setSelectedCustomerName] = useState("");
   const [selectedProjectName, setSelectedProjectName] = useState("");
   const [items, setItems] = useState<RequirementListItem[]>([]);
+  const [requirementQuery, setRequirementQuery] = useState("");
+  const [requirementStatus, setRequirementStatus] = useState("all");
+  const [liveStatus, setLiveStatus] = useState<
+    "connecting" | "connected" | "reconnecting" | "unsupported"
+  >("connecting");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -882,8 +992,9 @@ export function RequirementWorkbench({
   const selectContextFromLocation = useCallback(
     (customers: RequirementContextCustomer[], replaceInvalid = false) => {
       const query = new URLSearchParams(window.location.search);
-      const requestedCustomer = query.get("customer");
-      const requestedProject = query.get("project");
+      const stored = readStoredRequirementContext(requirementContextStorageKey);
+      const requestedCustomer = query.get("customer") ?? stored?.customerName;
+      const requestedProject = query.get("project") ?? stored?.projectName;
       const customer =
         customers.find((candidate) => candidate.name === requestedCustomer) ??
         customers.find((candidate) => candidate.projects.length > 0) ??
@@ -898,6 +1009,11 @@ export function RequirementWorkbench({
       setSelectedCustomerName(customer?.name ?? "");
       setSelectedProjectName(project?.name ?? "");
       if (customer && project) {
+        storeRequirementContext(
+          requirementContextStorageKey,
+          customer.name,
+          project.name,
+        );
         writeRequirementContextUrl(
           customer.name,
           project.name,
@@ -907,7 +1023,7 @@ export function RequirementWorkbench({
         );
       }
     },
-    [writeRequirementContextUrl],
+    [requirementContextStorageKey, writeRequirementContextUrl],
   );
 
   const navigate = useCallback((path: string, replace = false) => {
@@ -1044,6 +1160,18 @@ export function RequirementWorkbench({
     }),
     [items],
   );
+
+  const filteredItems = useMemo(() => {
+    const query = requirementQuery.trim().toLocaleLowerCase("zh-CN");
+    return items.filter(
+      (item) =>
+        (requirementStatus === "all" || item.status === requirementStatus) &&
+        (!query ||
+          `${item.title} ${item.summary} ${item.status} ${item.nextStep}`
+            .toLocaleLowerCase("zh-CN")
+            .includes(query)),
+    );
+  }, [items, requirementQuery, requirementStatus]);
 
   const executeAction = async (
     actionUrl: string,
@@ -1189,6 +1317,61 @@ export function RequirementWorkbench({
       if (generation === detailGenerationRef.current) setDetailLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (
+      activeView !== "requirements" ||
+      !selectedProject ||
+      !client.watchRequirementEvents
+    ) {
+      setLiveStatus(
+        client.watchRequirementEvents ? "connecting" : "unsupported",
+      );
+      return;
+    }
+    setLiveStatus("connecting");
+    let disposed = false;
+    let refreshing = false;
+    let refreshQueued = false;
+    const refresh = async () => {
+      if (refreshing) {
+        refreshQueued = true;
+        return;
+      }
+      refreshing = true;
+      do {
+        refreshQueued = false;
+        await load();
+        if (disposed) break;
+        const selfUrl = expandedDetailRef.current;
+        if (!selfUrl) continue;
+        const generation = ++detailGenerationRef.current;
+        try {
+          const result = await client.getRequirement(selfUrl);
+          if (
+            !disposed &&
+            mountedRef.current &&
+            expandedDetailRef.current === selfUrl &&
+            detailGenerationRef.current === generation
+          ) {
+            setDetail(result);
+          }
+        } catch {
+          // 实时刷新失败时保留最后一次已知详情，交给后续事件继续收敛。
+        }
+      } while (refreshQueued && !disposed);
+      refreshing = false;
+    };
+    const stop = client.watchRequirementEvents(
+      selectedProject.links.requirements,
+      () => void refresh(),
+      setLiveStatus,
+    );
+    return () => {
+      disposed = true;
+      stop();
+    };
+  }, [activeView, client, load, selectedProject]);
 
   return (
     <div className="app-shell">
@@ -1407,6 +1590,11 @@ export function RequirementWorkbench({
                       setExpandedDetail(null);
                       setDetail(null);
                       if (customer && project) {
+                        storeRequirementContext(
+                          requirementContextStorageKey,
+                          customer.name,
+                          project.name,
+                        );
                         writeRequirementContextUrl(customer.name, project.name);
                       }
                     }}
@@ -1435,6 +1623,11 @@ export function RequirementWorkbench({
                       setExpandedDetail(null);
                       setDetail(null);
                       if (selectedCustomer && project) {
+                        storeRequirementContext(
+                          requirementContextStorageKey,
+                          selectedCustomer.name,
+                          project.name,
+                        );
                         writeRequirementContextUrl(
                           selectedCustomer.name,
                           project.name,
@@ -1504,7 +1697,53 @@ export function RequirementWorkbench({
                     <span className="eyebrow">需求主线</span>
                     <h2>正在推进的工作</h2>
                   </div>
-                  <span className="filter-button">共 {items.length} 项</span>
+                  <span className="filter-button">
+                    共 {filteredItems.length} / {items.length} 项
+                  </span>
+                </div>
+
+                <div className="query-toolbar" role="search">
+                  <label className="query-field grow">
+                    <span>查询需求</span>
+                    <input
+                      type="search"
+                      aria-label="查询需求"
+                      placeholder="按名称、目标、状态或下一步查询"
+                      value={requirementQuery}
+                      onChange={(event) =>
+                        setRequirementQuery(event.target.value)
+                      }
+                    />
+                  </label>
+                  <label className="query-field">
+                    <span>需求状态</span>
+                    <select
+                      aria-label="需求状态"
+                      value={requirementStatus}
+                      onChange={(event) =>
+                        setRequirementStatus(event.target.value)
+                      }
+                    >
+                      <option value="all">全部状态</option>
+                      {Array.from(
+                        new Set(items.map((item) => item.status)),
+                      ).map((status) => (
+                        <option key={status} value={status}>
+                          仅看：{status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className={`live-status ${liveStatus}`}>
+                    <span aria-hidden="true" />
+                    {liveStatus === "connected"
+                      ? "实时更新中"
+                      : liveStatus === "reconnecting"
+                        ? "正在重新连接"
+                        : liveStatus === "unsupported"
+                          ? "手动刷新"
+                          : "正在连接实时进度"}
+                  </span>
                 </div>
 
                 {error ? (
@@ -1532,9 +1771,14 @@ export function RequirementWorkbench({
                       新建需求
                     </button>
                   </div>
-                ) : items.length > 0 ? (
+                ) : items.length > 0 && filteredItems.length === 0 ? (
+                  <div className="empty-state compact">
+                    <h3>没有符合条件的需求</h3>
+                    <p>可以调整查询词或状态条件。</p>
+                  </div>
+                ) : filteredItems.length > 0 ? (
                   <div className="requirement-list">
-                    {items.map((item) => (
+                    {filteredItems.map((item) => (
                       <RequirementCard
                         key={item.links.self}
                         item={item}

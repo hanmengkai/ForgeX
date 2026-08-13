@@ -304,6 +304,22 @@ export class WorkerFleetService {
     );
   }
 
+  async cancelRequirementDelivery(
+    dispatch: DeliveryDispatchRecord,
+  ): Promise<boolean> {
+    return this.#repository.transaction(dispatch.tenantKey, (transaction) => {
+      const fleet = this.#loadFleet(transaction, dispatch.tenantKey);
+      const cancelled = fleet.queue.cancelWork({
+        workKind: "requirement_delivery",
+        projectKey: dispatch.projectKey,
+        workKey: dispatch.requirementKey,
+        workRevision: dispatch.requirementRevision,
+      });
+      if (cancelled) this.#saveFleet(transaction, fleet);
+      return cancelled;
+    });
+  }
+
   async enqueueMcpInvocation(
     dispatch: McpInvocationDispatch,
   ): Promise<{ title: string; status: "等待空闲设备" | "已经完成" }> {

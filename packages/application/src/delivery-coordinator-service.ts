@@ -160,6 +160,22 @@ export class DeliveryCoordinatorService {
     };
   }
 
+  async terminateDelivery(
+    principal: AuthenticatedPrincipal,
+    requirementKey: string,
+    scope?: {
+      projectKey: string;
+      requirements: RequirementApplicationService;
+    },
+  ) {
+    const requirementService = scope?.requirements ?? this.#requirements;
+    return requirementService.terminateDelivery(
+      principal,
+      requirementKey,
+      (dispatch) => this.#workers.cancelRequirementDelivery(dispatch),
+    );
+  }
+
   async flushPending(tenantKey: string): Promise<number> {
     const pending =
       await this.#requirementRepository.listPendingDeliveryDispatches(
@@ -183,6 +199,46 @@ export class DeliveryCoordinatorService {
     return dispatched;
   }
 
+  async flushPendingCancellations(tenantKey: string): Promise<number> {
+    let completed = 0;
+    let pending: DeliveryDispatchRecord[];
+    do {
+      pending =
+        await this.#requirementRepository.listPendingDeliveryCancellations(
+          tenantKey,
+          100,
+        );
+      for (const dispatch of pending) {
+        await this.#workers.cancelRequirementDelivery(dispatch);
+        await this.#requirementRepository.transaction(
+          dispatch.tenantKey,
+          dispatch.projectKey,
+          async (transaction) => {
+            await transaction.markDeliveryCancellationCompleted(
+              dispatch.dispatchKey,
+              this.#clock().toISOString(),
+            );
+          },
+        );
+        completed += 1;
+      }
+    } while (pending.length === 100);
+    return completed;
+  }
+
+  async assertRequirementDeliveryActive(
+    tenantKey: string,
+    assignment: {
+      workKind: "requirement_delivery";
+      projectKey: string;
+      requirementKey: string;
+      requirementRevision: number;
+      title: string;
+    },
+  ): Promise<void> {
+    await this.#requireExecutionAuthority(tenantKey, assignment);
+  }
+
   async executionForWorker(
     tenantKey: string,
     assignment: {
@@ -193,7 +249,32 @@ export class DeliveryCoordinatorService {
       title: string;
     },
   ): Promise<RequirementExecutionEnvelope> {
-    const authority = await this.#requirementRepository.transaction(
+    const authority = await this.#requireExecutionAuthority(
+      tenantKey,
+      assignment,
+    );
+    const skills = await this.#resolveSkills(
+      tenantKey,
+      assignment.projectKey,
+      authority.skills,
+    );
+    return RequirementExecutionEnvelopeSchema.parse({
+      ...authority.envelope,
+      ...(skills.length > 0 ? { skills } : {}),
+    });
+  }
+
+  async #requireExecutionAuthority(
+    tenantKey: string,
+    assignment: {
+      workKind: "requirement_delivery";
+      projectKey: string;
+      requirementKey: string;
+      requirementRevision: number;
+      title: string;
+    },
+  ) {
+    return this.#requirementRepository.transaction(
       tenantKey,
       assignment.projectKey,
       async (transaction) => {
@@ -241,15 +322,6 @@ export class DeliveryCoordinatorService {
         };
       },
     );
-    const skills = await this.#resolveSkills(
-      tenantKey,
-      assignment.projectKey,
-      authority.skills,
-    );
-    return RequirementExecutionEnvelopeSchema.parse({
-      ...authority.envelope,
-      ...(skills.length > 0 ? { skills } : {}),
-    });
   }
 
   async #resolveSkills(

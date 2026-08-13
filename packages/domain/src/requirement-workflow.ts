@@ -29,6 +29,7 @@ export type RequirementStatus =
   | "confirmed"
   | "needsReconfirmation"
   | "inDelivery"
+  | "terminated"
   | "awaitingAcceptance"
   | "completed"
   | "verificationFailedAtLimit";
@@ -160,6 +161,7 @@ export interface RequirementPeopleView {
     | "已确认，等待交付"
     | "内容已更新，等待重新确认"
     | "AI 正在实现"
+    | "已强制终止"
     | "等待产品验收"
     | "已完成"
     | "验证失败，版本已封存";
@@ -183,7 +185,12 @@ export interface RequirementPreviewArtifactReference {
 }
 
 export type RequirementAllowedAction =
-  "revise" | "submitForConfirmation" | "confirm" | "startDelivery" | "accept";
+  | "revise"
+  | "submitForConfirmation"
+  | "confirm"
+  | "startDelivery"
+  | "terminateDelivery"
+  | "accept";
 
 export class RequirementWorkflow {
   readonly #key: string;
@@ -337,6 +344,17 @@ export class RequirementWorkflow {
       );
     }
     this.#status = "inDelivery";
+  }
+
+  terminateDelivery(): void {
+    if (this.#status !== "inDelivery") {
+      throw new RequirementStateConflictError("只有正在执行的交付可以强制终止");
+    }
+    this.#deliveryCandidate = null;
+    this.#deliveryCandidateRecordedAtMs = null;
+    this.#evidence = null;
+    this.#verifiedEvidenceReceipt = null;
+    this.#status = "terminated";
   }
 
   recordDeliveryCandidate(candidate: DeliveryCandidate): void {
@@ -577,6 +595,10 @@ export class RequirementWorkflow {
         return [...(canRevise ? (["revise"] as const) : []), "confirm"];
       case "confirmed":
         return [...(canRevise ? (["revise"] as const) : []), "startDelivery"];
+      case "inDelivery":
+        return ["terminateDelivery"];
+      case "terminated":
+        return canRevise ? ["revise"] : [];
       case "awaitingAcceptance":
         return ["accept"];
       default:
@@ -833,6 +855,11 @@ export class RequirementWorkflow {
         };
       case "inDelivery":
         return { label: "AI 正在实现", nextStep: "等待独立验证完成" };
+      case "terminated":
+        return {
+          label: "已强制终止",
+          nextStep: "如需继续，请修订需求并重新确认",
+        };
       case "awaitingAcceptance":
         return {
           label: "等待产品验收",
@@ -1059,6 +1086,7 @@ export class RequirementWorkflow {
       "confirmed",
       "needsReconfirmation",
       "inDelivery",
+      "terminated",
       "awaitingAcceptance",
       "completed",
       "verificationFailedAtLimit",
@@ -1144,6 +1172,7 @@ export class RequirementWorkflow {
     const mustBeConfirmed = new Set<RequirementStatus>([
       "confirmed",
       "inDelivery",
+      "terminated",
       "awaitingAcceptance",
       "completed",
       "verificationFailedAtLimit",
@@ -1323,6 +1352,7 @@ export class RequirementWorkflow {
         snapshot.status === "awaitingConfirmation" ||
         snapshot.status === "confirmed" ||
         snapshot.status === "needsReconfirmation" ||
+        snapshot.status === "terminated" ||
         snapshot.status === "verificationFailedAtLimit") &&
         deliveryCandidate !== null) ||
       (snapshot.status === "completed" &&

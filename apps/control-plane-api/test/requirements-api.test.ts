@@ -1894,6 +1894,12 @@ describe("需求 API", () => {
             spec: { ...validRequirement, schemaVersion: 1 as const },
           },
         ],
+        progress: {
+          percent: 90,
+          currentStage: "等待产品验收",
+          updatedAt: "2026-08-10T01:30:00.000Z",
+          stages: [],
+        },
       });
 
     const response = await app.inject({
@@ -2109,6 +2115,83 @@ describe("需求 API", () => {
         code: "requirement_state_conflict",
         message: "请先完成独立验证并提交产品验收",
       },
+    });
+    await app.close();
+  });
+
+  it("执行中的需求通过授权链接强制终止，并立即撤销设备任务", async () => {
+    const { app, repository } = createTestApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/requirements",
+      headers: { authorization: "Bearer product-session" },
+      payload: validRequirement,
+    });
+    const self = created.headers.location!;
+    for (const suffix of ["submit-confirmation", "confirm"] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: `${self}/${suffix}`,
+        headers: { authorization: "Bearer product-session" },
+        payload: {},
+      });
+      expect(response.statusCode, response.body).toBe(200);
+    }
+    const started = await app.inject({
+      method: "POST",
+      url: `${self}/start-delivery`,
+      headers: { authorization: "Bearer product-session" },
+      payload: { schemaVersion: 1, requiredCapabilities: [] },
+    });
+    expect(started.statusCode, started.body).toBe(202);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: self,
+      headers: { authorization: "Bearer product-session" },
+    });
+    const terminateUrl = detail.json().data.links.actions.terminateDelivery;
+    expect(terminateUrl).toBe(`${self}/terminate-delivery`);
+
+    const malformed = await app.inject({
+      method: "POST",
+      url: terminateUrl,
+      headers: { authorization: "Bearer product-session" },
+      payload: { reason: "调用方不能夹带内部终止参数" },
+    });
+    expect(malformed.statusCode).toBe(422);
+
+    const terminated = await app.inject({
+      method: "POST",
+      url: terminateUrl,
+      headers: { authorization: "Bearer product-session" },
+      payload: {},
+    });
+    expect(terminated.statusCode, terminated.body).toBe(200);
+    expect(terminated.json().data).toMatchObject({
+      status: "已强制终止",
+      nextStep: "如需继续，请修订需求并重新确认",
+    });
+    expect(await repository.listAuditEvents(tenantKey, projectKey)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "delivery.terminated" }),
+      ]),
+    );
+    await app.close();
+  });
+
+  it("实时进度入口拒绝无效的项目范围", async () => {
+    const { app } = createTestApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/projects/not-a-project/requirements/events",
+      headers: { authorization: "Bearer product-session" },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toMatchObject({
+      code: "validation_error",
+      message: "实时进度入口需要调整",
     });
     await app.close();
   });

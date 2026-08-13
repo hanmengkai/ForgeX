@@ -68,17 +68,30 @@ describe("RequirementApplicationService", () => {
       schemaVersion: 1,
       requiredCapabilities: [],
     });
+    const cancelAssignment = vi
+      .fn()
+      .mockRejectedValue(new Error("设备暂时离线"));
 
     await expect(
-      service.terminateDelivery(principal, created.requirementKey),
+      service.terminateDelivery(
+        principal,
+        created.requirementKey,
+        cancelAssignment,
+      ),
     ).resolves.toMatchObject({
       view: { status: "已强制终止" },
-      allowedActions: expect.arrayContaining(["startDelivery"]),
+      allowedActions: ["revise"],
     });
+    expect(cancelAssignment).toHaveBeenCalledTimes(1);
+    await expect(
+      repository.listPendingDeliveryCancellations(tenantKey, 10),
+    ).resolves.toHaveLength(1);
     await expect(
       repository.listPendingDeliveryDispatches(tenantKey, projectKey, 10),
     ).resolves.toEqual([]);
-    await expect(service.get(principal, created.requirementKey)).resolves.toMatchObject({
+    await expect(
+      service.get(principal, created.requirementKey),
+    ).resolves.toMatchObject({
       progress: {
         percent: 35,
         currentStage: "交付已强制终止",

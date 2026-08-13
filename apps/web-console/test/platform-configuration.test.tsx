@@ -120,13 +120,21 @@ describe("平台资源配置", () => {
     expect(
       within(dialog).getByText("https://gitee.com/example/control-plane.git"),
     ).toBeInTheDocument();
-    expect(within(dialog).getByText("D:\\forgex\\control-plane")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("D:\\forgex\\control-plane"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "为 保险事业群 新建项目" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "为 智能质检平台 新增代码仓库" }),
     ).toBeInTheDocument();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "关闭项目详情" }),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "智能质检平台详情" }),
+    ).toBeNull();
   });
 
   it("用查询区按客户、项目和状态筛选列表，避免项目数量拉高页面", async () => {
@@ -139,9 +147,33 @@ describe("平台资源配置", () => {
     );
     expect(screen.getByText("没有符合条件的客户或项目")).toBeInTheDocument();
 
-    await userEvent.clear(screen.getByRole("searchbox", { name: "查询客户或项目" }));
-    await userEvent.selectOptions(screen.getByLabelText("可用状态"), "disabled");
+    await userEvent.clear(
+      screen.getByRole("searchbox", { name: "查询客户或项目" }),
+    );
+    await userEvent.selectOptions(
+      screen.getByLabelText("可用状态"),
+      "disabled",
+    );
     expect(screen.getByText("没有符合条件的客户或项目")).toBeInTheDocument();
+  });
+
+  it("列表详情和编辑弹窗支持 Escape 关闭并恢复触发按钮焦点", async () => {
+    render(<PlatformConfigurationCenter client={createClient()} />);
+    const detailOpener = await screen.findByRole("button", {
+      name: "查看智能质检平台详情",
+    });
+    await userEvent.click(detailOpener);
+    expect(screen.getByRole("button", { name: "关闭项目详情" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(detailOpener).toHaveFocus();
+
+    const createOpener = screen.getByRole("button", { name: "新建客户" });
+    await userEvent.click(createOpener);
+    expect(screen.getByLabelText("客户名称")).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(createOpener).toHaveFocus();
   });
 
   it("超级管理员可以从页面创建客户", async () => {
@@ -161,6 +193,67 @@ describe("平台资源配置", () => {
       name: "制造事业群",
       summary: "负责制造行业客户项目",
     });
+  });
+
+  it("在列表和详情弹窗中编辑客户与代码仓库", async () => {
+    const client = createClient();
+    render(<PlatformConfigurationCenter client={client} />);
+    await screen.findByText("智能质检平台");
+
+    await userEvent.click(screen.getByRole("button", { name: "编辑客户" }));
+    const customerSummary = screen.getByLabelText("客户说明");
+    await userEvent.clear(customerSummary);
+    await userEvent.type(customerSummary, "负责保险行业交付项目");
+    await userEvent.click(screen.getByRole("button", { name: "保存客户" }));
+    expect(client.updatePlatformCustomer).toHaveBeenCalledWith(
+      overview.customers[0]!.links.self,
+      1,
+      expect.objectContaining({ summary: "负责保险行业交付项目" }),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "查看智能质检平台详情" }),
+    );
+    let detail = screen.getByRole("dialog", { name: "智能质检平台详情" });
+    await userEvent.click(
+      within(detail).getByRole("button", { name: "编辑项目" }),
+    );
+    const projectSummary = screen.getByLabelText("项目说明");
+    await userEvent.clear(projectSummary);
+    await userEvent.type(projectSummary, "管理质检规则、模型和交付进展");
+    await userEvent.click(screen.getByRole("button", { name: "保存项目" }));
+    expect(client.updatePlatformProject).toHaveBeenCalledWith(
+      overview.customers[0]!.projects[0]!.links.self,
+      1,
+      expect.objectContaining({ summary: "管理质检规则、模型和交付进展" }),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "查看智能质检平台详情" }),
+    );
+    detail = screen.getByRole("dialog", { name: "智能质检平台详情" });
+    await userEvent.click(within(detail).getByRole("button", { name: "编辑" }));
+    const defaultBranch = screen.getByLabelText("默认分支");
+    await userEvent.clear(defaultBranch);
+    await userEvent.type(defaultBranch, "master");
+    await userEvent.click(screen.getByRole("button", { name: "保存仓库" }));
+    expect(client.updateProjectRepository).toHaveBeenCalledWith(
+      overview.customers[0]!.projects[0]!.repositories[0]!.links.self,
+      1,
+      expect.objectContaining({ defaultBranch: "master" }),
+    );
+
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "删除客户" }),
+    );
+    expect(client.deletePlatformCustomer).toHaveBeenCalledWith(
+      overview.customers[0]!.links.self,
+      1,
+    );
   });
 
   it("加载项目时只读取初始化状态，并由管理员显式应用标准交付预设", async () => {
