@@ -179,6 +179,25 @@ describe("开源交付包装", () => {
     }
   });
 
+  it("从中英文 README 提供双语部署教程入口", async () => {
+    const [readme, englishReadme, deploymentGuide, englishDeploymentGuide] =
+      await Promise.all([
+        read("README.md"),
+        read("README.en.md"),
+        read("docs/deployment/README.md"),
+        read("docs/deployment/README.en.md"),
+      ]);
+
+    expect(readme).toContain("docs/deployment/README.md");
+    expect(englishReadme).toContain("docs/deployment/README.en.md");
+    expect(deploymentGuide).toContain("deploy\\windows\\deploy.cmd");
+    expect(deploymentGuide).toContain("deploy/ubuntu/deploy.sh");
+    expect(deploymentGuide).toContain("docker compose stop");
+    expect(englishDeploymentGuide).toContain("Windows");
+    expect(englishDeploymentGuide).toContain("Ubuntu");
+    expect(englishDeploymentGuide).toContain("PostgreSQL volume");
+  });
+
   it("仓库交付可构建且不执行候选脚本的独立验证镜像", async () => {
     const [dockerfile, driver, runnerPackage, readme] = await Promise.all([
       read("services/verification-runner/verifier-image/Dockerfile"),
