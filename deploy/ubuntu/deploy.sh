@@ -146,7 +146,7 @@ fi
 assert_forgex_configuration
 compose config --quiet
 compose up --build -d
-port="$(env_value FORGEX_HTTP_PORT)"
+port="$(published_web_port)"
 wait_for_health "${port}"
 
 if [[ -n "${bootstrap_password}" ]]; then

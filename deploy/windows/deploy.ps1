@@ -71,7 +71,7 @@ if (-not $environmentExists) {
 Assert-ForgeXConfiguration
 Invoke-ForgeXCompose @("config", "--quiet")
 Invoke-ForgeXCompose @("up", "--build", "-d")
-$port = [int](Get-ForgeXEnvValue -Name "FORGEX_HTTP_PORT")
+$port = Get-ForgeXPublishedWebPort
 Wait-ForgeXHealth -Port $port
 
 if ($bootstrapPassword) {

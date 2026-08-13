@@ -58,6 +58,24 @@ function Invoke-ForgeXCompose {
   }
 }
 
+function Get-ForgeXPublishedWebPort {
+  $prefix = @("-p", "forgex", "--env-file", $script:EnvironmentFile, "-f", $script:ComposeFile)
+  $arguments = @("port", "web", "8080")
+  $output = @(& docker compose @prefix @arguments)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not resolve the published ForgeX Web port."
+  }
+  $endpoint = ($output | Select-Object -Last 1).Trim()
+  if ($endpoint -notmatch ":(?<port>[0-9]+)$") {
+    throw "Unexpected published Web endpoint: $endpoint"
+  }
+  $port = [int]$Matches.port
+  if ($port -lt 1 -or $port -gt 65535) {
+    throw "Published Web port is outside the valid range: $port"
+  }
+  return $port
+}
+
 function Get-ForgeXEnvValue {
   param([Parameter(Mandatory = $true)][string] $Name)
 

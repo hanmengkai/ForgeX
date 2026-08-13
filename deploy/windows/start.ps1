@@ -3,5 +3,5 @@
 Assert-DockerReady
 Assert-ForgeXConfiguration
 Invoke-ForgeXCompose @("up", "-d")
-$port = [int](Get-ForgeXEnvValue -Name "FORGEX_HTTP_PORT")
+$port = Get-ForgeXPublishedWebPort
 Wait-ForgeXHealth -Port $port

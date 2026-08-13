@@ -46,6 +46,18 @@ compose() {
   docker compose -p forgex --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
+published_web_port() {
+  local endpoint
+  local port
+  endpoint="$(compose port web 8080 | tail -n 1)"
+  port="${endpoint##*:}"
+  [[ "${port}" =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) || {
+    printf '无法解析 Web 发布端口：%s\n' "${endpoint}" >&2
+    return 1
+  }
+  printf '%s\n' "${port}"
+}
+
 env_value() {
   local key="$1"
   sed -n "s/^${key}=//p" "${ENV_FILE}" | tail -n 1
