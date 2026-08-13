@@ -6,6 +6,7 @@ import {
   StartDeliveryCommandSchema,
   WorkerConnectionCredentialSchema,
   WorkerLeaseCommandSchema,
+  WorkerRequirementProcessEventSchema,
   WorkerRegistrationSchema,
 } from "../src/index.js";
 
@@ -181,6 +182,37 @@ describe("Codex 设备注册契约", () => {
         schemaVersion: 1,
         assignmentKey: "not-an-assignment",
         fencingToken: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("过程事件只接受可审计摘要，拒绝思维、工具参数和原始输出", () => {
+    const event = {
+      schemaVersion: 1,
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      fencingToken: 1,
+      eventKey: "88888888-8888-4888-8888-888888888888",
+      sequence: 3,
+      occurredAt: "2026-08-13T04:00:00.000Z",
+      event: {
+        kind: "tool",
+        tool: "read_workspace_file",
+        status: "completed",
+      },
+    };
+
+    expect(WorkerRequirementProcessEventSchema.safeParse(event).success).toBe(
+      true,
+    );
+    expect(
+      WorkerRequirementProcessEventSchema.safeParse({
+        ...event,
+        event: {
+          ...event.event,
+          reasoning: "内部推理不得上传",
+          arguments: { path: ".env" },
+          output: "TOKEN=secret",
+        },
       }).success,
     ).toBe(false);
   });

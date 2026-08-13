@@ -35,6 +35,64 @@ const spec = RequirementSpecSchema.parse({
 });
 
 describe("RequirementApplicationService", () => {
+  it("执行中的需求按事件顺序返回中文化的 Codex 过程记录", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+    });
+    const created = await service.create(principal, spec);
+    await service.submitForConfirmation(principal, created.requirementKey);
+    await service.confirm(principal, created.requirementKey);
+    await service.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+
+    await service.recordExecutionEvent(tenantKey, {
+      eventKey: "88888888-8888-4888-8888-888888888888",
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      sequence: 2,
+      occurredAt: "2026-08-13T04:00:02.000Z",
+      event: {
+        kind: "file_change",
+        changes: [{ path: "src/App.tsx", kind: "update" }],
+        status: "completed",
+      },
+    });
+    await service.recordExecutionEvent(tenantKey, {
+      eventKey: "99999999-9999-4999-8999-999999999999",
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      sequence: 1,
+      occurredAt: "2026-08-13T04:00:01.000Z",
+      event: {
+        kind: "tool",
+        tool: "search_workspace_text",
+        status: "completed",
+      },
+    });
+
+    await expect(service.get(principal, created.requirementKey)).resolves.toMatchObject({
+      executionEvents: [
+        {
+          title: "检索相关代码",
+          detail: "已完成",
+          occurredAt: "2026-08-13T04:00:01.000Z",
+        },
+        {
+          title: "更新项目文件",
+          detail: "src/App.tsx（更新）",
+          occurredAt: "2026-08-13T04:00:02.000Z",
+        },
+      ],
+    });
+  });
+
   it("新需求会持久化所属代码仓库，后续交付不会退回启动时的全局仓库", async () => {
     const repository = new InMemoryRequirementRepository();
     const service = new RequirementApplicationService({

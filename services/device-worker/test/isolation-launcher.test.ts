@@ -90,6 +90,89 @@ const request = () => {
 };
 
 describe("executeIsolatedCodexRun", () => {
+  it("流式执行只打印受控工具和文件变更，不打印思维、参数或原始内容", async () => {
+    const events = [
+      { type: "thread.started", thread_id: "thread-secret" },
+      { type: "turn.started" },
+      {
+        type: "item.completed",
+        item: { id: "reasoning-1", type: "reasoning", text: "内部思维" },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "tool-1",
+          type: "mcp_tool_call",
+          server: "forgex_workspace",
+          tool: "read_workspace_file",
+          arguments: { path: ".env" },
+          result: { content: [{ type: "text", text: "TOKEN=secret" }] },
+          status: "completed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "change-1",
+          type: "file_change",
+          changes: [{ path: "src/App.tsx", kind: "update" }],
+          status: "completed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          id: "message-1",
+          type: "agent_message",
+          text: JSON.stringify({
+            status: "completed",
+            summary: "已完成",
+            tests: [],
+          }),
+        },
+      },
+      { type: "turn.completed", usage: null },
+    ];
+    const runStreamed = vi.fn(async () => ({
+      events: (async function* () {
+        for (const event of events) yield event;
+      })(),
+    }));
+    const createCodex = vi.fn(() => ({
+      startThread: () => ({ id: "thread-secret", runStreamed }),
+    }));
+    const emitProgress = vi.fn();
+
+    await executeIsolatedCodexRun(request(), {
+      currentIdentity: async () => "uid:2000",
+      assertFilesystemBoundary: vi.fn(),
+      assertToolSurface: vi.fn(),
+      createCodex,
+      emitProgress,
+    });
+
+    expect(emitProgress.mock.calls.map(([event]) => event)).toEqual([
+      { kind: "lifecycle", status: "started" },
+      {
+        kind: "tool",
+        tool: "read_workspace_file",
+        status: "completed",
+      },
+      {
+        kind: "file_change",
+        changes: [{ path: "src/App.tsx", kind: "update" }],
+        status: "completed",
+      },
+      { kind: "lifecycle", status: "completed" },
+    ]);
+    expect(JSON.stringify(emitProgress.mock.calls)).not.toContain("内部思维");
+    expect(JSON.stringify(emitProgress.mock.calls)).not.toContain("TOKEN");
+    expect(JSON.stringify(emitProgress.mock.calls)).not.toContain(".env");
+    expect(JSON.stringify(emitProgress.mock.calls)).not.toContain(
+      "thread-secret",
+    );
+  });
+
   it("以真实固定版本 CLI 证明除受控工作树工具外的内置工具均已关闭", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-tools-"));
     temporaryRoots.push(root);

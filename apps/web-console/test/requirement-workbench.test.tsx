@@ -384,6 +384,20 @@ describe("RequirementWorkbench", () => {
           },
         ],
       },
+      executionEvents: [
+        {
+          title: "检索相关代码",
+          detail: "已完成",
+          tone: "success",
+          occurredAt: "2026-08-13T02:00:01.000Z",
+        },
+        {
+          title: "更新项目文件",
+          detail: "src/App.tsx（更新）",
+          tone: "success",
+          occurredAt: "2026-08-13T02:00:02.000Z",
+        },
+      ],
     });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<RequirementWorkbench client={client} />);
@@ -394,6 +408,10 @@ describe("RequirementWorkbench", () => {
     expect(await screen.findByText("AI 分析与修改")).toBeInTheDocument();
     expect(screen.getByText("45%")).toBeInTheDocument();
     expect(screen.getByText("独立验证")).toBeInTheDocument();
+    expect(screen.getByRole("log", { name: "Codex 实时执行记录" })).toHaveTextContent(
+      "检索相关代码已完成",
+    );
+    expect(screen.getByText("src/App.tsx（更新）")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "强制终止交付" }));
     expect(confirm).toHaveBeenCalledWith(
