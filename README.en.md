@@ -82,6 +82,18 @@ For the PostgreSQL E2E suite, provide a dedicated database through `FORGEX_TEST_
 
 ## Local Docker Compose deployment
 
+The recommended path is the [Windows and Ubuntu one-command deployment guide](docs/deployment/README.en.md):
+
+```powershell
+deploy\windows\deploy.cmd
+```
+
+```bash
+./deploy/ubuntu/deploy.sh
+```
+
+The manual Compose equivalent follows:
+
 1. Copy `deploy/.env.example` to `deploy/.env`.
 2. Generate a 64-character hexadecimal PostgreSQL password with `openssl rand -hex 32`. Put the same value in `FORGEX_POSTGRES_PASSWORD` and the URL-encoded `FORGEX_DATABASE_URL`.
 3. For loopback-only use, copy `deploy/config/control-plane.example.json` to `deploy/config/control-plane.json`. For any public deployment, start from `control-plane.production.example.json`, use the real HTTPS origin, and terminate TLS in front of the Web service.

@@ -2,7 +2,6 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $script:DeployDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$script:RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $script:DeployDirectory ".."))
 $script:EnvironmentFile = Join-Path $script:DeployDirectory ".env"
 $script:EnvironmentExampleFile = Join-Path $script:DeployDirectory ".env.example"
 $script:ComposeFile = Join-Path $script:DeployDirectory "compose.yaml"

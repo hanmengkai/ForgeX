@@ -1,3 +1,5 @@
 @echo off
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1" %*
-exit /b %errorlevel%
+set "FORGEX_EXIT_CODE=%errorlevel%"
+pause
+exit /b %FORGEX_EXIT_CODE%

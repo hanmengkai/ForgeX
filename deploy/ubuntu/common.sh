@@ -2,7 +2,6 @@
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
-REPOSITORY_ROOT="$(cd -- "${DEPLOY_DIR}/.." && pwd -P)"
 ENV_FILE="${DEPLOY_DIR}/.env"
 ENV_EXAMPLE_FILE="${DEPLOY_DIR}/.env.example"
 COMPOSE_FILE="${DEPLOY_DIR}/compose.yaml"

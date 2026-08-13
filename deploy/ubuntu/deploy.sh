@@ -56,6 +56,14 @@ if [[ "${mode}" == "production" ]]; then
     printf 'production 模式必须提供不带路径的 HTTPS Origin，例如 https://forgex.example.com。\n' >&2
     exit 2
   }
+  origin_authority="${public_origin#https://}"
+  if [[ "${origin_authority}" == *:* ]]; then
+    origin_port="${origin_authority##*:}"
+    ((origin_port >= 1 && origin_port <= 65535)) || {
+      printf 'HTTPS Origin 端口必须是 1 到 65535。\n' >&2
+      exit 2
+    }
+  fi
 elif [[ -n "${public_origin}" ]]; then
   printf 'local 模式不接受 --public-origin。\n' >&2
   exit 2

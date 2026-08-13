@@ -12,7 +12,10 @@ param(
 if ($Mode -eq "production") {
   $origin = $null
   if (-not [Uri]::TryCreate($PublicOrigin, [UriKind]::Absolute, [ref] $origin) -or
-    $origin.Scheme -ne "https" -or $origin.PathAndQuery -ne "/") {
+    $origin.Scheme -ne "https" -or
+    $origin.PathAndQuery -ne "/" -or
+    $origin.Fragment -or
+    $origin.UserInfo) {
     throw "Production mode requires a path-free HTTPS -PublicOrigin, for example https://forgex.example.com."
   }
 } elseif ($PublicOrigin) {
