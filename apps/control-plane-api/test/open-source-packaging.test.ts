@@ -113,6 +113,72 @@ describe("开源交付包装", () => {
     expect(vitestConfig).toContain("branches: 69");
   });
 
+  it("为 Windows 与 Ubuntu 提供保留数据的一键部署、启动和停止入口", async () => {
+    const [
+      windowsCommon,
+      windowsDeploy,
+      windowsStart,
+      windowsStop,
+      windowsDeployLauncher,
+      windowsStartLauncher,
+      windowsStopLauncher,
+      ubuntuCommon,
+      ubuntuDeploy,
+      ubuntuStart,
+      ubuntuStop,
+    ] = await Promise.all([
+      read("deploy/windows/common.ps1"),
+      read("deploy/windows/deploy.ps1"),
+      read("deploy/windows/start.ps1"),
+      read("deploy/windows/stop.ps1"),
+      read("deploy/windows/deploy.cmd"),
+      read("deploy/windows/start.cmd"),
+      read("deploy/windows/stop.cmd"),
+      read("deploy/ubuntu/common.sh"),
+      read("deploy/ubuntu/deploy.sh"),
+      read("deploy/ubuntu/start.sh"),
+      read("deploy/ubuntu/stop.sh"),
+    ]);
+
+    expect(windowsCommon).toContain('"-p", "forgex"');
+    expect(windowsCommon).toContain("FORGEX_CONTROL_PLANE_CONFIG_SHA256");
+    expect(windowsDeploy).toContain("Get-RandomHex");
+    expect(windowsDeploy).toContain("Wait-ForgeXHealth");
+    expect(windowsDeploy).toContain("https://");
+    expect(windowsStart).toContain('Invoke-ForgeXCompose @("up", "-d")');
+    expect(windowsStop).toContain('Invoke-ForgeXCompose @("stop")');
+    for (const launcher of [
+      windowsDeployLauncher,
+      windowsStartLauncher,
+      windowsStopLauncher,
+    ]) {
+      expect(launcher).toContain("-ExecutionPolicy Bypass");
+      expect(launcher).toContain("%*");
+    }
+
+    expect(ubuntuCommon).toContain("-p forgex");
+    expect(ubuntuCommon).toContain("FORGEX_CONTROL_PLANE_CONFIG_SHA256");
+    expect(ubuntuDeploy).toContain("set -Eeuo pipefail");
+    expect(ubuntuDeploy).toContain("generate_random_hex");
+    expect(ubuntuDeploy).toContain("wait_for_health");
+    expect(ubuntuDeploy).toContain("https://");
+    expect(ubuntuStart).toContain("compose up -d");
+    expect(ubuntuStop).toContain("compose stop");
+
+    for (const script of [
+      windowsCommon,
+      windowsDeploy,
+      windowsStart,
+      windowsStop,
+      ubuntuCommon,
+      ubuntuDeploy,
+      ubuntuStart,
+      ubuntuStop,
+    ]) {
+      expect(script).not.toMatch(/down\s+(?:--volumes|-v)/u);
+    }
+  });
+
   it("仓库交付可构建且不执行候选脚本的独立验证镜像", async () => {
     const [dockerfile, driver, runnerPackage, readme] = await Promise.all([
       read("services/verification-runner/verifier-image/Dockerfile"),
