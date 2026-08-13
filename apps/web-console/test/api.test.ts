@@ -3,6 +3,44 @@ import { describe, expect, it, vi } from "vitest";
 import { createHttpForgeXClient } from "../src/index.js";
 
 describe("createHttpForgeXClient", () => {
+  it("通过同源 SSE 订阅当前项目进度，并在断线后交给浏览器自动重连", () => {
+    const listeners = new Map<string, Array<() => void>>();
+    const source = {
+      onopen: null as (() => void) | null,
+      onerror: null as (() => void) | null,
+      addEventListener: vi.fn((name: string, listener: () => void) => {
+        listeners.set(name, [...(listeners.get(name) ?? []), listener]);
+      }),
+      close: vi.fn(),
+    };
+    const eventSourceFactory = vi.fn(() => source);
+    const client = createHttpForgeXClient({ eventSourceFactory });
+    const onRefresh = vi.fn();
+    const onStatus = vi.fn();
+    const requirementsUrl =
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements";
+
+    const stop = client.watchRequirementEvents!(
+      requirementsUrl,
+      onRefresh,
+      onStatus,
+    );
+    source.onopen?.();
+    listeners.get("refresh")?.forEach((listener) => listener());
+    source.onerror?.();
+
+    expect(eventSourceFactory).toHaveBeenCalledWith(
+      `${requirementsUrl}/events`,
+    );
+    expect(onStatus.mock.calls).toEqual([
+      ["connected"],
+      ["reconnecting"],
+    ]);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    stop();
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
   it("只通过项目动作链接读取并显式初始化标准交付预设", async () => {
     const initializationUrl =
       "/api/v1/platform/projects/22222222-2222-4222-8222-222222222222/initialization";
