@@ -38,6 +38,20 @@ test("桌面工作台保持紧凑首屏并支持浅深主题", async ({ page }) 
     path: "test-results/requirements-refined-light.png",
     fullPage: true,
   });
+  await page.setViewportSize({ width: 1137, height: 760 });
+  const projectSelect = await page.getByLabel("当前项目").boundingBox();
+  const repositoryCount = await page
+    .locator(".context-repository-count")
+    .boundingBox();
+  expect(projectSelect).not.toBeNull();
+  expect(repositoryCount).not.toBeNull();
+  expect(
+    (projectSelect?.x ?? 0) + (projectSelect?.width ?? 0),
+  ).toBeLessThanOrEqual(repositoryCount?.x ?? 0);
+  await page.screenshot({
+    path: "test-results/requirements-1137-no-overlap.png",
+    fullPage: true,
+  });
   await page.getByRole("link", { name: "工作台" }).click();
 
   await page.getByRole("button", { name: "切换为深色主题" }).click();

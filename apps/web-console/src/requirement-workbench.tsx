@@ -1048,40 +1048,43 @@ export function RequirementWorkbench({
     setActiveView(view);
   }, []);
 
-  const load = useCallback(async (background = false) => {
-    const generation = ++loadGenerationRef.current;
-    if (!background) setError(null);
-    if (!selectedProject) {
-      setItems([]);
-      setLoading(false);
-      return;
-    }
-    if (!background) setLoading(true);
-    try {
-      const result = await client.listRequirements(
-        selectedProject.links.requirements,
-      );
-      if (generation === loadGenerationRef.current) {
-        setItems((current) =>
-          JSON.stringify(current) === JSON.stringify(result.items)
-            ? current
-            : result.items,
-        );
-      }
-    } catch (caught) {
-      if (generation === loadGenerationRef.current && !background) {
-        setError(
-          caught instanceof Error
-            ? caught.message
-            : "暂时无法读取需求，请稍后重试",
-        );
-      }
-    } finally {
-      if (generation === loadGenerationRef.current) {
+  const load = useCallback(
+    async (background = false) => {
+      const generation = ++loadGenerationRef.current;
+      if (!background) setError(null);
+      if (!selectedProject) {
+        setItems([]);
         setLoading(false);
+        return;
       }
-    }
-  }, [client, selectedProject]);
+      if (!background) setLoading(true);
+      try {
+        const result = await client.listRequirements(
+          selectedProject.links.requirements,
+        );
+        if (generation === loadGenerationRef.current) {
+          setItems((current) =>
+            JSON.stringify(current) === JSON.stringify(result.items)
+              ? current
+              : result.items,
+          );
+        }
+      } catch (caught) {
+        if (generation === loadGenerationRef.current && !background) {
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "暂时无法读取需求，请稍后重试",
+          );
+        }
+      } finally {
+        if (generation === loadGenerationRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [client, selectedProject],
+  );
 
   useEffect(() => {
     mountedRef.current = true;
