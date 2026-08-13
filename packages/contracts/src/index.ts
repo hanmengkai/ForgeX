@@ -408,6 +408,9 @@ export const CodexProcessEventSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("lifecycle"),
       status: z.enum(["started", "completed", "failed"]),
+      reason: z
+        .enum(["authentication", "rate_limit", "network", "execution"])
+        .optional(),
     })
     .strict(),
   z

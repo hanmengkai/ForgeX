@@ -108,6 +108,19 @@ describe("RequirementApplicationService", () => {
       occurredAt: "2026-08-13T04:00:04.000Z",
       event: { kind: "lifecycle", status: "completed" },
     });
+    await service.recordExecutionEvent(tenantKey, {
+      eventKey: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      sequence: 6,
+      occurredAt: "2026-08-13T04:00:05.000Z",
+      event: {
+        kind: "lifecycle",
+        status: "failed",
+        reason: "authentication",
+      },
+    });
 
     await expect(
       service.get(principal, created.requirementKey),
@@ -138,16 +151,21 @@ describe("RequirementApplicationService", () => {
           detail: "等待设备生成本地提交",
           occurredAt: "2026-08-13T04:00:04.000Z",
         },
+        {
+          title: "Codex 执行未完成",
+          detail: "Codex 登录不可用，请在设备端重新完成登录",
+          occurredAt: "2026-08-13T04:00:05.000Z",
+        },
       ],
     });
     await expect(
       service.recordExecutionEvent(tenantKey, {
-        eventKey: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        eventKey: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         assignmentKey: "77777777-7777-4777-8777-777777777777",
         requirementKey: created.requirementKey,
         requirementRevision: 2,
-        sequence: 6,
-        occurredAt: "2026-08-13T04:00:05.000Z",
+        sequence: 7,
+        occurredAt: "2026-08-13T04:00:06.000Z",
         event: { kind: "lifecycle", status: "completed" },
       }),
     ).rejects.toMatchObject({ code: "delivery_progress_stale" });

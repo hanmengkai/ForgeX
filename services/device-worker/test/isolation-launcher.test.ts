@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -91,6 +91,105 @@ const request = () => {
 };
 
 describe("executeIsolatedCodexRun", () => {
+  it("每轮结束后清理 Codex 自动生成的禁止配置，避免后续任务被旧状态阻断", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-home-cleanup-"));
+    temporaryRoots.push(root);
+    const codexHomePath = path.join(root, "codex-home");
+    await mkdir(codexHomePath);
+    const input = request();
+    input.codexHomePath = codexHomePath;
+    const runStreamed = vi.fn(async () => ({
+      events: (async function* () {
+        yield { type: "turn.started" as const };
+        yield {
+          type: "item.completed" as const,
+          item: {
+            id: "message-1",
+            type: "agent_message" as const,
+            text: JSON.stringify({
+              status: "completed",
+              summary: "已完成",
+              tests: [],
+            }),
+          },
+        };
+        yield {
+          type: "turn.completed" as const,
+          usage: {
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+          },
+        };
+      })(),
+    }));
+
+    await executeIsolatedCodexRun(input, {
+      currentIdentity: async () => "uid:2000",
+      assertFilesystemBoundary: vi.fn(),
+      assertToolSurface: async () => {
+        await writeFile(
+          path.join(codexHomePath, "config.toml"),
+          'trust_level = "untrusted"\n',
+          "utf8",
+        );
+        await mkdir(path.join(codexHomePath, "skills"));
+      },
+      createCodex: () => ({
+        startThread: () => ({ id: "thread-cleanup", runStreamed }),
+      }),
+    });
+
+    await expect(
+      access(path.join(codexHomePath, "config.toml")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      access(path.join(codexHomePath, "skills")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("同一回合的重复失败只上报一次脱敏原因", async () => {
+    const runStreamed = vi.fn(async () => ({
+      events: (async function* () {
+        yield { type: "turn.started" as const };
+        yield {
+          type: "error" as const,
+          message: "401 unauthorized TOKEN=secret",
+        };
+        yield {
+          type: "error" as const,
+          message: "401 unauthorized TOKEN=secret",
+        };
+      })(),
+    }));
+    const emitProgress = vi.fn();
+
+    await expect(
+      executeIsolatedCodexRun(request(), {
+        currentIdentity: async () => "uid:2000",
+        assertFilesystemBoundary: vi.fn(),
+        assertToolSurface: vi.fn(),
+        createCodex: () => ({
+          startThread: () => ({ id: "thread-failed", runStreamed }),
+        }),
+        emitProgress,
+      }),
+    ).rejects.toThrow("Codex 执行回合未完成");
+
+    expect(emitProgress.mock.calls.map(([event]) => event)).toEqual([
+      { kind: "lifecycle", status: "started" },
+      {
+        kind: "lifecycle",
+        status: "failed",
+        reason: "authentication",
+      },
+    ]);
+    expect(JSON.stringify(emitProgress.mock.calls)).not.toContain("TOKEN");
+    expect(JSON.stringify(emitProgress.mock.calls)).not.toContain("401");
+  });
+
   it("流式执行只打印受控工具和文件变更，不打印思维、参数或原始内容", async () => {
     const events: ThreadEvent[] = [
       { type: "thread.started", thread_id: "thread-secret" },

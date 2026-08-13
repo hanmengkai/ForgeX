@@ -208,6 +208,27 @@ describe("Codex 设备注册契约", () => {
       WorkerRequirementProcessEventSchema.safeParse({
         ...event,
         event: {
+          kind: "lifecycle",
+          status: "failed",
+          reason: "authentication",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      WorkerRequirementProcessEventSchema.safeParse({
+        ...event,
+        event: {
+          kind: "lifecycle",
+          status: "failed",
+          reason: "authentication",
+          message: "401 TOKEN=secret",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkerRequirementProcessEventSchema.safeParse({
+        ...event,
+        event: {
           ...event.event,
           reasoning: "内部推理不得上传",
           arguments: { path: ".env" },

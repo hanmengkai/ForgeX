@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, lstat, open, realpath, unlink } from "node:fs/promises";
+import { access, lstat, open, realpath, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -188,6 +188,30 @@ const workspaceRelativePath = (
   return portable.length <= 240 ? portable : null;
 };
 
+const failureReason = (
+  message: string,
+): Extract<CodexProcessEventPayload, { kind: "lifecycle" }>["reason"] => {
+  const normalized = message.toLowerCase();
+  if (
+    /(?:\b401\b|unauthori[sz]ed|authentication|credential|log(?:ged)?\s*in|login)/u.test(
+      normalized,
+    )
+  ) {
+    return "authentication";
+  }
+  if (/(?:\b429\b|rate.?limit|quota)/u.test(normalized)) {
+    return "rate_limit";
+  }
+  if (
+    /(?:network|connect|dns|socket|timed?\s*out|timeout|tls|certificate)/u.test(
+      normalized,
+    )
+  ) {
+    return "network";
+  }
+  return "execution";
+};
+
 const processEventFromThreadEvent = (
   event: ThreadEvent,
   workspacePath: string,
@@ -199,7 +223,13 @@ const processEventFromThreadEvent = (
     return { kind: "lifecycle", status: "completed" };
   }
   if (event.type === "turn.failed" || event.type === "error") {
-    return { kind: "lifecycle", status: "failed" };
+    return {
+      kind: "lifecycle",
+      status: "failed",
+      reason: failureReason(
+        event.type === "turn.failed" ? event.error.message : event.message,
+      ),
+    };
   }
   if (event.type !== "item.started" && event.type !== "item.completed") {
     return null;
@@ -256,6 +286,21 @@ const forbiddenCodexHomeEntries = [
   "plugins",
   "hooks",
 ] as const;
+
+const cleanupGeneratedCodexHomeEntries = async (
+  codexHomePath: string,
+): Promise<void> => {
+  await Promise.all(
+    forbiddenCodexHomeEntries.map((entry) =>
+      rm(path.join(codexHomePath, entry), {
+        force: true,
+        recursive: true,
+        maxRetries: 3,
+        retryDelay: 50,
+      }),
+    ),
+  );
+};
 
 const workspaceMcpPath = fileURLToPath(
   new URL("./workspace-mcp-main.js", import.meta.url),
@@ -598,70 +643,86 @@ export const executeIsolatedCodexRun = async (
   if (runnerIdentity === request.controllerIdentity) {
     throw new Error("Codex 隔离启动器不能与 Worker 控制器使用同一系统身份");
   }
-  await (
-    dependencies.assertFilesystemBoundary ?? assertLauncherFilesystemBoundary
-  )(request);
-  await (dependencies.assertToolSurface ?? assertCodexToolSurface)(request);
-  const shellEnvironment = request.codex.config.shell_environment_policy.set;
-  const createCodex =
-    dependencies.createCodex ?? ((options: CodexOptions) => new Codex(options));
-  const projectTrustOverride = projectTrustOverrideKey(request.workspacePath);
-  const codex = createCodex({
-    env: {
-      ...shellEnvironment,
-      CODEX_HOME: request.codexHomePath,
-    },
-    config: {
-      ...request.codex.config,
-      [projectTrustOverride]: "untrusted",
-      mcp_servers: {
-        forgex_workspace: workspaceMcpConfiguration(request.workspacePath),
+  let cleanupGeneratedHome = false;
+  try {
+    await (
+      dependencies.assertFilesystemBoundary ?? assertLauncherFilesystemBoundary
+    )(request);
+    cleanupGeneratedHome = true;
+    await (dependencies.assertToolSurface ?? assertCodexToolSurface)(request);
+    const shellEnvironment = request.codex.config.shell_environment_policy.set;
+    const createCodex =
+      dependencies.createCodex ??
+      ((options: CodexOptions) => new Codex(options));
+    const projectTrustOverride = projectTrustOverrideKey(request.workspacePath);
+    const codex = createCodex({
+      env: {
+        ...shellEnvironment,
+        CODEX_HOME: request.codexHomePath,
       },
-    },
-  });
-  const thread = codex.startThread({
-    ...(request.codex.model ? { model: request.codex.model } : {}),
-    sandboxMode: request.codex.sandboxMode,
-    workingDirectory: request.workspacePath,
-    skipGitRepoCheck: true,
-    modelReasoningEffort: request.codex.reasoningEffort,
-    networkAccessEnabled: request.codex.networkAccessEnabled,
-    webSearchMode: request.codex.webSearchMode,
-    approvalPolicy: request.codex.approvalPolicy,
-  });
-  const turn = await thread.runStreamed(request.prompt, {
-    outputSchema: request.outputSchema,
-  });
-  let finalResponse = "";
-  let failed = false;
-  for await (const event of turn.events) {
-    if (
-      event.type === "item.completed" &&
-      event.item.type === "agent_message"
-    ) {
-      finalResponse = event.item.text;
+      config: {
+        ...request.codex.config,
+        [projectTrustOverride]: "untrusted",
+        mcp_servers: {
+          forgex_workspace: workspaceMcpConfiguration(request.workspacePath),
+        },
+      },
+    });
+    const thread = codex.startThread({
+      ...(request.codex.model ? { model: request.codex.model } : {}),
+      sandboxMode: request.codex.sandboxMode,
+      workingDirectory: request.workspacePath,
+      skipGitRepoCheck: true,
+      modelReasoningEffort: request.codex.reasoningEffort,
+      networkAccessEnabled: request.codex.networkAccessEnabled,
+      webSearchMode: request.codex.webSearchMode,
+      approvalPolicy: request.codex.approvalPolicy,
+    });
+    const turn = await thread.runStreamed(request.prompt, {
+      outputSchema: request.outputSchema,
+    });
+    let finalResponse = "";
+    let failed = false;
+    for await (const event of turn.events) {
+      if (
+        event.type === "item.completed" &&
+        event.item.type === "agent_message"
+      ) {
+        finalResponse = event.item.text;
+      }
+      const progress = processEventFromThreadEvent(
+        event,
+        request.workspacePath,
+      );
+      const failureEvent =
+        event.type === "turn.failed" || event.type === "error";
+      if (progress && (!failureEvent || !failed)) {
+        await dependencies.emitProgress?.(progress);
+      }
+      if (failureEvent) failed = true;
     }
-    const progress = processEventFromThreadEvent(event, request.workspacePath);
-    if (progress) await dependencies.emitProgress?.(progress);
-    if (event.type === "turn.failed" || event.type === "error") failed = true;
+    if (failed) throw new Error("Codex 执行回合未完成");
+    if (finalResponse.trim().length === 0) {
+      throw new Error("Codex 没有返回结构化执行结果");
+    }
+    return {
+      schemaVersion: 1,
+      challenge: request.challenge,
+      isolationKind: request.isolationKind,
+      workspacePath: request.workspacePath,
+      protectedPathsHash: request.protectedPathsHash,
+      workspaceReadable: true,
+      workspaceWritable: true,
+      protectedPathsDenied: true,
+      controllerIdentitySeparated: true,
+      shellToolsDisabled: true,
+      controlledWorkspaceToolsOnly: true,
+      finalResponse,
+      threadId: thread.id,
+    };
+  } finally {
+    if (cleanupGeneratedHome) {
+      await cleanupGeneratedCodexHomeEntries(request.codexHomePath);
+    }
   }
-  if (failed) throw new Error("Codex 执行回合未完成");
-  if (finalResponse.trim().length === 0) {
-    throw new Error("Codex 没有返回结构化执行结果");
-  }
-  return {
-    schemaVersion: 1,
-    challenge: request.challenge,
-    isolationKind: request.isolationKind,
-    workspacePath: request.workspacePath,
-    protectedPathsHash: request.protectedPathsHash,
-    workspaceReadable: true,
-    workspaceWritable: true,
-    protectedPathsDenied: true,
-    controllerIdentitySeparated: true,
-    shellToolsDisabled: true,
-    controlledWorkspaceToolsOnly: true,
-    finalResponse,
-    threadId: thread.id,
-  };
 };

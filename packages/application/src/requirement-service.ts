@@ -117,9 +117,17 @@ const executionEventView = (
         occurredAt: record.occurredAt,
       };
     }
+    const failureDetail = {
+      authentication: "Codex 登录不可用，请在设备端重新完成登录",
+      rate_limit: "Codex 服务触发限流，请稍后重试",
+      network: "设备与 Codex 服务的网络连接异常",
+      execution: "设备已保留失败状态，供人工检查",
+    } as const;
     return {
       title: "Codex 执行未完成",
-      detail: "设备将保留失败状态供人工检查",
+      detail: event.reason
+        ? failureDetail[event.reason]
+        : "设备已保留失败状态，供人工检查",
       tone: "error",
       occurredAt: record.occurredAt,
     };
