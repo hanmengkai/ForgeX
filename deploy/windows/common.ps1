@@ -23,9 +23,20 @@ function Assert-DockerReady {
   }
 }
 
+function Test-ForgeXRegularFile {
+  param([Parameter(Mandatory = $true)][string] $Path)
+
+  if (-not (Test-Path -LiteralPath $Path)) { return $false }
+  $item = Get-Item -Force -LiteralPath $Path
+  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "Deployment path must be a regular file and not a link: $Path"
+  }
+  return $true
+}
+
 function Assert-ForgeXConfiguration {
   foreach ($path in @($script:EnvironmentFile, $script:RuntimeConfigFile)) {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    if (-not (Test-ForgeXRegularFile -Path $path)) {
       throw "Deployment file is missing: $path. Run deploy.cmd first."
     }
   }

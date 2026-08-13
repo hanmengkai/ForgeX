@@ -4,7 +4,7 @@ param(
   [string] $PublicOrigin = "",
   [ValidateRange(1, 65535)][int] $HttpPort = 8080,
   [ValidatePattern("^[A-Za-z0-9._-]+$")][string] $AdminUsername = "super.admin",
-  [ValidateLength(1, 100)][string] $AdminName = "ForgeX Administrator"
+  [ValidateLength(1, 100)][ValidatePattern("^[^\r\n=]+$")][string] $AdminName = "ForgeX Administrator"
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -24,8 +24,8 @@ if ($Mode -eq "production") {
 
 Assert-DockerReady
 
-$environmentExists = Test-Path -LiteralPath $script:EnvironmentFile -PathType Leaf
-$configExists = Test-Path -LiteralPath $script:RuntimeConfigFile -PathType Leaf
+$environmentExists = Test-ForgeXRegularFile -Path $script:EnvironmentFile
+$configExists = Test-ForgeXRegularFile -Path $script:RuntimeConfigFile
 if ($environmentExists -xor $configExists) {
   throw "deploy/.env and deploy/config/control-plane.json must either both exist or both be absent."
 }
@@ -80,3 +80,5 @@ if ($bootstrapPassword) {
   Write-Warning "Save this password, sign in, and change it immediately. After bootstrap, clear FORGEX_BOOTSTRAP_ADMIN_PASSWORD in deploy/.env."
 }
 Write-Host "ForgeX deployment completed: http://localhost:$port" -ForegroundColor Green
+$configuredOrigin = (Get-Content -Raw -LiteralPath $script:RuntimeConfigFile -Encoding UTF8 | ConvertFrom-Json).publicOrigin
+Write-Host "Configured browser origin: $configuredOrigin" -ForegroundColor Green

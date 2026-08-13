@@ -10,6 +10,18 @@ public_origin=""
 http_port="8080"
 admin_username="super.admin"
 admin_name="超级管理员"
+generation_in_progress=0
+
+cleanup_partial_configuration() {
+  local status=$?
+  trap - EXIT
+  if ((status != 0 && generation_in_progress == 1)); then
+    rm -f -- "${ENV_FILE}" "${RUNTIME_CONFIG_FILE}"
+    printf '首次配置生成失败，已清理不完整的私有配置。\n' >&2
+  fi
+  exit "${status}"
+}
+trap cleanup_partial_configuration EXIT
 
 usage() {
   cat <<'EOF'
@@ -46,8 +58,8 @@ done
   printf -- '--admin-username 只能包含字母、数字、点、下划线和连字符。\n' >&2
   exit 2
 }
-[[ "${admin_name}" != *$'\n'* && "${admin_name}" != *'"'* && "${admin_name}" != *'\\'* ]] || {
-  printf -- '--admin-name 不能包含换行、双引号或反斜杠。\n' >&2
+[[ "${admin_name}" != *$'\n'* && "${admin_name}" != *$'\r'* && "${admin_name}" != *'"'* && "${admin_name}" != *'\\'* && "${admin_name}" != *'|'* ]] || {
+  printf -- '--admin-name 不能包含换行、双引号、反斜杠或竖线。\n' >&2
   exit 2
 }
 
@@ -70,11 +82,26 @@ elif [[ -n "${public_origin}" ]]; then
 fi
 
 assert_docker_ready
+for required_command in curl od awk sed sha256sum mktemp; do
+  require_command "${required_command}"
+done
 
 environment_exists=0
 config_exists=0
-[[ -f "${ENV_FILE}" ]] && environment_exists=1
-[[ -f "${RUNTIME_CONFIG_FILE}" ]] && config_exists=1
+if [[ -e "${ENV_FILE}" || -L "${ENV_FILE}" ]]; then
+  [[ -f "${ENV_FILE}" && ! -L "${ENV_FILE}" ]] || {
+    printf 'deploy/.env 必须是普通文件且不能是符号链接。\n' >&2
+    exit 1
+  }
+  environment_exists=1
+fi
+if [[ -e "${RUNTIME_CONFIG_FILE}" || -L "${RUNTIME_CONFIG_FILE}" ]]; then
+  [[ -f "${RUNTIME_CONFIG_FILE}" && ! -L "${RUNTIME_CONFIG_FILE}" ]] || {
+    printf 'control-plane.json 必须是普通文件且不能是符号链接。\n' >&2
+    exit 1
+  }
+  config_exists=1
+fi
 if ((environment_exists != config_exists)); then
   printf 'deploy/.env 与 deploy/config/control-plane.json 必须同时存在或同时缺失。\n' >&2
   exit 1
@@ -82,6 +109,7 @@ fi
 
 bootstrap_password=""
 if ((environment_exists == 0)); then
+  generation_in_progress=1
   cp -- "${ENV_EXAMPLE_FILE}" "${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
   database_password="$(generate_random_hex 32)"
@@ -110,6 +138,7 @@ if ((environment_exists == 0)); then
   replace_config_value 'super.admin' "${admin_username}"
   config_hash="$(sha256sum "${RUNTIME_CONFIG_FILE}" | awk '{print $1}')"
   set_env_value FORGEX_CONTROL_PLANE_CONFIG_SHA256 "${config_hash}"
+  generation_in_progress=0
 else
   printf '检测到现有部署配置，将保留密码、标识与公开地址。\n'
 fi

@@ -24,11 +24,11 @@ assert_docker_ready() {
 }
 
 assert_forgex_configuration() {
-  [[ -f "${ENV_FILE}" ]] || {
+  [[ -f "${ENV_FILE}" && ! -L "${ENV_FILE}" ]] || {
     printf '缺少 %s，请先运行 deploy/ubuntu/deploy.sh。\n' "${ENV_FILE}" >&2
     return 1
   }
-  [[ -f "${RUNTIME_CONFIG_FILE}" ]] || {
+  [[ -f "${RUNTIME_CONFIG_FILE}" && ! -L "${RUNTIME_CONFIG_FILE}" ]] || {
     printf '缺少 %s，请先运行 deploy/ubuntu/deploy.sh。\n' "${RUNTIME_CONFIG_FILE}" >&2
     return 1
   }
