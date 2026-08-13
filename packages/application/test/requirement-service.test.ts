@@ -189,6 +189,79 @@ describe("RequirementApplicationService", () => {
     ).rejects.toMatchObject({ code: "delivery_progress_stale" });
   });
 
+  it("重复执行时只向页面返回最新一轮 Codex 过程记录", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+    });
+    const created = await service.create(principal, spec);
+    await service.submitForConfirmation(principal, created.requirementKey);
+    await service.confirm(principal, created.requirementKey);
+    await service.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+
+    const assignmentKey = "77777777-7777-4777-8777-777777777777";
+    for (const event of [
+      {
+        eventKey: "11111111-aaaa-4111-8111-111111111111",
+        occurredAt: "2026-08-13T04:00:00.000Z",
+        event: { kind: "lifecycle", status: "started" } as const,
+      },
+      {
+        eventKey: "22222222-aaaa-4222-8222-222222222222",
+        occurredAt: "2026-08-13T04:00:10.000Z",
+        event: {
+          kind: "lifecycle",
+          status: "failed",
+          reason: "network",
+        } as const,
+      },
+      {
+        eventKey: "33333333-aaaa-4333-8333-333333333333",
+        occurredAt: "2026-08-13T04:01:00.000Z",
+        event: { kind: "lifecycle", status: "started" } as const,
+      },
+      {
+        eventKey: "44444444-aaaa-4444-8444-444444444444",
+        occurredAt: "2026-08-13T04:01:01.000Z",
+        event: {
+          kind: "tool",
+          tool: "read_workspace_file",
+          status: "completed",
+        } as const,
+      },
+    ]) {
+      await service.recordExecutionEvent(tenantKey, {
+        ...event,
+        assignmentKey,
+        requirementKey: created.requirementKey,
+        requirementRevision: 1,
+        sequence: 1,
+      });
+    }
+
+    const detail = await service.get(principal, created.requirementKey);
+
+    expect(detail.executionEvents).toEqual([
+      {
+        title: "Codex 开始分析需求",
+        detail: "已进入受控项目工作区",
+        tone: "running",
+        occurredAt: "2026-08-13T04:01:00.000Z",
+      },
+      {
+        title: "读取项目文件",
+        detail: "已完成",
+        tone: "success",
+        occurredAt: "2026-08-13T04:01:01.000Z",
+      },
+    ]);
+  });
+
   it("新需求会持久化所属代码仓库，后续交付不会退回启动时的全局仓库", async () => {
     const repository = new InMemoryRequirementRepository();
     const service = new RequirementApplicationService({
