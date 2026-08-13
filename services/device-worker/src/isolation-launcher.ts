@@ -1,6 +1,15 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, lstat, open, realpath, rm, unlink } from "node:fs/promises";
+import {
+  access,
+  lstat,
+  mkdtemp,
+  open,
+  readdir,
+  realpath,
+  rm,
+  unlink,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -287,19 +296,39 @@ const forbiddenCodexHomeEntries = [
   "hooks",
 ] as const;
 
-const cleanupGeneratedCodexHomeEntries = async (
+interface RuntimeCodexHome {
+  path: string;
+  cleanup(): Promise<void>;
+}
+
+const prepareRuntimeCodexHome = async (
   codexHomePath: string,
-): Promise<void> => {
+): Promise<RuntimeCodexHome> => {
+  const staleRuntimeHomePattern = /^\.forgex-run-[A-Za-z0-9]{6}$/u;
+  const entries = await readdir(codexHomePath, { withFileTypes: true });
   await Promise.all(
-    forbiddenCodexHomeEntries.map((entry) =>
-      rm(path.join(codexHomePath, entry), {
+    entries
+      .filter((entry) => staleRuntimeHomePattern.test(entry.name))
+      .map((entry) =>
+        rm(path.join(codexHomePath, entry.name), {
+          force: true,
+          recursive: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        }),
+      ),
+  );
+  const runtimePath = await mkdtemp(path.join(codexHomePath, ".forgex-run-"));
+  return {
+    path: runtimePath,
+    cleanup: () =>
+      rm(runtimePath, {
         force: true,
         recursive: true,
         maxRetries: 3,
         retryDelay: 50,
       }),
-    ),
-  );
+  };
 };
 
 const workspaceMcpPath = fileURLToPath(
@@ -612,6 +641,9 @@ export interface IsolationLauncherDependencies {
   assertToolSurface?: (request: IsolatedCodexRunRequest) => Promise<void>;
   createCodex?: (options: CodexOptions) => CodexLike;
   emitProgress?: (event: CodexProcessEventPayload) => void | Promise<void>;
+  prepareRuntimeCodexHome?: (
+    codexHomePath: string,
+  ) => Promise<RuntimeCodexHome>;
 }
 
 export const executeIsolatedCodexRun = async (
@@ -643,14 +675,22 @@ export const executeIsolatedCodexRun = async (
   if (runnerIdentity === request.controllerIdentity) {
     throw new Error("Codex 隔离启动器不能与 Worker 控制器使用同一系统身份");
   }
-  let cleanupGeneratedHome = false;
+  await (
+    dependencies.assertFilesystemBoundary ?? assertLauncherFilesystemBoundary
+  )(request);
+  const runtimeHome = await (
+    dependencies.prepareRuntimeCodexHome ?? prepareRuntimeCodexHome
+  )(request.codexHomePath);
   try {
-    await (
-      dependencies.assertFilesystemBoundary ?? assertLauncherFilesystemBoundary
-    )(request);
-    cleanupGeneratedHome = true;
-    await (dependencies.assertToolSurface ?? assertCodexToolSurface)(request);
-    const shellEnvironment = request.codex.config.shell_environment_policy.set;
+    const runtimeRequest = {
+      ...request,
+      codexHomePath: runtimeHome.path,
+    };
+    await (dependencies.assertToolSurface ?? assertCodexToolSurface)(
+      runtimeRequest,
+    );
+    const shellEnvironment =
+      runtimeRequest.codex.config.shell_environment_policy.set;
     const createCodex =
       dependencies.createCodex ??
       ((options: CodexOptions) => new Codex(options));
@@ -658,7 +698,7 @@ export const executeIsolatedCodexRun = async (
     const codex = createCodex({
       env: {
         ...shellEnvironment,
-        CODEX_HOME: request.codexHomePath,
+        CODEX_HOME: runtimeRequest.codexHomePath,
       },
       config: {
         ...request.codex.config,
@@ -721,8 +761,6 @@ export const executeIsolatedCodexRun = async (
       threadId: thread.id,
     };
   } finally {
-    if (cleanupGeneratedHome) {
-      await cleanupGeneratedCodexHomeEntries(request.codexHomePath);
-    }
+    await runtimeHome.cleanup();
   }
 };

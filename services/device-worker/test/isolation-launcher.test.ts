@@ -1,10 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ThreadEvent } from "@openai/codex-sdk";
+import type { CodexOptions, ThreadEvent } from "@openai/codex-sdk";
 
 import {
   assertCodexToolSurface,
@@ -90,12 +98,24 @@ const request = () => {
   };
 };
 
+const virtualRuntimeCodexHome = async (codexHomePath: string) => ({
+  path: path.join(codexHomePath, ".forgex-run-test"),
+  cleanup: async () => Promise.resolve(),
+});
+
 describe("executeIsolatedCodexRun", () => {
   it("每轮结束后清理 Codex 自动生成的禁止配置，避免后续任务被旧状态阻断", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-home-cleanup-"));
     temporaryRoots.push(root);
     const codexHomePath = path.join(root, "codex-home");
     await mkdir(codexHomePath);
+    const staleRuntimeHome = path.join(codexHomePath, ".forgex-run-abcdef");
+    await mkdir(staleRuntimeHome);
+    await writeFile(
+      path.join(staleRuntimeHome, "config.toml"),
+      'trust_level = "untrusted"\n',
+      "utf8",
+    );
     const input = request();
     input.codexHomePath = codexHomePath;
     const runStreamed = vi.fn(async () => ({
@@ -129,13 +149,13 @@ describe("executeIsolatedCodexRun", () => {
     await executeIsolatedCodexRun(input, {
       currentIdentity: async () => "uid:2000",
       assertFilesystemBoundary: vi.fn(),
-      assertToolSurface: async () => {
+      assertToolSurface: async (runtimeRequest) => {
         await writeFile(
-          path.join(codexHomePath, "config.toml"),
+          path.join(runtimeRequest.codexHomePath, "config.toml"),
           'trust_level = "untrusted"\n',
           "utf8",
         );
-        await mkdir(path.join(codexHomePath, "skills"));
+        await mkdir(path.join(runtimeRequest.codexHomePath, "skills"));
       },
       createCodex: () => ({
         startThread: () => ({ id: "thread-cleanup", runStreamed }),
@@ -148,6 +168,7 @@ describe("executeIsolatedCodexRun", () => {
     await expect(
       access(path.join(codexHomePath, "skills")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readdir(codexHomePath)).resolves.toEqual([]);
   });
 
   it("同一回合的重复失败只上报一次脱敏原因", async () => {
@@ -171,6 +192,7 @@ describe("executeIsolatedCodexRun", () => {
         currentIdentity: async () => "uid:2000",
         assertFilesystemBoundary: vi.fn(),
         assertToolSurface: vi.fn(),
+        prepareRuntimeCodexHome: virtualRuntimeCodexHome,
         createCodex: () => ({
           startThread: () => ({ id: "thread-failed", runStreamed }),
         }),
@@ -259,6 +281,7 @@ describe("executeIsolatedCodexRun", () => {
       currentIdentity: async () => "uid:2000",
       assertFilesystemBoundary: vi.fn(),
       assertToolSurface: vi.fn(),
+      prepareRuntimeCodexHome: virtualRuntimeCodexHome,
       createCodex,
       emitProgress,
     });
@@ -411,7 +434,7 @@ describe("executeIsolatedCodexRun", () => {
       id: "thread-isolated",
       runStreamed,
     }));
-    const createCodex = vi.fn(() => ({ startThread }));
+    const createCodex = vi.fn((_options: CodexOptions) => ({ startThread }));
     const assertFilesystemBoundary = vi.fn(async () => Promise.resolve());
     const assertToolSurface = vi.fn(async () => Promise.resolve());
     const input = request();
@@ -421,6 +444,7 @@ describe("executeIsolatedCodexRun", () => {
         currentIdentity: async () => "uid:2000",
         assertFilesystemBoundary,
         assertToolSurface,
+        prepareRuntimeCodexHome: virtualRuntimeCodexHome,
         createCodex,
       }),
     ).resolves.toMatchObject({
@@ -438,7 +462,7 @@ describe("executeIsolatedCodexRun", () => {
       expect.objectContaining({
         env: {
           PATH: "/usr/bin",
-          CODEX_HOME: input.codexHomePath,
+          CODEX_HOME: expect.any(String),
         },
         config: expect.objectContaining({
           cli_auth_credentials_store: "keyring",
@@ -463,6 +487,10 @@ describe("executeIsolatedCodexRun", () => {
         }),
       }),
     );
+    const runtimeCodexHome = createCodex.mock.calls[0]?.[0].env?.CODEX_HOME;
+    if (!runtimeCodexHome) throw new Error("测试没有取得隔离 CODEX_HOME");
+    expect(runtimeCodexHome).not.toBe(input.codexHomePath);
+    expect(path.dirname(runtimeCodexHome)).toBe(input.codexHomePath);
     const projectTrustOverride = `projects.${JSON.stringify(input.workspacePath)}.trust_level`;
     expect(createCodex).toHaveBeenCalledWith(
       expect.objectContaining({
