@@ -10,10 +10,12 @@ import {
 } from "@forgex/domain";
 import {
   DeliverySkillBindingsSchema,
+  DeliveryExecutionEventRecordSchema,
   DeliveryRunResultSchema,
   VerificationEvidenceRecordSchema,
   VerificationFailureRecordSchema,
   type DeliveryDispatchRecord,
+  type DeliveryExecutionEventRecord,
   type DeliveryRunResult,
   type RequirementAuditAction,
   type RequirementAuditEvent,
@@ -165,6 +167,61 @@ export class PostgresRequirementRepository implements RequirementRepository {
             dispatch.dispatchKey,
             this.#copyDispatch(dispatch),
           );
+        },
+        appendDeliveryExecutionEvent: async (event) => {
+          const parsed = DeliveryExecutionEventRecordSchema.parse(event);
+          if (parsed.tenantKey !== tenant || parsed.projectKey !== project) {
+            throw new Error("事务不能写入其他范围的 Codex 过程事件");
+          }
+          const inserted = await client.query(
+            "INSERT INTO forgex_requirement_execution_events (event_key, tenant_key, project_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb) ON CONFLICT DO NOTHING RETURNING event_key",
+            [
+              parsed.eventKey,
+              tenant,
+              project,
+              parsed.requirementKey,
+              parsed.requirementRevision,
+              parsed.assignmentKey,
+              parsed.sequence,
+              parsed.occurredAt,
+              JSON.stringify(parsed.event),
+            ],
+          );
+          if (inserted.rows.length > 0) return true;
+          const existing = await client.query(
+            "SELECT event_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event FROM forgex_requirement_execution_events WHERE tenant_key = $1 AND (event_key = $2 OR (assignment_key = $3 AND sequence = $4))",
+            [tenant, parsed.eventKey, parsed.assignmentKey, parsed.sequence],
+          );
+          const row = existing.rows[0];
+          if (!row) throw new Error("Codex 过程事件写入冲突");
+          const stored = this.#deliveryExecutionEventFromRow(
+            row,
+            tenant,
+            project,
+          );
+          if (JSON.stringify(stored) !== JSON.stringify(parsed)) {
+            throw new Error("同一 Codex 过程事件不能绑定不同内容");
+          }
+          return false;
+        },
+        listDeliveryExecutionEvents: async (
+          requirementKey,
+          requirementRevision,
+          limit,
+        ) => {
+          const requirement = parseInternalKey(requirementKey, "需求标识");
+          if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+            throw new Error("Codex 过程事件查询上限无效");
+          }
+          const result = await client.query(
+            "SELECT event_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event FROM forgex_requirement_execution_events WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4 ORDER BY sequence DESC, occurred_at DESC LIMIT $5",
+            [tenant, project, requirement, requirementRevision, limit],
+          );
+          return result.rows
+            .map((row) =>
+              this.#deliveryExecutionEventFromRow(row, tenant, project),
+            )
+            .reverse();
         },
         markDeliveryDispatched: async (dispatchKey, dispatchedAt) => {
           const key = parseInternalKey(dispatchKey, "派发标识");
@@ -837,6 +894,34 @@ export class PostgresRequirementRepository implements RequirementRepository {
       requiredCapabilities: [...dispatch.requiredCapabilities],
       skills: dispatch.skills.map((skill) => ({ ...skill })),
     };
+  }
+
+  #deliveryExecutionEventFromRow(
+    row: unknown,
+    tenantKey: string,
+    projectKey: string,
+  ): DeliveryExecutionEventRecord {
+    if (!isRecord(row)) {
+      throw new Error("数据库中的 Codex 过程事件格式无效");
+    }
+    const event =
+      typeof row.event === "string"
+        ? (JSON.parse(row.event) as unknown)
+        : row.event;
+    return DeliveryExecutionEventRecordSchema.parse({
+      eventKey: parseInternalKey(String(row.event_key), "过程事件标识"),
+      tenantKey,
+      projectKey,
+      requirementKey: parseInternalKey(String(row.requirement_key), "需求标识"),
+      requirementRevision: Number(row.requirement_revision),
+      assignmentKey: parseInternalKey(
+        String(row.assignment_key),
+        "任务租约标识",
+      ),
+      sequence: Number(row.sequence),
+      occurredAt: parseIsoDate(row.occurred_at, "过程事件时间"),
+      event,
+    });
   }
 
   #assertRecordScope(

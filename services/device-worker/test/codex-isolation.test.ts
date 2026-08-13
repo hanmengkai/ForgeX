@@ -5,7 +5,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ExternalCodexIsolationRunner } from "../src/codex-isolation.js";
+import {
+  CODEX_PROGRESS_PREFIX,
+  ExternalCodexIsolationRunner,
+} from "../src/codex-isolation.js";
 
 const temporaryRoots: string[] = [];
 
@@ -16,6 +19,66 @@ afterEach(async () => {
 });
 
 describe("ExternalCodexIsolationRunner", () => {
+  it("从隔离进程 stderr 读取结构化过程事件，同时保留 stdout 执行证明", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-progress-"));
+    temporaryRoots.push(root);
+    const launcherScript = path.join(root, "launcher.mjs");
+    await writeFile(
+      launcherScript,
+      `let input = "";
+process.stdin.setEncoding("utf8");
+for await (const chunk of process.stdin) input += chunk;
+const request = JSON.parse(input);
+process.stderr.write(${JSON.stringify(CODEX_PROGRESS_PREFIX)} + JSON.stringify({kind:"tool",tool:"search_workspace_text",status:"completed"}) + "\\n");
+process.stdout.write(JSON.stringify({
+  schemaVersion: 1,
+  challenge: request.challenge,
+  isolationKind: request.isolationKind,
+  workspacePath: request.workspacePath,
+  protectedPathsHash: request.protectedPathsHash,
+  workspaceReadable: true,
+  workspaceWritable: true,
+  protectedPathsDenied: true,
+  controllerIdentitySeparated: true,
+  shellToolsDisabled: true,
+  controlledWorkspaceToolsOnly: true,
+  finalResponse: JSON.stringify({status:"completed",summary:"done",tests:[]}),
+  threadId: "thread-local"
+}));
+`,
+      "utf8",
+    );
+    const runner = new ExternalCodexIsolationRunner({
+      launcherPath: process.execPath,
+      launcherSha256: createHash("sha256")
+        .update(await readFile(process.execPath))
+        .digest("hex"),
+      launcherArguments: [launcherScript],
+      isolationKind: "separate_os_identity",
+    });
+    const progress: unknown[] = [];
+
+    await expect(
+      runner.run({
+        workspacePath: path.join(root, "workspace"),
+        protectedPaths: [path.join(root, "worker.json")],
+        codexHomePath: path.join(root, "codex-home"),
+        prompt: "implement",
+        outputSchema: { type: "object" },
+        reasoningEffort: "high",
+        environment: {},
+        onProgress: (event) => progress.push(event),
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-local" });
+    expect(progress).toEqual([
+      {
+        kind: "tool",
+        tool: "search_workspace_text",
+        status: "completed",
+      },
+    ]);
+  });
+
   it("同一系统用户在同次执行中仍能读取 Worker 配置时拒绝 Codex 结果", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-isolation-"));
     temporaryRoots.push(root);

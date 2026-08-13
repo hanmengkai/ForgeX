@@ -26,6 +26,7 @@ import {
   DeliverySkillBindingsSchema,
   type DeliverySkillBinding,
   type DeliveryDispatchRecord,
+  type DeliveryExecutionEventRecord,
   type RequirementAuditAction,
   type RequirementRecord,
   type RequirementRepository,
@@ -52,7 +53,20 @@ export interface RequirementDetailResult extends RequirementCommandResult {
   acceptance: RequirementAcceptanceView | null;
   revisions: RequirementRevisionPeopleView[];
   progress: RequirementProgressView;
+  executionEvents: RequirementExecutionEventView[];
 }
+
+export interface RequirementExecutionEventView {
+  title: string;
+  detail: string;
+  tone: "running" | "success" | "error" | "neutral";
+  occurredAt: string;
+}
+
+export type RecordRequirementExecutionEventInput = Omit<
+  DeliveryExecutionEventRecord,
+  "tenantKey" | "projectKey"
+>;
 
 export type RequirementProgressStageKey =
   | "confirmation"
@@ -75,6 +89,85 @@ export interface RequirementProgressView {
   updatedAt: string;
   stages: RequirementProgressStageView[];
 }
+
+const executionStatus = {
+  started: { detail: "正在执行", tone: "running" },
+  completed: { detail: "已完成", tone: "success" },
+  failed: { detail: "未完成", tone: "error" },
+} as const;
+
+const executionEventView = (
+  record: DeliveryExecutionEventRecord,
+): RequirementExecutionEventView => {
+  const event = record.event;
+  if (event.kind === "lifecycle") {
+    if (event.status === "started") {
+      return {
+        title: "Codex 开始分析需求",
+        detail: "已进入受控项目工作区",
+        tone: "running",
+        occurredAt: record.occurredAt,
+      };
+    }
+    if (event.status === "completed") {
+      return {
+        title: "Codex 完成工作区修改",
+        detail: "等待设备生成本地提交",
+        tone: "success",
+        occurredAt: record.occurredAt,
+      };
+    }
+    return {
+      title: "Codex 执行未完成",
+      detail: "设备将保留失败状态供人工检查",
+      tone: "error",
+      occurredAt: record.occurredAt,
+    };
+  }
+  if (event.kind === "tool") {
+    const title = {
+      list_workspace: "浏览项目结构",
+      read_workspace_file: "读取项目文件",
+      search_workspace_text: "检索相关代码",
+    }[event.tool];
+    return {
+      title,
+      ...executionStatus[event.status],
+      occurredAt: record.occurredAt,
+    };
+  }
+  if (event.kind === "file_change") {
+    const changeKind = { add: "新增", update: "更新", delete: "删除" } as const;
+    const shown = event.changes
+      .slice(0, 5)
+      .map((change) => `${change.path}（${changeKind[change.kind]}）`)
+      .join("、");
+    const remaining = event.changes.length - 5;
+    return {
+      title: "更新项目文件",
+      detail:
+        `${shown}${remaining > 0 ? `，另有 ${remaining} 个文件` : ""}`.slice(
+          0,
+          500,
+        ),
+      tone: event.status === "completed" ? "success" : "error",
+      occurredAt: record.occurredAt,
+    };
+  }
+  const title = {
+    test: "执行本地测试",
+    build: "检查项目构建",
+    lint: "检查代码规范",
+    format: "整理代码格式",
+    git: "检查代码变更",
+    other: "执行受控本地命令",
+  }[event.category];
+  return {
+    title,
+    ...executionStatus[event.status],
+    occurredAt: record.occurredAt,
+  };
+};
 
 export interface RequirementListQuery {
   cursor?: string;
@@ -285,6 +378,42 @@ export class RequirementApplicationService {
     }
     this.#repositoryKey = repositoryKey.trim().toLowerCase();
     this.#clock = options.clock ?? (() => new Date());
+  }
+
+  async recordExecutionEvent(
+    tenantKey: string,
+    input: RecordRequirementExecutionEventInput,
+  ): Promise<boolean> {
+    return this.#repository.transaction(
+      tenantKey,
+      this.#projectKey,
+      async (transaction) => {
+        const requirement = await transaction.find(input.requirementKey);
+        if (!requirement || requirement.projectKey !== this.#projectKey) {
+          throw new ApplicationError(
+            404,
+            "requirement_not_found",
+            "没有找到这个需求",
+          );
+        }
+        const snapshot = requirement.workflow.toSnapshot();
+        if (
+          snapshot.status !== "inDelivery" ||
+          requirement.workflow.currentRevision !== input.requirementRevision
+        ) {
+          throw new ApplicationError(
+            409,
+            "delivery_progress_stale",
+            "这条 Codex 过程记录已不属于当前交付版本",
+          );
+        }
+        return transaction.appendDeliveryExecutionEvent({
+          ...input,
+          tenantKey,
+          projectKey: this.#projectKey,
+        });
+      },
+    );
   }
 
   async create(
@@ -673,20 +802,26 @@ export class RequirementApplicationService {
             "没有找到这个需求",
           );
         }
-        const [dispatch, run, verificationFailure] = await Promise.all([
-          transaction.findDeliveryDispatch(
-            record.requirementKey,
-            record.workflow.currentRevision,
-          ),
-          transaction.findDeliveryRunResult(
-            record.requirementKey,
-            record.workflow.currentRevision,
-          ),
-          transaction.findVerificationFailure(
-            record.requirementKey,
-            record.workflow.currentRevision,
-          ),
-        ]);
+        const [dispatch, run, verificationFailure, executionEvents] =
+          await Promise.all([
+            transaction.findDeliveryDispatch(
+              record.requirementKey,
+              record.workflow.currentRevision,
+            ),
+            transaction.findDeliveryRunResult(
+              record.requirementKey,
+              record.workflow.currentRevision,
+            ),
+            transaction.findVerificationFailure(
+              record.requirementKey,
+              record.workflow.currentRevision,
+            ),
+            transaction.listDeliveryExecutionEvents(
+              record.requirementKey,
+              record.workflow.currentRevision,
+              100,
+            ),
+          ]);
         const acceptance = record.workflow.toAcceptanceView();
         return {
           requirementKey: record.requirementKey,
@@ -704,6 +839,7 @@ export class RequirementApplicationService {
             verificationFailed: verificationFailure !== null,
             acceptance,
           }),
+          executionEvents: executionEvents.map(executionEventView),
         };
       },
     );

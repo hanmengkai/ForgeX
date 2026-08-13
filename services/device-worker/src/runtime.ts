@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import {
+  type CodexProcessEventPayload,
   WORKER_MCP_FAILED_SUMMARY,
   WORKER_MCP_SUCCEEDED_SUMMARY,
   WORKER_MCP_UNKNOWN_SUMMARY,
@@ -64,6 +66,16 @@ interface ControlPlanePort {
     result: {
       outcome: "succeeded" | "failed" | "unknown";
       summary: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<boolean>;
+  reportRequirementProgress?(
+    assignment: Pick<WorkerAssignment, "assignmentKey" | "fencingToken">,
+    progress: {
+      eventKey: string;
+      sequence: number;
+      occurredAt: string;
+      event: CodexProcessEventPayload;
     },
     signal?: AbortSignal,
   ): Promise<boolean>;
@@ -357,12 +369,45 @@ export class DeviceWorkerRuntime {
       throw new Error("设备项目配置的仓库与权威交付任务不一致");
     }
     const workspace = await this.#workspaces.prepare(project, assignment);
+    let progressSequence = 0;
+    let progressReportingFailed = false;
+    let progressQueue = Promise.resolve();
+    const onProgress = (event: CodexProcessEventPayload): void => {
+      if (
+        !this.#controlPlane.reportRequirementProgress ||
+        progressSequence >= 200 ||
+        progressReportingFailed
+      ) {
+        return;
+      }
+      progressSequence += 1;
+      const progress = {
+        eventKey: randomUUID(),
+        sequence: progressSequence,
+        occurredAt: new Date().toISOString(),
+        event: structuredClone(event),
+      };
+      progressQueue = progressQueue.then(async () => {
+        if (progressReportingFailed) return;
+        try {
+          await this.#controlPlane.reportRequirementProgress!(
+            assignment,
+            progress,
+            signal,
+          );
+        } catch {
+          progressReportingFailed = true;
+        }
+      });
+    };
     const codex = await this.#codex.execute({
       project,
       assignment,
       workspacePath: workspace.path,
       signal,
+      onProgress,
     });
+    await progressQueue;
     const commitIntent: PendingRequirementCommit = {
       schemaVersion: 1,
       kind: "requirement_commit_pending",

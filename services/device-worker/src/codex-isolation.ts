@@ -5,6 +5,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { z } from "zod";
+import {
+  CodexProcessEventSchema,
+  type CodexProcessEventPayload,
+} from "@forgex/contracts";
+
+export const CODEX_PROGRESS_PREFIX = "FORGEX_CODEX_EVENT:";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +43,7 @@ export interface IsolatedCodexRunInput {
   reasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh";
   environment: Record<string, string>;
   signal?: AbortSignal;
+  onProgress?: (event: CodexProcessEventPayload) => void;
 }
 
 export interface CodexIsolationRunner {
@@ -194,7 +201,11 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
       prompt: input.prompt,
       outputSchema: input.outputSchema,
     });
-    const responseText = await this.#spawnRun(request, input.signal);
+    const responseText = await this.#spawnRun(
+      request,
+      input.signal,
+      input.onProgress,
+    );
     let response: unknown;
     try {
       response = JSON.parse(responseText);
@@ -232,7 +243,11 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
     }
   }
 
-  async #spawnRun(request: string, signal?: AbortSignal): Promise<string> {
+  async #spawnRun(
+    request: string,
+    signal?: AbortSignal,
+    onProgress?: (event: CodexProcessEventPayload) => void,
+  ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const child = spawn(
         this.#launcherPath,
@@ -251,6 +266,7 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
       );
       let stdout = "";
       let stderr = "";
+      let stderrBuffer = "";
       let settled = false;
       const finish = (error?: Error): void => {
         if (settled) return;
@@ -279,7 +295,30 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
         }
       });
       child.stderr.on("data", (chunk: string) => {
-        stderr = `${stderr}${chunk}`.slice(-8_192);
+        stderrBuffer += chunk;
+        if (Buffer.byteLength(stderrBuffer, "utf8") > 64 * 1024) {
+          child.kill();
+          finish(new Error("Codex 隔离启动器过程事件超过安全上限"));
+          return;
+        }
+        const lines = stderrBuffer.split(/\r?\n/u);
+        stderrBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.startsWith(CODEX_PROGRESS_PREFIX)) {
+            try {
+              const event = CodexProcessEventSchema.parse(
+                JSON.parse(line.slice(CODEX_PROGRESS_PREFIX.length)) as unknown,
+              );
+              onProgress?.(event);
+            } catch {
+              child.kill();
+              finish(new Error("Codex 隔离启动器返回了无效的过程事件"));
+              return;
+            }
+          } else if (line.trim()) {
+            stderr = `${stderr}${line}\n`.slice(-8_192);
+          }
+        }
       });
       child.once("error", (error) => finish(error));
       child.stdin.once("error", (error) => finish(error));

@@ -8,10 +8,12 @@ import type {
   RequirementListPage,
 } from "./requirement-repository.js";
 import {
+  DeliveryExecutionEventRecordSchema,
   DeliveryRunResultSchema,
   VerificationEvidenceRecordSchema,
   VerificationFailureRecordSchema,
   type DeliveryRunResult,
+  type DeliveryExecutionEventRecord,
   type VerificationEvidenceRecord,
   type VerificationFailureRecord,
 } from "./requirement-repository.js";
@@ -36,6 +38,10 @@ export class InMemoryRequirementRepository implements RequirementRepository {
   readonly #auditEvents: RequirementAuditEvent[] = [];
   readonly #deliveryDispatches = new Map<string, DeliveryDispatchRecord>();
   readonly #deliveryRunResults = new Map<string, DeliveryRunResult>();
+  readonly #deliveryExecutionEvents = new Map<
+    string,
+    DeliveryExecutionEventRecord
+  >();
   readonly #verificationEvidence = new Map<
     string,
     VerificationEvidenceRecord
@@ -67,6 +73,10 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     const pendingAuditEvents: RequirementAuditEvent[] = [];
     const pendingDeliveryDispatches = new Map<string, DeliveryDispatchRecord>();
     const pendingDeliveryRunResults = new Map<string, DeliveryRunResult>();
+    const pendingDeliveryExecutionEvents = new Map<
+      string,
+      DeliveryExecutionEventRecord
+    >();
     const pendingVerificationEvidence = new Map<
       string,
       VerificationEvidenceRecord
@@ -148,6 +158,64 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           throw new Error("交付派发记录不能重复");
         }
         pendingDeliveryDispatches.set(key, this.#copyDeliveryDispatch(record));
+      },
+      appendDeliveryExecutionEvent: async (record) => {
+        const parsed = DeliveryExecutionEventRecordSchema.parse(record);
+        if (
+          parsed.tenantKey !== normalizedTenantKey ||
+          parsed.projectKey !== normalizedProjectKey
+        ) {
+          throw new Error("事务不能写入其他范围的 Codex 过程事件");
+        }
+        const eventKey = `${normalizedTenantKey}:${parsed.eventKey}`;
+        const existing =
+          pendingDeliveryExecutionEvents.get(eventKey) ??
+          this.#deliveryExecutionEvents.get(eventKey);
+        if (existing) {
+          if (JSON.stringify(existing) === JSON.stringify(parsed)) return false;
+          throw new Error("同一过程事件标识不能绑定不同内容");
+        }
+        const sequenceConflict = [
+          ...this.#deliveryExecutionEvents.values(),
+          ...pendingDeliveryExecutionEvents.values(),
+        ].find(
+          (event) =>
+            event.tenantKey === normalizedTenantKey &&
+            event.assignmentKey === parsed.assignmentKey &&
+            event.sequence === parsed.sequence,
+        );
+        if (sequenceConflict) {
+          throw new Error("同一设备任务不能重复使用过程事件序号");
+        }
+        pendingDeliveryExecutionEvents.set(eventKey, structuredClone(parsed));
+        return true;
+      },
+      listDeliveryExecutionEvents: async (
+        requirementKey,
+        requirementRevision,
+        limit,
+      ) => {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+          throw new Error("Codex 过程事件查询上限无效");
+        }
+        return [
+          ...this.#deliveryExecutionEvents.values(),
+          ...pendingDeliveryExecutionEvents.values(),
+        ]
+          .filter(
+            (event) =>
+              event.tenantKey === normalizedTenantKey &&
+              event.projectKey === normalizedProjectKey &&
+              event.requirementKey === requirementKey.toLowerCase() &&
+              event.requirementRevision === requirementRevision,
+          )
+          .sort(
+            (left, right) =>
+              left.sequence - right.sequence ||
+              left.occurredAt.localeCompare(right.occurredAt),
+          )
+          .slice(-limit)
+          .map((event) => structuredClone(event));
       },
       markDeliveryDispatched: async (dispatchKey, dispatchedAt) => {
         const key = scopedKey(
@@ -397,6 +465,9 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       }
       for (const [key, run] of pendingDeliveryRunResults) {
         this.#deliveryRunResults.set(key, structuredClone(run));
+      }
+      for (const [key, event] of pendingDeliveryExecutionEvents) {
+        this.#deliveryExecutionEvents.set(key, structuredClone(event));
       }
       for (const [key, evidence] of pendingVerificationEvidence) {
         this.#verificationEvidence.set(key, structuredClone(evidence));

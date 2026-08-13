@@ -120,6 +120,39 @@ describe("WorkerControlPlaneClient", () => {
     });
   });
 
+  it("过程事件只向受控入口上报结构化摘要", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ data: { alreadyRecorded: false } }), {
+          status: 200,
+        }),
+      ),
+    );
+    const client = new WorkerControlPlaneClient({
+      baseUrl: "https://forgex.example.test",
+      connection,
+      fetch,
+    });
+
+    await client.reportRequirementProgress(requirementAssignment, {
+      eventKey: "88888888-8888-4888-8888-888888888888",
+      sequence: 1,
+      occurredAt: "2026-08-13T04:00:00.000Z",
+      event: {
+        kind: "tool",
+        tool: "search_workspace_text",
+        status: "completed",
+      },
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://forgex.example.test/api/v1/worker-connection/requirement-progress",
+      expect.objectContaining({
+        body: expect.stringContaining('"tool":"search_workspace_text"'),
+      }),
+    );
+  });
+
   it("非只读 MCP 崩溃恢复时上报与项目、调用和租约绑定的结果未知", async () => {
     const fetch = vi.fn(async () =>
       Promise.resolve(

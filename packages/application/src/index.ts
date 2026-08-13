@@ -138,18 +138,22 @@ export {
   type RequirementApplicationServiceOptions,
   type RequirementCommandResult,
   type RequirementDetailResult,
+  type RequirementExecutionEventView,
   type RequirementListQuery,
   type RequirementListResult,
   type RequirementProgressStageKey,
   type RequirementProgressStageView,
   type RequirementProgressView,
+  type RecordRequirementExecutionEventInput,
 } from "./requirement-service.js";
 export {
+  DeliveryExecutionEventRecordSchema,
   DeliverySkillBindingSchema,
   DeliverySkillBindingsSchema,
 } from "./requirement-repository.js";
 export type {
   DeliveryDispatchRecord,
+  DeliveryExecutionEventRecord,
   DeliverySkillBinding,
   DeliveryRunResult,
   VerificationFailureRecord,

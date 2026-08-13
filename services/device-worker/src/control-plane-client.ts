@@ -5,7 +5,9 @@ import {
   WorkerConnectionCredentialSchema,
   WorkerLeaseCommandSchema,
   WorkerMcpCompletionSchema,
+  WorkerRequirementProcessEventSchema,
   WorkerRequirementCompletionSchema,
+  type CodexProcessEventPayload,
   type WorkerConnectionCredentialPayload,
 } from "@forgex/contracts";
 
@@ -122,6 +124,11 @@ const renewResponseSchema = z
 const completionResponseSchema = z
   .object({
     data: z.object({ alreadyCompleted: z.boolean() }).passthrough(),
+  })
+  .strict();
+const processEventResponseSchema = z
+  .object({
+    data: z.object({ alreadyRecorded: z.boolean() }).strict(),
   })
   .strict();
 
@@ -267,6 +274,30 @@ export class WorkerControlPlaneClient {
       signal,
     );
     return response.data.alreadyCompleted;
+  }
+
+  async reportRequirementProgress(
+    assignment: Pick<WorkerAssignment, "assignmentKey" | "fencingToken">,
+    progress: {
+      eventKey: string;
+      sequence: number;
+      occurredAt: string;
+      event: CodexProcessEventPayload;
+    },
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const response = await this.#post(
+      "/api/v1/worker-connection/requirement-progress",
+      WorkerRequirementProcessEventSchema.parse({
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+        ...progress,
+      }),
+      processEventResponseSchema,
+      signal,
+    );
+    return response.data.alreadyRecorded;
   }
 
   async completeMcp(

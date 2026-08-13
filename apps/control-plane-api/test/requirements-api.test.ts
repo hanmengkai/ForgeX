@@ -1900,6 +1900,7 @@ describe("需求 API", () => {
           updatedAt: "2026-08-10T01:30:00.000Z",
           stages: [],
         },
+        executionEvents: [],
       });
 
     const response = await app.inject({

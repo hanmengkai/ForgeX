@@ -64,6 +64,7 @@ import {
   WorkerEnrollmentExchangeSchema,
   WorkerLeaseCommandSchema,
   WorkerMcpCompletionSchema,
+  WorkerRequirementProcessEventSchema,
   WorkerRequirementCompletionSchema,
   SignedEvidenceSchema,
   type WorkerConnectionCredentialPayload,
@@ -3145,6 +3146,7 @@ export const buildControlPlaneApi = (
           acceptance: result.acceptance,
           revisions: result.revisions,
           progress: result.progress,
+          executionEvents: result.executionEvents,
           links: requirementLinks(
             result.requirementKey,
             result.repositoryKey == null ||
@@ -3439,6 +3441,7 @@ export const buildControlPlaneApi = (
         acceptance: result.acceptance,
         revisions: result.revisions,
         progress: result.progress,
+        executionEvents: result.executionEvents,
         links: requirementLinks(
           result.requirementKey,
           result.allowedActions,
@@ -3953,6 +3956,55 @@ export const buildControlPlaneApi = (
     }
     return reply.send({ data: result });
   });
+
+  app.post(
+    "/api/v1/worker-connection/requirement-progress",
+    async (request, reply) => {
+      const command = WorkerRequirementProcessEventSchema.safeParse(
+        request.body,
+      );
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "Codex 过程事件需要调整",
+          validationDetails(command.error),
+        );
+      }
+      const connection = workerConnectionFrom(request);
+      const assignment = await workers.getCurrentLease(connection, {
+        schemaVersion: 1,
+        assignmentKey: command.data.assignmentKey,
+        fencingToken: command.data.fencingToken,
+      });
+      if (assignment.workKind !== "requirement_delivery") {
+        throw new ApplicationError(
+          409,
+          "requirement_progress_not_allowed",
+          "当前设备任务不是需求交付",
+        );
+      }
+      await deliveries.assertRequirementDeliveryActive(connection.tenantKey, {
+        workKind: "requirement_delivery",
+        projectKey: assignment.projectKey,
+        requirementKey: assignment.requirementKey,
+        requirementRevision: assignment.requirementRevision,
+        title: assignment.title,
+      });
+      const recorded = await requirementServiceFor(
+        assignment.projectKey,
+      ).recordExecutionEvent(connection.tenantKey, {
+        eventKey: command.data.eventKey,
+        assignmentKey: assignment.assignmentKey,
+        requirementKey: assignment.requirementKey,
+        requirementRevision: assignment.requirementRevision,
+        sequence: command.data.sequence,
+        occurredAt: command.data.occurredAt,
+        event: command.data.event,
+      });
+      return reply.send({ data: { alreadyRecorded: !recorded } });
+    },
+  );
 
   app.post("/api/v1/worker-connection/complete", async (request, reply) => {
     const command = WorkerRequirementCompletionSchema.safeParse(request.body);

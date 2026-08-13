@@ -5,11 +5,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { Codex, type CodexOptions } from "@openai/codex-sdk";
+import { Codex, type CodexOptions, type ThreadEvent } from "@openai/codex-sdk";
+import {
+  CodexProcessEventSchema,
+  type CodexProcessEventPayload,
+} from "@forgex/contracts";
 import { z } from "zod";
 
 import {
   canonicalProtectedPaths,
+  CODEX_PROGRESS_PREFIX,
   currentOsIdentity,
   protectedPathsDigest,
 } from "./codex-isolation.js";
@@ -115,12 +120,128 @@ interface CodexLike {
     approvalPolicy: "never";
   }): {
     readonly id: string | null;
-    run(
+    runStreamed(
       prompt: string,
       options: { outputSchema: unknown },
-    ): Promise<{ finalResponse: string }>;
+    ): Promise<{ events: AsyncGenerator<ThreadEvent> }>;
   };
 }
+
+const allowedWorkspaceTools = new Set([
+  "list_workspace",
+  "read_workspace_file",
+  "search_workspace_text",
+]);
+
+const commandCategory = (
+  command: string,
+): Extract<CodexProcessEventPayload, { kind: "command" }>["category"] => {
+  const normalized = command.trim().toLowerCase();
+  if (
+    /^(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:test|run\s+test)(?:\s|$)/u.test(
+      normalized,
+    )
+  ) {
+    return "test";
+  }
+  if (
+    /^(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:build|run\s+(?:build|typecheck))(?:\s|$)/u.test(
+      normalized,
+    )
+  ) {
+    return "build";
+  }
+  if (
+    /^(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:lint|run\s+lint)(?:\s|$)/u.test(
+      normalized,
+    )
+  ) {
+    return "lint";
+  }
+  if (
+    /^(?:npm|pnpm|yarn|bun)(?:\.cmd)?\s+(?:format|run\s+format)(?:\s|$)/u.test(
+      normalized,
+    )
+  ) {
+    return "format";
+  }
+  if (/^git(?:\.exe)?\s/u.test(normalized)) return "git";
+  return "other";
+};
+
+const workspaceRelativePath = (
+  workspacePath: string,
+  candidate: string,
+): string | null => {
+  const absolute = path.isAbsolute(candidate)
+    ? path.normalize(candidate)
+    : path.resolve(workspacePath, candidate);
+  const relative = path.relative(workspacePath, absolute);
+  if (
+    relative === "" ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative)
+  ) {
+    return null;
+  }
+  const portable = relative.split(path.sep).join("/");
+  return portable.length <= 240 ? portable : null;
+};
+
+const processEventFromThreadEvent = (
+  event: ThreadEvent,
+  workspacePath: string,
+): CodexProcessEventPayload | null => {
+  if (event.type === "turn.started") {
+    return { kind: "lifecycle", status: "started" };
+  }
+  if (event.type === "turn.completed") {
+    return { kind: "lifecycle", status: "completed" };
+  }
+  if (event.type === "turn.failed" || event.type === "error") {
+    return { kind: "lifecycle", status: "failed" };
+  }
+  if (event.type !== "item.started" && event.type !== "item.completed") {
+    return null;
+  }
+  const status = event.type === "item.started" ? "started" : "completed";
+  if (event.item.type === "mcp_tool_call") {
+    if (
+      event.item.server !== "forgex_workspace" ||
+      !allowedWorkspaceTools.has(event.item.tool)
+    ) {
+      return null;
+    }
+    return CodexProcessEventSchema.parse({
+      kind: "tool",
+      tool: event.item.tool,
+      status: event.item.status === "failed" ? "failed" : status,
+    });
+  }
+  if (event.item.type === "file_change" && event.type === "item.completed") {
+    const changes = event.item.changes.flatMap((change) => {
+      const relativePath = workspaceRelativePath(workspacePath, change.path);
+      return relativePath ? [{ path: relativePath, kind: change.kind }] : [];
+    });
+    if (changes.length === 0) return null;
+    return CodexProcessEventSchema.parse({
+      kind: "file_change",
+      changes: changes.slice(0, 20),
+      status: event.item.status,
+    });
+  }
+  if (event.item.type === "command_execution") {
+    return CodexProcessEventSchema.parse({
+      kind: "command",
+      category: commandCategory(event.item.command),
+      status: event.item.status === "failed" ? "failed" : status,
+      ...(event.type === "item.completed" && event.item.exit_code !== undefined
+        ? { exitCode: event.item.exit_code }
+        : {}),
+    });
+  }
+  return null;
+};
 
 const samePath = (left: string, right: string): boolean =>
   process.platform === "win32"
@@ -445,6 +566,7 @@ export interface IsolationLauncherDependencies {
   ) => Promise<void>;
   assertToolSurface?: (request: IsolatedCodexRunRequest) => Promise<void>;
   createCodex?: (options: CodexOptions) => CodexLike;
+  emitProgress?: (event: CodexProcessEventPayload) => void | Promise<void>;
 }
 
 export const executeIsolatedCodexRun = async (
@@ -507,9 +629,26 @@ export const executeIsolatedCodexRun = async (
     webSearchMode: request.codex.webSearchMode,
     approvalPolicy: request.codex.approvalPolicy,
   });
-  const turn = await thread.run(request.prompt, {
+  const turn = await thread.runStreamed(request.prompt, {
     outputSchema: request.outputSchema,
   });
+  let finalResponse = "";
+  let failed = false;
+  for await (const event of turn.events) {
+    if (
+      event.type === "item.completed" &&
+      event.item.type === "agent_message"
+    ) {
+      finalResponse = event.item.text;
+    }
+    const progress = processEventFromThreadEvent(event, request.workspacePath);
+    if (progress) await dependencies.emitProgress?.(progress);
+    if (event.type === "turn.failed" || event.type === "error") failed = true;
+  }
+  if (failed) throw new Error("Codex 执行回合未完成");
+  if (finalResponse.trim().length === 0) {
+    throw new Error("Codex 没有返回结构化执行结果");
+  }
   return {
     schemaVersion: 1,
     challenge: request.challenge,
@@ -522,7 +661,7 @@ export const executeIsolatedCodexRun = async (
     controllerIdentitySeparated: true,
     shellToolsDisabled: true,
     controlledWorkspaceToolsOnly: true,
-    finalResponse: turn.finalResponse,
+    finalResponse,
     threadId: thread.id,
   };
 };

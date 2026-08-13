@@ -130,6 +130,7 @@ describe("DeviceWorkerRuntime", () => {
       renew: vi.fn(async () => Promise.resolve("2026-08-10T10:02:00.000Z")),
       completeRequirement: vi.fn(async () => Promise.resolve(false)),
       completeMcp: vi.fn(async () => Promise.resolve(false)),
+      reportRequirementProgress: vi.fn(async () => Promise.resolve(false)),
     };
     const workspaces = {
       prepare: vi.fn(async () =>
@@ -149,13 +150,23 @@ describe("DeviceWorkerRuntime", () => {
       recoverCompleted: vi.fn(),
     };
     const codex = {
-      execute: vi.fn(async () =>
-        Promise.resolve({
+      execute: vi.fn(async (input) => {
+        input.onProgress?.({
+          kind: "tool",
+          tool: "search_workspace_text",
+          status: "completed",
+        });
+        input.onProgress?.({
+          kind: "file_change",
+          changes: [{ path: "src/App.tsx", kind: "update" }],
+          status: "completed",
+        });
+        return Promise.resolve({
           summary: "LEAK_MARKER_DO_NOT_UPLOAD",
           tests: ["npm test"],
           threadId: "thread-local",
-        }),
-      ),
+        });
+      }),
     };
     const config = workerConfig({
       repositoryRoot: path.resolve("repository"),
@@ -175,6 +186,20 @@ describe("DeviceWorkerRuntime", () => {
       workspace: { commitSha: "b".repeat(40) },
     });
     expect(controlPlane.completeRequirement).toHaveBeenCalledOnce();
+    expect(controlPlane.reportRequirementProgress).toHaveBeenCalledTimes(2);
+    expect(controlPlane.reportRequirementProgress).toHaveBeenNthCalledWith(
+      1,
+      requirementAssignment,
+      expect.objectContaining({
+        sequence: 1,
+        event: {
+          kind: "tool",
+          tool: "search_workspace_text",
+          status: "completed",
+        },
+      }),
+      expect.any(AbortSignal),
+    );
     expect(controlPlane.completeRequirement).toHaveBeenCalledWith(
       expect.objectContaining({
         assignmentKey: requirementAssignment.assignmentKey,

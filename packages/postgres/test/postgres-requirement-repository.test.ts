@@ -759,4 +759,119 @@ describe("PostgresRequirementRepository", () => {
     expect(migration).toContain("cancellation_completed_at >= cancelled_at");
     expect(migration).toContain("'delivery.terminated'");
   });
+
+  it("过程事件以结构化 JSON 幂等写入，并按设备序号返回最近记录", async () => {
+    const assignmentKey = "77777777-7777-4777-8777-777777777777";
+    const firstEventKey = "88888888-8888-4888-8888-888888888888";
+    const secondEventKey = "99999999-9999-4999-8999-999999999999";
+    const database = fakeDatabase({
+      respond: (text) => {
+        if (
+          text.startsWith("INSERT INTO forgex_requirement_execution_events")
+        ) {
+          return [{ event_key: firstEventKey }];
+        }
+        if (
+          text.startsWith(
+            "SELECT event_key, requirement_key, requirement_revision, assignment_key, sequence, occurred_at, event FROM forgex_requirement_execution_events WHERE tenant_key",
+          )
+        ) {
+          return [
+            {
+              event_key: secondEventKey,
+              requirement_key: requirementKey,
+              requirement_revision: 1,
+              assignment_key: assignmentKey,
+              sequence: 2,
+              occurred_at: "2026-08-13T04:00:02.000Z",
+              event: {
+                kind: "file_change",
+                changes: [{ path: "src/App.tsx", kind: "update" }],
+                status: "completed",
+              },
+            },
+            {
+              event_key: firstEventKey,
+              requirement_key: requirementKey,
+              requirement_revision: 1,
+              assignment_key: assignmentKey,
+              sequence: 1,
+              occurred_at: "2026-08-13T04:00:01.000Z",
+              event: {
+                kind: "tool",
+                tool: "search_workspace_text",
+                status: "completed",
+              },
+            },
+          ];
+        }
+        return undefined;
+      },
+    });
+    const repository = new PostgresRequirementRepository(database.pool);
+
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      await expect(
+        transaction.appendDeliveryExecutionEvent({
+          eventKey: firstEventKey,
+          tenantKey,
+          projectKey,
+          requirementKey,
+          requirementRevision: 1,
+          assignmentKey,
+          sequence: 1,
+          occurredAt: "2026-08-13T04:00:01.000Z",
+          event: {
+            kind: "tool",
+            tool: "search_workspace_text",
+            status: "completed",
+          },
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        transaction.listDeliveryExecutionEvents(requirementKey, 1, 100),
+      ).resolves.toEqual([
+        expect.objectContaining({ eventKey: firstEventKey, sequence: 1 }),
+        expect.objectContaining({ eventKey: secondEventKey, sequence: 2 }),
+      ]);
+    });
+
+    expect(
+      database.queries
+        .find((query) =>
+          query.text.startsWith(
+            "INSERT INTO forgex_requirement_execution_events",
+          ),
+        )
+        ?.values?.at(-1),
+    ).toBe(
+      JSON.stringify({
+        kind: "tool",
+        tool: "search_workspace_text",
+        status: "completed",
+      }),
+    );
+  });
+
+  it("过程事件迁移只保存结构化摘要，并按任务序号防止重复", () => {
+    const migration = readFileSync(
+      new URL(
+        "../migrations/0023_requirement_execution_events.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    expect(migration).toContain(
+      "CREATE TABLE IF NOT EXISTS forgex_requirement_execution_events",
+    );
+    expect(migration).toContain("event jsonb NOT NULL");
+    expect(migration).toContain("jsonb_typeof(event) = 'object'");
+    expect(migration).toContain(
+      "UNIQUE (tenant_key, assignment_key, sequence)",
+    );
+    expect(migration).toContain(
+      "FOREIGN KEY (tenant_key, project_key, requirement_key)",
+    );
+  });
 });

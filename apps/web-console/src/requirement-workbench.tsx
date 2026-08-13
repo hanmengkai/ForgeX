@@ -179,6 +179,14 @@ const formatVerifiedAt = (value: string) =>
     minute: "2-digit",
   }).format(new Date(value));
 
+const formatExecutionTime = (value: string) =>
+  new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+
 const statusTone = (status: RequirementListItem["status"]) => {
   if (status === "已完成") return "success";
   if (status === "AI 正在实现") return "running";
@@ -690,6 +698,51 @@ function RequirementCard({
                       </li>
                     ))}
                   </ol>
+                </section>
+              ) : null}
+              {(detail.executionEvents?.length ?? 0) > 0 ||
+              detail.status === "AI 正在实现" ? (
+                <section
+                  className="codex-process-log"
+                  role="log"
+                  aria-label="Codex 实时执行记录"
+                  aria-live="polite"
+                >
+                  <div className="codex-process-heading">
+                    <div>
+                      <span className="detail-label">Codex 实时执行记录</span>
+                      <small>仅展示脱敏后的工具、文件和检查事件</small>
+                    </div>
+                    <span className="status-pill running">
+                      {(detail.executionEvents?.length ?? 0) > 0
+                        ? "实时更新"
+                        : "等待输出"}
+                    </span>
+                  </div>
+                  {detail.executionEvents &&
+                  detail.executionEvents.length > 0 ? (
+                    <ol>
+                      {detail.executionEvents.map((event, index) => (
+                        <li
+                          className={`codex-process-event ${event.tone}`}
+                          key={`${event.occurredAt}:${index}`}
+                        >
+                          <time dateTime={event.occurredAt}>
+                            {formatExecutionTime(event.occurredAt)}
+                          </time>
+                          <span aria-hidden="true" />
+                          <div>
+                            <strong>{event.title}</strong>
+                            <small>{event.detail}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="codex-process-empty">
+                      设备领取任务后，这里会持续显示 Codex 的受控执行事件。
+                    </p>
+                  )}
                 </section>
               ) : null}
               <div>

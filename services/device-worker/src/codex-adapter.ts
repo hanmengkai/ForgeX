@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CodexProcessEventPayload } from "@forgex/contracts";
 
 import type { CodexIsolationRunner } from "./codex-isolation.js";
 import type { RequirementWorkerAssignment } from "./control-plane-client.js";
@@ -39,6 +40,7 @@ export interface CodexRequirementAdapter {
     assignment: RequirementWorkerAssignment;
     workspacePath: string;
     signal?: AbortSignal;
+    onProgress?: (event: CodexProcessEventPayload) => void;
   }): Promise<CodexRequirementResult>;
 }
 
@@ -162,6 +164,7 @@ export class OpenAiCodexSdkAdapter implements CodexRequirementAdapter {
     assignment: RequirementWorkerAssignment;
     workspacePath: string;
     signal?: AbortSignal;
+    onProgress?: (event: CodexProcessEventPayload) => void;
   }): Promise<CodexRequirementResult> {
     const { CODEX_HOME: _codexHome, ...shellEnvironment } = this.#environment;
     const turn = await this.#runner.run({
@@ -174,6 +177,7 @@ export class OpenAiCodexSdkAdapter implements CodexRequirementAdapter {
       reasoningEffort: input.project.reasoningEffort,
       environment: shellEnvironment,
       ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     });
     let raw: unknown;
     try {

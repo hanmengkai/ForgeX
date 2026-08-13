@@ -298,6 +298,83 @@ const requestConfirmedDelivery = async (
 };
 
 describe("Codex 设备网关 API", () => {
+  it("当前需求租约可实时上报脱敏过程事件，需求详情按顺序展示", async () => {
+    const { app } = createTestApp();
+    const connection = await connectWorker(app, 1);
+    const { queued, location } = await requestConfirmedDelivery(
+      app,
+      "显示 Codex 执行过程",
+      [],
+    );
+    expect(queued.statusCode).toBe(202);
+    const poll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders(connection),
+      payload: {},
+    });
+    const assignment = poll.json().data.assignment;
+    const event = {
+      schemaVersion: 1,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      eventKey: "88888888-8888-4888-8888-888888888888",
+      sequence: 1,
+      occurredAt: "2026-08-13T04:00:00.000Z",
+      event: {
+        kind: "tool",
+        tool: "search_workspace_text",
+        status: "completed",
+      },
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/requirement-progress",
+      headers: workerHeaders(connection),
+      payload: event,
+    });
+    const repeated = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/requirement-progress",
+      headers: workerHeaders(connection),
+      payload: event,
+    });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json().data).toEqual({ alreadyRecorded: false });
+    expect(repeated.json().data).toEqual({ alreadyRecorded: true });
+
+    const leaked = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/requirement-progress",
+      headers: workerHeaders(connection),
+      payload: {
+        ...event,
+        eventKey: "99999999-9999-4999-8999-999999999999",
+        sequence: 2,
+        event: { ...event.event, output: "TOKEN=LEAK_MARKER" },
+      },
+    });
+    expect(leaked.statusCode).toBe(422);
+    expect(leaked.body).not.toContain("LEAK_MARKER");
+
+    const detail = await app.inject({
+      method: "GET",
+      url: location,
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(detail.json().data.executionEvents).toEqual([
+      {
+        title: "检索相关代码",
+        detail: "已完成",
+        tone: "success",
+        occurredAt: "2026-08-13T04:00:00.000Z",
+      },
+    ]);
+    expect(detail.body).not.toContain(assignment.assignmentKey);
+    await app.close();
+  });
+
   it("只有管理员可连接设备，普通列表不泄漏指纹和连接密钥", async () => {
     const { app } = createTestApp();
     const forbidden = await app.inject({

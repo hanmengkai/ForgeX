@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ThreadEvent } from "@openai/codex-sdk";
 
 import {
   assertCodexToolSurface,
@@ -91,7 +92,7 @@ const request = () => {
 
 describe("executeIsolatedCodexRun", () => {
   it("流式执行只打印受控工具和文件变更，不打印思维、参数或原始内容", async () => {
-    const events = [
+    const events: ThreadEvent[] = [
       { type: "thread.started", thread_id: "thread-secret" },
       { type: "turn.started" },
       {
@@ -106,7 +107,10 @@ describe("executeIsolatedCodexRun", () => {
           server: "forgex_workspace",
           tool: "read_workspace_file",
           arguments: { path: ".env" },
-          result: { content: [{ type: "text", text: "TOKEN=secret" }] },
+          result: {
+            content: [{ type: "text", text: "TOKEN=secret" }],
+            structured_content: null,
+          },
           status: "completed",
         },
       },
@@ -131,7 +135,16 @@ describe("executeIsolatedCodexRun", () => {
           }),
         },
       },
-      { type: "turn.completed", usage: null },
+      {
+        type: "turn.completed",
+        usage: {
+          input_tokens: 0,
+          cached_input_tokens: 0,
+          cache_write_input_tokens: 0,
+          output_tokens: 0,
+          reasoning_output_tokens: 0,
+        },
+      },
     ];
     const runStreamed = vi.fn(async () => ({
       events: (async function* () {
@@ -268,14 +281,37 @@ describe("executeIsolatedCodexRun", () => {
   });
 
   it("同一隔离实例验证文件边界后才通过官方 SDK 运行结构化任务", async () => {
-    const run = vi.fn(async () => ({
-      finalResponse: JSON.stringify({
-        status: "completed",
-        summary: "已完成",
-        tests: [],
-      }),
+    const runStreamed = vi.fn(async () => ({
+      events: (async function* () {
+        yield { type: "turn.started" as const };
+        yield {
+          type: "item.completed" as const,
+          item: {
+            id: "message-1",
+            type: "agent_message" as const,
+            text: JSON.stringify({
+              status: "completed",
+              summary: "已完成",
+              tests: [],
+            }),
+          },
+        };
+        yield {
+          type: "turn.completed" as const,
+          usage: {
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+          },
+        };
+      })(),
     }));
-    const startThread = vi.fn(() => ({ id: "thread-isolated", run }));
+    const startThread = vi.fn(() => ({
+      id: "thread-isolated",
+      runStreamed,
+    }));
     const createCodex = vi.fn(() => ({ startThread }));
     const assertFilesystemBoundary = vi.fn(async () => Promise.resolve());
     const assertToolSurface = vi.fn(async () => Promise.resolve());
@@ -345,7 +381,7 @@ describe("executeIsolatedCodexRun", () => {
         approvalPolicy: "never",
       }),
     );
-    expect(run).toHaveBeenCalledWith(input.prompt, {
+    expect(runStreamed).toHaveBeenCalledWith(input.prompt, {
       outputSchema: input.outputSchema,
     });
   });

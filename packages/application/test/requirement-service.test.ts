@@ -51,11 +51,20 @@ describe("RequirementApplicationService", () => {
     });
 
     await service.recordExecutionEvent(tenantKey, {
+      eventKey: "66666666-6666-4666-8666-666666666666",
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      sequence: 1,
+      occurredAt: "2026-08-13T04:00:00.000Z",
+      event: { kind: "lifecycle", status: "started" },
+    });
+    await service.recordExecutionEvent(tenantKey, {
       eventKey: "88888888-8888-4888-8888-888888888888",
       assignmentKey: "77777777-7777-4777-8777-777777777777",
       requirementKey: created.requirementKey,
       requirementRevision: 1,
-      sequence: 2,
+      sequence: 3,
       occurredAt: "2026-08-13T04:00:02.000Z",
       event: {
         kind: "file_change",
@@ -68,7 +77,7 @@ describe("RequirementApplicationService", () => {
       assignmentKey: "77777777-7777-4777-8777-777777777777",
       requirementKey: created.requirementKey,
       requirementRevision: 1,
-      sequence: 1,
+      sequence: 2,
       occurredAt: "2026-08-13T04:00:01.000Z",
       event: {
         kind: "tool",
@@ -76,9 +85,39 @@ describe("RequirementApplicationService", () => {
         status: "completed",
       },
     });
+    await service.recordExecutionEvent(tenantKey, {
+      eventKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      sequence: 4,
+      occurredAt: "2026-08-13T04:00:03.000Z",
+      event: {
+        kind: "command",
+        category: "test",
+        status: "failed",
+        exitCode: 1,
+      },
+    });
+    await service.recordExecutionEvent(tenantKey, {
+      eventKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      sequence: 5,
+      occurredAt: "2026-08-13T04:00:04.000Z",
+      event: { kind: "lifecycle", status: "completed" },
+    });
 
-    await expect(service.get(principal, created.requirementKey)).resolves.toMatchObject({
+    await expect(
+      service.get(principal, created.requirementKey),
+    ).resolves.toMatchObject({
       executionEvents: [
+        {
+          title: "Codex 开始分析需求",
+          detail: "已进入受控项目工作区",
+          occurredAt: "2026-08-13T04:00:00.000Z",
+        },
         {
           title: "检索相关代码",
           detail: "已完成",
@@ -89,8 +128,29 @@ describe("RequirementApplicationService", () => {
           detail: "src/App.tsx（更新）",
           occurredAt: "2026-08-13T04:00:02.000Z",
         },
+        {
+          title: "执行本地测试",
+          detail: "未完成",
+          occurredAt: "2026-08-13T04:00:03.000Z",
+        },
+        {
+          title: "Codex 完成工作区修改",
+          detail: "等待设备生成本地提交",
+          occurredAt: "2026-08-13T04:00:04.000Z",
+        },
       ],
     });
+    await expect(
+      service.recordExecutionEvent(tenantKey, {
+        eventKey: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        assignmentKey: "77777777-7777-4777-8777-777777777777",
+        requirementKey: created.requirementKey,
+        requirementRevision: 2,
+        sequence: 6,
+        occurredAt: "2026-08-13T04:00:05.000Z",
+        event: { kind: "lifecycle", status: "completed" },
+      }),
+    ).rejects.toMatchObject({ code: "delivery_progress_stale" });
   });
 
   it("新需求会持久化所属代码仓库，后续交付不会退回启动时的全局仓库", async () => {

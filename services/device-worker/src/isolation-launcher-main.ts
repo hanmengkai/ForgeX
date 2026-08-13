@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { CODEX_PROGRESS_PREFIX } from "./codex-isolation.js";
 import { executeIsolatedCodexRun } from "./isolation-launcher.js";
 
 if (process.argv[2] !== "--forgex-codex-run") {
@@ -15,5 +16,14 @@ for await (const chunk of process.stdin) {
   }
 }
 
-const result = await executeIsolatedCodexRun(JSON.parse(input) as unknown);
+const result = await executeIsolatedCodexRun(JSON.parse(input) as unknown, {
+  emitProgress: async (event) => {
+    if (
+      process.stderr.write(`${CODEX_PROGRESS_PREFIX}${JSON.stringify(event)}\n`)
+    ) {
+      return;
+    }
+    await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
+  },
+});
 process.stdout.write(JSON.stringify(result));

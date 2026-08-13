@@ -1,6 +1,8 @@
 import {
+  CodexProcessEventSchema,
   EvidenceCheckSchema,
   WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+  type CodexProcessEventPayload,
   type RequirementSpec,
 } from "@forgex/contracts";
 import { z } from "zod";
@@ -69,6 +71,32 @@ export const DeliverySkillBindingsSchema = z
   });
 
 export type DeliverySkillBinding = z.infer<typeof DeliverySkillBindingSchema>;
+
+export const DeliveryExecutionEventRecordSchema = z
+  .object({
+    eventKey: deliveryInternalKey,
+    tenantKey: deliveryInternalKey,
+    projectKey: deliveryInternalKey,
+    requirementKey: deliveryInternalKey,
+    requirementRevision: z.number().int().positive().max(10_000),
+    assignmentKey: deliveryInternalKey,
+    sequence: z.number().int().positive().max(1_000_000),
+    occurredAt: z.iso.datetime(),
+    event: CodexProcessEventSchema,
+  })
+  .strict();
+
+export interface DeliveryExecutionEventRecord {
+  eventKey: string;
+  tenantKey: string;
+  projectKey: string;
+  requirementKey: string;
+  requirementRevision: number;
+  assignmentKey: string;
+  sequence: number;
+  occurredAt: string;
+  event: CodexProcessEventPayload;
+}
 
 const sha1Pattern = /^[a-f0-9]{40}$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
@@ -237,6 +265,14 @@ export interface RequirementTransaction {
   save(record: RequirementRecord): void;
   appendAudit(event: RequirementAuditEvent): void;
   appendDeliveryDispatch(record: DeliveryDispatchRecord): void;
+  appendDeliveryExecutionEvent(
+    record: DeliveryExecutionEventRecord,
+  ): Promise<boolean>;
+  listDeliveryExecutionEvents(
+    requirementKey: string,
+    requirementRevision: number,
+    limit: number,
+  ): Promise<DeliveryExecutionEventRecord[]>;
   markDeliveryDispatched(
     dispatchKey: string,
     dispatchedAt: string,

@@ -71,6 +71,14 @@ export interface RequirementDetail extends RequirementListItem {
   } | null;
   revisions: RequirementRevision[];
   progress?: RequirementProgress | undefined;
+  executionEvents?: RequirementExecutionEvent[] | undefined;
+}
+
+export interface RequirementExecutionEvent {
+  title: string;
+  detail: string;
+  tone: "running" | "success" | "error" | "neutral";
+  occurredAt: string;
 }
 
 export interface RequirementRevision {
@@ -916,6 +924,19 @@ const requirementDetailResponseSchema = z
               .length(6),
           })
           .strict()
+          .optional(),
+        executionEvents: z
+          .array(
+            z
+              .object({
+                title: z.string().trim().min(1).max(100),
+                detail: z.string().trim().min(1).max(500),
+                tone: z.enum(["running", "success", "error", "neutral"]),
+                occurredAt: z.iso.datetime(),
+              })
+              .strict(),
+          )
+          .max(100)
           .optional(),
         acceptance: z
           .object({

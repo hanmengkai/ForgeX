@@ -813,6 +813,97 @@ h1 {
   line-height: 1.45;
 }
 
+.codex-process-log {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface-strong) 70%, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.codex-process-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.codex-process-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.codex-process-heading small,
+.codex-process-event small,
+.codex-process-event time {
+  color: var(--ink-soft);
+}
+
+.card-detail .codex-process-log ol {
+  display: grid;
+  max-height: 320px;
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.card-detail .codex-process-event {
+  display: grid;
+  grid-template-columns: 64px 10px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 2px;
+  background: transparent;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.codex-process-event time {
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-process-event > span {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  background: var(--line-strong);
+  border-radius: 50%;
+}
+
+.codex-process-event.running > span {
+  background: var(--brand);
+  box-shadow: 0 0 0 4px var(--brand-soft);
+}
+
+.codex-process-event.success > span {
+  background: var(--success);
+}
+
+.codex-process-event.error > span {
+  background: var(--danger);
+}
+
+.codex-process-event > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.codex-process-empty {
+  padding: 14px;
+  margin: 0;
+  color: var(--ink-soft);
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+}
+
 .detail-error {
   color: var(--danger);
 }

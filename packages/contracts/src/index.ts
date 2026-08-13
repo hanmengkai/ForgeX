@@ -385,6 +385,77 @@ export const WorkerLeaseCommandSchema = z
   })
   .strict();
 
+const relativeWorkspacePath = z
+  .string()
+  .trim()
+  .min(1)
+  .max(240)
+  .refine(
+    (value) =>
+      !value.startsWith("/") &&
+      !value.includes("\\") &&
+      !/[\r\n\u0000]/u.test(value) &&
+      value
+        .split("/")
+        .every(
+          (segment) => segment !== "" && segment !== "." && segment !== "..",
+        ),
+    "过程事件只能包含工作区内的相对路径",
+  );
+
+export const CodexProcessEventSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("lifecycle"),
+      status: z.enum(["started", "completed", "failed"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("tool"),
+      tool: z.enum([
+        "list_workspace",
+        "read_workspace_file",
+        "search_workspace_text",
+      ]),
+      status: z.enum(["started", "completed", "failed"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("file_change"),
+      changes: z
+        .array(
+          z
+            .object({
+              path: relativeWorkspacePath,
+              kind: z.enum(["add", "update", "delete"]),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(20),
+      status: z.enum(["completed", "failed"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("command"),
+      category: z.enum(["test", "build", "lint", "format", "git", "other"]),
+      status: z.enum(["started", "completed", "failed"]),
+      exitCode: z.number().int().min(-1).max(255).optional(),
+    })
+    .strict(),
+]);
+
+export const WorkerRequirementProcessEventSchema =
+  WorkerLeaseCommandSchema.extend({
+    eventKey: internalKey,
+    sequence: z.number().int().positive().max(1_000_000),
+    occurredAt: z.iso.datetime(),
+    event: CodexProcessEventSchema,
+  }).strict();
+
 const DeliverySkillResourceSchema = z
   .object({
     path: z
@@ -673,6 +744,10 @@ export type StartDeliveryCommandPayload = z.infer<
 >;
 export type WorkerLeaseCommandPayload = z.infer<
   typeof WorkerLeaseCommandSchema
+>;
+export type CodexProcessEventPayload = z.infer<typeof CodexProcessEventSchema>;
+export type WorkerRequirementProcessEventPayload = z.infer<
+  typeof WorkerRequirementProcessEventSchema
 >;
 export type RequirementExecutionEnvelope = z.infer<
   typeof RequirementExecutionEnvelopeSchema
