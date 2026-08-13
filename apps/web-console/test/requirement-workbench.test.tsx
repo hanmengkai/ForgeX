@@ -218,7 +218,10 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
-beforeEach(() => window.history.replaceState(null, "", "/requirements"));
+beforeEach(() => {
+  window.history.replaceState(null, "", "/requirements");
+  window.localStorage.clear();
+});
 
 afterEach(() => {
   cleanup();
@@ -251,6 +254,128 @@ describe("RequirementWorkbench", () => {
         "/api/v1/projects/55555555-5555-4555-8555-555555555555/requirements",
       ),
     );
+  });
+
+  it("优先恢复浏览器保存的当前项目，并在切换后持续记住", async () => {
+    window.localStorage.setItem(
+      "forgex.requirement-context.v1",
+      JSON.stringify({ customerName: "保险客户", projectName: "营销视频" }),
+    );
+    const client = createClient();
+    render(<RequirementWorkbench client={client} />);
+
+    expect(await screen.findByLabelText("当前项目")).toHaveValue("营销视频");
+    expect(window.location.search).toContain(
+      "project=%E8%90%A5%E9%94%80%E8%A7%86%E9%A2%91",
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText("当前项目"), "智能质检");
+    expect(JSON.parse(window.localStorage.getItem("forgex.requirement-context.v1")!)).toEqual({
+      customerName: "保险客户",
+      projectName: "智能质检",
+    });
+  });
+
+  it("展开执行中需求后展示细粒度实时进度，并允许二次确认后强制终止", async () => {
+    const client = createClient();
+    const running = {
+      ...items[1]!,
+      links: {
+        ...items[1]!.links,
+        actions: {
+          terminateDelivery:
+            "/api/v1/requirements/44444444-4444-4444-8444-444444444444/terminate-delivery",
+        },
+      },
+    };
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [running],
+      nextCursor: null,
+    });
+    vi.mocked(client.getRequirement).mockResolvedValue({
+      ...running,
+      spec: {
+        schemaVersion: 1,
+        title: running.title,
+        goal: running.summary,
+        userStories: [],
+        acceptanceCriteria: [
+          {
+            title: "页面改造完成",
+            description: "可以查看交付详情",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      },
+      acceptance: null,
+      revisions: [
+        {
+          revision: 2,
+          version: "第 2 版",
+          changedBy: "产品负责人",
+          current: true,
+          confirmed: true,
+          changes: ["业务目标"],
+          contentState: "完整规格",
+          spec: {
+            schemaVersion: 1,
+            title: running.title,
+            goal: running.summary,
+            userStories: [],
+            acceptanceCriteria: [
+              {
+                title: "页面改造完成",
+                description: "可以查看交付详情",
+                priority: "must",
+              },
+            ],
+            openQuestions: [],
+          },
+        },
+      ],
+      progress: {
+        percent: 45,
+        currentStage: "AI 分析与修改",
+        updatedAt: "2026-08-13T02:00:00.000Z",
+        stages: [
+          { key: "confirmation", label: "需求确认", status: "completed", detail: "已确认" },
+          { key: "queue", label: "设备排队", status: "completed", detail: "已领取" },
+          { key: "implementation", label: "AI 实现", status: "active", detail: "分析代码并修改" },
+          { key: "commit", label: "本地提交", status: "pending", detail: "尚未开始" },
+          { key: "verification", label: "独立验证", status: "pending", detail: "尚未开始" },
+          { key: "acceptance", label: "产品验收", status: "pending", detail: "尚未开始" },
+        ],
+      },
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<RequirementWorkbench client={client} />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "查看工单审批详情" }),
+    );
+    expect(await screen.findByText("AI 分析与修改")).toBeInTheDocument();
+    expect(screen.getByText("45%")).toBeInTheDocument();
+    expect(screen.getByText("独立验证")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "强制终止交付" }),
+    );
+    expect(confirm).toHaveBeenCalledWith(
+      "强制终止会立即撤销设备任务，当前未提交的修改不会进入交付结果。确定继续吗？",
+    );
+    expect(client.runRequirementAction).toHaveBeenCalledWith(
+      running.links.actions.terminateDelivery,
+      {},
+    );
+  });
+
+  it("用统一查询区筛选需求列表", async () => {
+    render(<RequirementWorkbench client={createClient()} />);
+    const query = await screen.findByRole("searchbox", { name: "查询需求" });
+    await userEvent.type(query, "工单");
+    expect(screen.getByText("工单审批")).toBeInTheDocument();
+    expect(screen.queryByText("访客预约")).toBeNull();
   });
 
   it("新建需求使用当前项目中选择的代码仓库动作链接", async () => {

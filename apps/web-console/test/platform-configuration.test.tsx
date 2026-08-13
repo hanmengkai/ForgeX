@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -111,17 +111,37 @@ describe("平台资源配置", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("保险事业群")).toBeInTheDocument();
     expect(screen.getByText("智能质检平台")).toBeInTheDocument();
-    expect(screen.getByText("控制面")).toBeInTheDocument();
+    expect(screen.queryByText("控制面")).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "查看智能质检平台详情" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "智能质检平台详情" });
+    expect(within(dialog).getByText("控制面")).toBeInTheDocument();
     expect(
-      screen.getByText("https://gitee.com/example/control-plane.git"),
+      within(dialog).getByText("https://gitee.com/example/control-plane.git"),
     ).toBeInTheDocument();
-    expect(screen.getByText("D:\\forgex\\control-plane")).toBeInTheDocument();
+    expect(within(dialog).getByText("D:\\forgex\\control-plane")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "为 保险事业群 新建项目" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "为 智能质检平台 新增代码仓库" }),
     ).toBeInTheDocument();
+  });
+
+  it("用查询区按客户、项目和状态筛选列表，避免项目数量拉高页面", async () => {
+    render(<PlatformConfigurationCenter client={createClient()} />);
+    await screen.findByText("智能质检平台");
+
+    await userEvent.type(
+      screen.getByRole("searchbox", { name: "查询客户或项目" }),
+      "不存在的项目",
+    );
+    expect(screen.getByText("没有符合条件的客户或项目")).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByRole("searchbox", { name: "查询客户或项目" }));
+    await userEvent.selectOptions(screen.getByLabelText("可用状态"), "disabled");
+    expect(screen.getByText("没有符合条件的客户或项目")).toBeInTheDocument();
   });
 
   it("超级管理员可以从页面创建客户", async () => {
@@ -202,6 +222,10 @@ describe("平台资源配置", () => {
     } as unknown as ForgeXClient;
 
     render(<PlatformConfigurationCenter client={client} />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "查看智能质检平台详情" }),
+    );
 
     expect(
       await screen.findByRole("heading", { name: "标准交付准备" }),

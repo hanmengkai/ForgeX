@@ -145,6 +145,41 @@ describe("WorkerFleetService", () => {
     expect(second.assignment).toEqual(first.assignment);
   });
 
+  it("按需求强制终止等待中或执行中的交付，并立即释放设备", async () => {
+    const service = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+      clock: () => new Date("2026-08-13T02:00:00.000Z"),
+    });
+    const connection = (await service.connect(administrator, registration(1)))
+      .connection;
+    const dispatch = {
+      dispatchKey: "44444444-4444-4444-8444-444444444444",
+      tenantKey,
+      projectKey,
+      repositoryKey: projectKey,
+      requirementKey: "55555555-5555-4555-8555-555555555555",
+      requirementRevision: 1,
+      title: "误点的页面改造",
+      requiredCapabilities: [],
+      skills: [],
+      requestedAt: "2026-08-13T02:00:00.000Z",
+      dispatchedAt: null,
+      cancelledAt: null,
+    };
+    await service.enqueueDispatch(dispatch);
+    expect((await service.poll(connection)).assignment).not.toBeNull();
+
+    await expect(service.cancelRequirementDelivery(dispatch)).resolves.toBe(
+      true,
+    );
+    await expect(service.poll(connection)).resolves.toEqual({
+      assignment: null,
+    });
+    await expect(service.cancelRequirementDelivery(dispatch)).resolves.toBe(
+      false,
+    );
+  });
+
   it("重连立即废止旧连接，租约完成上报保持幂等", async () => {
     const service = new WorkerFleetService({
       repository: new InMemoryWorkerFleetRepository(),

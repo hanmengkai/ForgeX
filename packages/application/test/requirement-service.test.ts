@@ -53,6 +53,52 @@ describe("RequirementApplicationService", () => {
     expect(stored).toMatchObject({ projectKey, repositoryKey });
   });
 
+  it("强制终止交付会关闭待派发记录、留下审计并返回细粒度进度", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+      clock: () => new Date("2026-08-13T02:00:00.000Z"),
+    });
+    const created = await service.create(principal, spec);
+    await service.submitForConfirmation(principal, created.requirementKey);
+    await service.confirm(principal, created.requirementKey);
+    await service.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+
+    await expect(
+      service.terminateDelivery(principal, created.requirementKey),
+    ).resolves.toMatchObject({
+      view: { status: "已强制终止" },
+      allowedActions: expect.arrayContaining(["startDelivery"]),
+    });
+    await expect(
+      repository.listPendingDeliveryDispatches(tenantKey, projectKey, 10),
+    ).resolves.toEqual([]);
+    await expect(service.get(principal, created.requirementKey)).resolves.toMatchObject({
+      progress: {
+        percent: 35,
+        currentStage: "交付已强制终止",
+        stages: expect.arrayContaining([
+          expect.objectContaining({
+            key: "implementation",
+            status: "terminated",
+          }),
+        ]),
+      },
+    });
+    await expect(
+      repository.listAuditEvents(tenantKey, projectKey),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "delivery.terminated" }),
+      ]),
+    );
+  });
+
   it("需求分析师可修订完整规格并留下版本审计，研发不能修改", async () => {
     const repository = new InMemoryRequirementRepository();
     const service = new RequirementApplicationService({

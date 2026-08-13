@@ -414,6 +414,24 @@ describe("RequirementWorkflow", () => {
     expect(requirement.toPeopleView().status).toBe("AI 正在实现");
   });
 
+  it("交付中的误操作可以强制终止，并允许负责人重新安排交付", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+
+    expect(requirement.listAllowedActions()).toContain("terminateDelivery");
+
+    requirement.terminateDelivery();
+
+    expect(requirement.toPeopleView()).toMatchObject({
+      status: "已强制终止",
+      nextStep: "确认无误后可以重新安排交付",
+    });
+    expect(requirement.listAllowedActions()).toContain("startDelivery");
+    expect(() => requirement.startDelivery()).not.toThrow();
+    expect(requirement.toPeopleView().status).toBe("AI 正在实现");
+  });
+
   it("等待确认和已确认状态提供清晰下一步", () => {
     const requirement = createRequirement();
     requirement.submitForConfirmation();
