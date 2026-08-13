@@ -1048,24 +1048,28 @@ export function RequirementWorkbench({
     setActiveView(view);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (background = false) => {
     const generation = ++loadGenerationRef.current;
-    setError(null);
+    if (!background) setError(null);
     if (!selectedProject) {
       setItems([]);
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!background) setLoading(true);
     try {
       const result = await client.listRequirements(
         selectedProject.links.requirements,
       );
       if (generation === loadGenerationRef.current) {
-        setItems(result.items);
+        setItems((current) =>
+          JSON.stringify(current) === JSON.stringify(result.items)
+            ? current
+            : result.items,
+        );
       }
     } catch (caught) {
-      if (generation === loadGenerationRef.current) {
+      if (generation === loadGenerationRef.current && !background) {
         setError(
           caught instanceof Error
             ? caught.message
@@ -1341,7 +1345,7 @@ export function RequirementWorkbench({
       refreshing = true;
       do {
         refreshQueued = false;
-        await load();
+        await load(true);
         if (disposed) break;
         const selfUrl = expandedDetailRef.current;
         if (!selfUrl) continue;

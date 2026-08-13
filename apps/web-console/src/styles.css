@@ -2542,8 +2542,10 @@ h1 {
 }
 
 .requirement-context-panel > div,
-.requirement-context-panel label {
+.requirement-context-panel label,
+.context-repository-count {
   display: grid;
+  min-width: 0;
   gap: 6px;
 }
 
@@ -2554,6 +2556,9 @@ h1 {
 }
 
 .requirement-context-panel select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 38px;
   padding: 7px 34px 7px 10px;
   color: var(--ink);
@@ -2565,6 +2570,9 @@ h1 {
 .context-repository-count {
   align-self: center;
   padding: 8px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: 1px solid var(--line);
 }
 
