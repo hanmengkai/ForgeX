@@ -142,8 +142,11 @@ describe("开源交付包装", () => {
 
     expect(windowsCommon).toContain('"-p", "forgex"');
     expect(windowsCommon).toContain("FORGEX_CONTROL_PLANE_CONFIG_SHA256");
+    expect(windowsCommon).toContain("Get-ForgeXPublishedWebPort");
+    expect(windowsCommon).toContain('port", "web", "8080"');
     expect(windowsDeploy).toContain("Get-RandomHex");
     expect(windowsDeploy).toContain("Wait-ForgeXHealth");
+    expect(windowsDeploy).toContain("Get-ForgeXPublishedWebPort");
     expect(windowsDeploy).toContain("https://");
     expect(windowsStart).toContain('Invoke-ForgeXCompose @("up", "-d")');
     expect(windowsStop).toContain('Invoke-ForgeXCompose @("stop")');
@@ -158,9 +161,12 @@ describe("开源交付包装", () => {
 
     expect(ubuntuCommon).toContain("-p forgex");
     expect(ubuntuCommon).toContain("FORGEX_CONTROL_PLANE_CONFIG_SHA256");
+    expect(ubuntuCommon).toContain("published_web_port");
+    expect(ubuntuCommon).toContain("compose port web 8080");
     expect(ubuntuDeploy).toContain("set -Eeuo pipefail");
     expect(ubuntuDeploy).toContain("generate_random_hex");
     expect(ubuntuDeploy).toContain("wait_for_health");
+    expect(ubuntuDeploy).toContain("published_web_port");
     expect(ubuntuDeploy).toContain("https://");
     expect(ubuntuStart).toContain("compose up -d");
     expect(ubuntuStop).toContain("compose stop");
