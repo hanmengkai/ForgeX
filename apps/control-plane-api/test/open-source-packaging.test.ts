@@ -65,6 +65,9 @@ describe("开源交付包装", () => {
     expect(nginx.slice(nginx.indexOf("location /api/"))).toContain(
       "Content-Security-Policy",
     );
+    expect(nginx).toContain("proxy_buffering off;");
+    expect(nginx).toContain("proxy_cache off;");
+    expect(nginx).toContain("proxy_pass_header X-Accel-Buffering;");
     expect(localRuntimeConfig).toContain("tokenSha256");
     expect(localRuntimeConfig).toContain(
       '"publicOrigin": "http://localhost:8080"',
