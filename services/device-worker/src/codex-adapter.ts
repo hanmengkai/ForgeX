@@ -22,7 +22,7 @@ const codexResultJsonSchema = {
     tests: {
       type: "array",
       maxItems: 0,
-      items: false,
+      items: { type: "string" },
     },
   },
   required: ["status", "summary", "tests"],

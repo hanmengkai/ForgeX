@@ -112,6 +112,15 @@ describe("OpenAiCodexSdkAdapter", () => {
     expect(run.mock.calls[0]?.[0].prompt).toBe(
       requirementPrompt(requirementAssignment),
     );
+    expect(run.mock.calls[0]?.[0].outputSchema).toMatchObject({
+      properties: {
+        tests: {
+          type: "array",
+          maxItems: 0,
+          items: { type: "string" },
+        },
+      },
+    });
   });
 
   it("外层隔离不能证明配置路径不可读时不会形成 Codex 结果", async () => {
