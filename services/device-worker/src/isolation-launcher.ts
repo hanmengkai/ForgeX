@@ -327,6 +327,15 @@ const privateAuthFile = async (
   windowsPathCheck: (target: string) => Promise<void>,
 ): Promise<Buffer> => {
   const resolved = path.resolve(target);
+  const directory = path.dirname(resolved);
+  const directoryMetadata = await lstat(directory);
+  if (
+    !directoryMetadata.isDirectory() ||
+    directoryMetadata.isSymbolicLink() ||
+    !samePath(await realpath(directory), directory)
+  ) {
+    throw new Error("Codex 登录缓存目录必须是不可跳转的本地目录");
+  }
   const metadata = await lstat(resolved);
   if (
     !metadata.isFile() ||
@@ -338,14 +347,19 @@ const privateAuthFile = async (
     throw new Error("Codex 登录缓存必须是不可跳转的本地普通文件");
   }
   if (process.platform === "win32") {
+    await windowsPathCheck(directory);
     await windowsPathCheck(resolved);
   } else if (
+    (Number(directoryMetadata.mode) & 0o077) !== 0 ||
     (Number(metadata.mode) & 0o077) !== 0 ||
+    (typeof process.getuid === "function" &&
+      typeof directoryMetadata.uid === "number" &&
+      directoryMetadata.uid !== process.getuid()) ||
     (typeof process.getuid === "function" &&
       typeof metadata.uid === "number" &&
       metadata.uid !== process.getuid())
   ) {
-    throw new Error("Codex 登录缓存必须由执行用户独占");
+    throw new Error("Codex 登录缓存及其目录必须由执行用户独占");
   }
   const content = await readFile(resolved);
   try {
