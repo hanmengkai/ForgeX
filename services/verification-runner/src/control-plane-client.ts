@@ -72,12 +72,7 @@ const evidenceResponseSchema = z
     data: z
       .object({
         status: z.string().trim().min(2).max(100),
-        acceptanceProgress: z
-          .object({
-            completed: z.number().int().min(0),
-            total: z.number().int().min(0),
-          })
-          .strict(),
+        acceptanceProgress: z.string().trim().min(2).max(100),
       })
       .strict(),
   })

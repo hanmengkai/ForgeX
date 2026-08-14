@@ -83,6 +83,54 @@ describe("RunnerControlPlaneClient", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("接受控制面返回的中文验收进度并结束证据重试", async () => {
+    const evidence = {
+      payload: {
+        schemaVersion: 1 as const,
+        evidenceKey: "80000000-0000-4000-8000-000000000008",
+        tenantKey: "10000000-0000-4000-8000-000000000001",
+        projectKey: "20000000-0000-4000-8000-000000000002",
+        repositoryKey: target.repositoryKey,
+        requirementKey: target.requirementKey,
+        requirementRevision: target.requirementRevision,
+        gitHashAlgorithm: target.gitHashAlgorithm,
+        commitSha: target.commitSha,
+        runnerKey: "40000000-0000-4000-8000-000000000004",
+        keyId: "50000000-0000-4000-8000-000000000005",
+        producedAt: "2026-08-14T07:00:00.000Z",
+        artifactHashAlgorithm: "sha256" as const,
+        artifactHash: "b".repeat(64),
+        checks: [
+          {
+            criterionKey: target.acceptanceCriteria[0]!.criterionKey,
+            status: "passed" as const,
+            testRunKey: "suite-a1",
+          },
+        ],
+      },
+      signature: Buffer.alloc(64, 1).toString("base64"),
+    };
+    const client = new RunnerControlPlaneClient({
+      baseUrl: "https://control.example.test",
+      sessionKey: "runner-session-secret",
+      fetch: vi.fn(async () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              data: {
+                status: "等待产品验收",
+                acceptanceProgress: "1 / 1 项已通过",
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+      ),
+    });
+
+    await expect(client.submitEvidence(evidence)).resolves.toBeUndefined();
+  });
+
   it("响应结构漂移时使用固定本地错误，不透传远端敏感文本", async () => {
     const client = new RunnerControlPlaneClient({
       baseUrl: "https://control.example.test",
