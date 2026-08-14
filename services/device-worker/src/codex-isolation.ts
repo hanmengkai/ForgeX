@@ -10,6 +10,8 @@ import {
   type CodexProcessEventPayload,
 } from "@forgex/contracts";
 
+import type { CodexAuthentication } from "./codex-auth.js";
+
 export const CODEX_PROGRESS_PREFIX = "FORGEX_CODEX_EVENT:";
 
 const execFileAsync = promisify(execFile);
@@ -37,6 +39,7 @@ export interface IsolatedCodexRunInput {
   workspacePath: string;
   protectedPaths: string[];
   codexHomePath: string;
+  authentication?: CodexAuthentication;
   prompt: string;
   outputSchema: unknown;
   model?: string;
@@ -136,6 +139,7 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
     const challenge = randomUUID();
     const protectedPathsHash = protectedPathsDigest(protectedPaths);
     const controllerIdentity = await currentOsIdentity();
+    const authentication = input.authentication ?? { store: "keyring" };
     const request = JSON.stringify({
       schemaVersion: 1,
       challenge,
@@ -145,6 +149,7 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
       protectedPathsHash,
       controllerIdentity,
       codexHomePath: path.normalize(path.resolve(input.codexHomePath)),
+      authentication,
       codex: {
         ...(input.model ? { model: input.model } : {}),
         reasoningEffort: input.reasoningEffort,
@@ -153,7 +158,7 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
         webSearchMode: "disabled",
         approvalPolicy: "never",
         config: {
-          cli_auth_credentials_store: "keyring",
+          cli_auth_credentials_store: authentication.store,
           allow_login_shell: false,
           agents: { enabled: false },
           mcp_servers: {},

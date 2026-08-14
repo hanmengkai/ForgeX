@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CodexProcessEventPayload } from "@forgex/contracts";
 
+import type { CodexAuthentication } from "./codex-auth.js";
 import type { CodexIsolationRunner } from "./codex-isolation.js";
 import type { RequirementWorkerAssignment } from "./control-plane-client.js";
 import type { DeviceWorkerProject } from "./config.js";
@@ -140,12 +141,14 @@ export class OpenAiCodexSdkAdapter implements CodexRequirementAdapter {
   readonly #runner: CodexIsolationRunner;
   readonly #protectedPaths: string[];
   readonly #codexHomePath: string;
+  readonly #authentication: CodexAuthentication;
   readonly #environment: Record<string, string>;
 
   constructor(options: {
     allowedEnvironmentVariables?: string[];
     environment?: NodeJS.ProcessEnv;
     codexHomePath: string;
+    authentication?: CodexAuthentication;
     runner: CodexIsolationRunner;
     protectedPaths: string[];
   }) {
@@ -155,6 +158,7 @@ export class OpenAiCodexSdkAdapter implements CodexRequirementAdapter {
       options.codexHomePath,
     );
     this.#codexHomePath = options.codexHomePath;
+    this.#authentication = options.authentication ?? { store: "keyring" };
     this.#protectedPaths = [...options.protectedPaths];
     this.#runner = options.runner;
   }
@@ -171,6 +175,7 @@ export class OpenAiCodexSdkAdapter implements CodexRequirementAdapter {
       workspacePath: input.workspacePath,
       protectedPaths: this.#protectedPaths,
       codexHomePath: this.#codexHomePath,
+      authentication: this.#authentication,
       prompt: requirementPrompt(input.assignment),
       outputSchema: codexResultJsonSchema,
       ...(input.project.model ? { model: input.project.model } : {}),

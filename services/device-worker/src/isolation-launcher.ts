@@ -2,11 +2,15 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   access,
+  chmod,
+  copyFile,
   lstat,
   mkdtemp,
   open,
+  readFile,
   readdir,
   realpath,
+  rename,
   rm,
   unlink,
 } from "node:fs/promises";
@@ -27,6 +31,10 @@ import {
   currentOsIdentity,
   protectedPathsDigest,
 } from "./codex-isolation.js";
+import {
+  CodexAuthenticationSchema,
+  type CodexAuthentication,
+} from "./codex-auth.js";
 import { assertPrivateWindowsPath } from "./windows-path-security.js";
 
 const absolutePath = z
@@ -47,6 +55,7 @@ export const IsolatedCodexRunRequestSchema = z
     protectedPathsHash: z.string().regex(/^[a-f0-9]{64}$/u),
     controllerIdentity: z.string().min(3).max(200),
     codexHomePath: absolutePath,
+    authentication: CodexAuthenticationSchema,
     codex: z
       .object({
         model: z.string().min(1).max(100).optional(),
@@ -57,7 +66,7 @@ export const IsolatedCodexRunRequestSchema = z
         approvalPolicy: z.literal("never"),
         config: z
           .object({
-            cli_auth_credentials_store: z.literal("keyring"),
+            cli_auth_credentials_store: z.enum(["keyring", "file"]),
             allow_login_shell: z.literal(false),
             agents: z.object({ enabled: z.literal(false) }).strict(),
             mcp_servers: z.object({}).strict(),
@@ -111,7 +120,19 @@ export const IsolatedCodexRunRequestSchema = z
     prompt: z.string().min(1).max(1_048_576),
     outputSchema: z.unknown(),
   })
-  .strict();
+  .strict()
+  .superRefine((request, context) => {
+    if (
+      request.authentication.store !==
+      request.codex.config.cli_auth_credentials_store
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["codex", "config", "cli_auth_credentials_store"],
+        message: "Codex 登录绑定与凭据存储方式不一致",
+      });
+    }
+  });
 
 export type IsolatedCodexRunRequest = z.infer<
   typeof IsolatedCodexRunRequestSchema
@@ -301,8 +322,73 @@ interface RuntimeCodexHome {
   cleanup(): Promise<void>;
 }
 
+const privateAuthFile = async (
+  target: string,
+  windowsPathCheck: (target: string) => Promise<void>,
+): Promise<Buffer> => {
+  const resolved = path.resolve(target);
+  const metadata = await lstat(resolved);
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    metadata.size < 2 ||
+    metadata.size > 1024 * 1024 ||
+    !samePath(await realpath(resolved), resolved)
+  ) {
+    throw new Error("Codex 登录缓存必须是不可跳转的本地普通文件");
+  }
+  if (process.platform === "win32") {
+    await windowsPathCheck(resolved);
+  } else if (
+    (Number(metadata.mode) & 0o077) !== 0 ||
+    (typeof process.getuid === "function" &&
+      typeof metadata.uid === "number" &&
+      metadata.uid !== process.getuid())
+  ) {
+    throw new Error("Codex 登录缓存必须由执行用户独占");
+  }
+  const content = await readFile(resolved);
+  try {
+    const parsed = JSON.parse(content.toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("invalid");
+    }
+  } catch {
+    throw new Error("Codex 登录缓存不是有效的 JSON 对象");
+  }
+  return content;
+};
+
+const writePrivateFile = async (
+  target: string,
+  content: Buffer,
+): Promise<void> => {
+  const temporaryPath = `${target}.forgex-${randomUUID()}.tmp`;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(temporaryPath, "wx", 0o600);
+    await handle.writeFile(content);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await chmod(temporaryPath, 0o600);
+    if (process.platform === "win32") {
+      await copyFile(temporaryPath, target);
+      await rm(temporaryPath, { force: true });
+    } else {
+      await rename(temporaryPath, target);
+    }
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+};
+
 const prepareRuntimeCodexHome = async (
   codexHomePath: string,
+  authentication: CodexAuthentication,
+  windowsPathCheck: (target: string) => Promise<void>,
 ): Promise<RuntimeCodexHome> => {
   const staleRuntimeHomePattern = /^\.forgex-run-[A-Za-z0-9]{6}$/u;
   const entries = await readdir(codexHomePath, { withFileTypes: true });
@@ -319,15 +405,46 @@ const prepareRuntimeCodexHome = async (
       ),
   );
   const runtimePath = await mkdtemp(path.join(codexHomePath, ".forgex-run-"));
+  try {
+    if (authentication.store === "file") {
+      await writePrivateFile(
+        path.join(runtimePath, "auth.json"),
+        await privateAuthFile(authentication.authFilePath, windowsPathCheck),
+      );
+    }
+  } catch (error) {
+    await rm(runtimePath, { force: true, recursive: true });
+    throw error;
+  }
   return {
     path: runtimePath,
-    cleanup: () =>
-      rm(runtimePath, {
-        force: true,
-        recursive: true,
-        maxRetries: 3,
-        retryDelay: 50,
-      }),
+    cleanup: async () => {
+      try {
+        if (authentication.store === "file") {
+          const runtimeAuthPath = path.join(runtimePath, "auth.json");
+          try {
+            await writePrivateFile(
+              authentication.authFilePath,
+              await privateAuthFile(runtimeAuthPath, windowsPathCheck),
+            );
+          } catch (error) {
+            if (
+              !(error instanceof Error) ||
+              (error as NodeJS.ErrnoException).code !== "ENOENT"
+            ) {
+              throw error;
+            }
+          }
+        }
+      } finally {
+        await rm(runtimePath, {
+          force: true,
+          recursive: true,
+          maxRetries: 3,
+          retryDelay: 50,
+        });
+      }
+    },
   };
 };
 
@@ -643,7 +760,10 @@ export interface IsolationLauncherDependencies {
   emitProgress?: (event: CodexProcessEventPayload) => void | Promise<void>;
   prepareRuntimeCodexHome?: (
     codexHomePath: string,
+    authentication: CodexAuthentication,
+    windowsPathCheck: (target: string) => Promise<void>,
   ) => Promise<RuntimeCodexHome>;
+  assertPrivateCredentialPath?: (target: string) => Promise<void>;
 }
 
 export const executeIsolatedCodexRun = async (
@@ -680,7 +800,11 @@ export const executeIsolatedCodexRun = async (
   )(request);
   const runtimeHome = await (
     dependencies.prepareRuntimeCodexHome ?? prepareRuntimeCodexHome
-  )(request.codexHomePath);
+  )(
+    request.codexHomePath,
+    request.authentication,
+    dependencies.assertPrivateCredentialPath ?? assertPrivateWindowsPath,
+  );
   try {
     const runtimeRequest = {
       ...request,

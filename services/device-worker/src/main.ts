@@ -31,6 +31,7 @@ const runtime = new DeviceWorkerRuntime({
   codex: new OpenAiCodexSdkAdapter({
     allowedEnvironmentVariables: config.allowedEnvironmentVariables,
     codexHomePath: config.codexHomePath,
+    authentication: config.codexAuthentication,
     runner: new ExternalCodexIsolationRunner({
       launcherPath: config.codexIsolation.launcherPath,
       launcherSha256: config.codexIsolation.launcherSha256,

@@ -9,6 +9,7 @@ import {
   assertPrivateWindowsPath,
   assertTrustedWindowsPath,
 } from "./windows-path-security.js";
+import { CodexAuthenticationSchema } from "./codex-auth.js";
 
 const internalKey = z
   .string()
@@ -229,6 +230,7 @@ export const DeviceWorkerConfigSchema = z
     controlPlaneUrl: ControlPlaneOriginSchema,
     connection: WorkerConnectionCredentialSchema,
     codexHomePath: absolutePath,
+    codexAuthentication: CodexAuthenticationSchema,
     codexIsolation: z
       .object({
         launcherPath: absolutePath,

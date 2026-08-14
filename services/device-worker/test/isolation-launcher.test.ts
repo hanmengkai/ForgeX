@@ -19,6 +19,7 @@ import {
   assertCodexToolSurface,
   assertLauncherFilesystemBoundary,
   executeIsolatedCodexRun,
+  type IsolatedCodexRunRequest,
 } from "../src/isolation-launcher.js";
 
 const temporaryRoots: string[] = [];
@@ -29,7 +30,7 @@ afterEach(async () => {
   }
 });
 
-const request = () => {
+const request = (): IsolatedCodexRunRequest => {
   const protectedPaths = [path.resolve("controller/worker.json")];
   return {
     schemaVersion: 1 as const,
@@ -42,6 +43,7 @@ const request = () => {
       .digest("hex"),
     controllerIdentity: "uid:1000",
     codexHomePath: path.resolve("runner/codex-home"),
+    authentication: { store: "keyring" as const },
     codex: {
       reasoningEffort: "high" as const,
       sandboxMode: "workspace-write" as const,
@@ -171,6 +173,7 @@ describe("executeIsolatedCodexRun", () => {
       currentIdentity: async () => "uid:2000",
       assertFilesystemBoundary: vi.fn(),
       assertToolSurface: vi.fn(),
+      assertPrivateCredentialPath: vi.fn(),
       createCodex,
     });
 
