@@ -4,6 +4,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   readdir,
   rm,
   writeFile,
@@ -104,6 +105,81 @@ const virtualRuntimeCodexHome = async (codexHomePath: string) => ({
 });
 
 describe("executeIsolatedCodexRun", () => {
+  it("只把 hmk 登录文件带入单次运行目录，并原子保留 Codex 刷新结果", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-auth-reuse-"));
+    temporaryRoots.push(root);
+    const codexHomePath = path.join(root, "isolated-home");
+    const authFilePath = path.join(root, "hmk-auth.json");
+    await mkdir(codexHomePath);
+    await writeFile(
+      authFilePath,
+      JSON.stringify({ tokens: { access_token: "before" } }),
+      "utf8",
+    );
+    const input = request();
+    input.codexHomePath = codexHomePath;
+    input.authentication = { store: "file", authFilePath };
+    input.codex.config.cli_auth_credentials_store = "file";
+    const createCodex = vi.fn((options: CodexOptions) => ({
+      startThread: () => ({
+        id: "thread-file-auth",
+        runStreamed: async () => {
+          const runtimeHome = options.env?.CODEX_HOME;
+          if (!runtimeHome) throw new Error("缺少运行时 CODEX_HOME");
+          expect(
+            JSON.parse(
+              await readFile(path.join(runtimeHome, "auth.json"), "utf8"),
+            ),
+          ).toMatchObject({ tokens: { access_token: "before" } });
+          await writeFile(
+            path.join(runtimeHome, "auth.json"),
+            JSON.stringify({ tokens: { access_token: "after" } }),
+            "utf8",
+          );
+          return {
+            events: (async function* () {
+              yield { type: "turn.started" as const };
+              yield {
+                type: "item.completed" as const,
+                item: {
+                  id: "message-1",
+                  type: "agent_message" as const,
+                  text: JSON.stringify({
+                    status: "completed",
+                    summary: "已完成",
+                    tests: [],
+                  }),
+                },
+              };
+              yield {
+                type: "turn.completed" as const,
+                usage: {
+                  input_tokens: 0,
+                  cached_input_tokens: 0,
+                  cache_write_input_tokens: 0,
+                  output_tokens: 0,
+                  reasoning_output_tokens: 0,
+                },
+              };
+            })(),
+          };
+        },
+      }),
+    }));
+
+    await executeIsolatedCodexRun(input, {
+      currentIdentity: async () => "uid:2000",
+      assertFilesystemBoundary: vi.fn(),
+      assertToolSurface: vi.fn(),
+      createCodex,
+    });
+
+    expect(JSON.parse(await readFile(authFilePath, "utf8"))).toMatchObject({
+      tokens: { access_token: "after" },
+    });
+    await expect(readdir(codexHomePath)).resolves.toEqual([]);
+  });
+
   it("每轮结束后清理 Codex 自动生成的禁止配置，避免后续任务被旧状态阻断", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-home-cleanup-"));
     temporaryRoots.push(root);

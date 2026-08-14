@@ -47,6 +47,36 @@ afterEach(async () => {
 });
 
 describe("设备 Worker 配置", () => {
+  it("默认使用隔离 keyring，也允许显式绑定本机 Codex 登录文件", () => {
+    const isolated = DeviceWorkerConfigSchema.parse(base);
+    expect(isolated.codexAuthentication).toEqual({ store: "keyring" });
+
+    expect(
+      DeviceWorkerConfigSchema.safeParse({
+        ...base,
+        codexAuthentication: {
+          store: "file",
+          authFilePath: path.resolve("fixtures/user-codex/auth.json"),
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      DeviceWorkerConfigSchema.safeParse({
+        ...base,
+        codexAuthentication: { store: "file" },
+      }).success,
+    ).toBe(false);
+    expect(
+      DeviceWorkerConfigSchema.safeParse({
+        ...base,
+        codexAuthentication: {
+          store: "keyring",
+          authFilePath: path.resolve("fixtures/user-codex/auth.json"),
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("生产控制面只允许 HTTPS，本机开发地址可以使用 HTTP", () => {
     expect(
       DeviceWorkerConfigSchema.safeParse({

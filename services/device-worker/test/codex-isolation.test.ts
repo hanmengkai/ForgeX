@@ -79,6 +79,62 @@ process.stdout.write(JSON.stringify({
     ]);
   });
 
+  it("把显式文件登录绑定原样交给受信启动器", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-file-auth-"));
+    temporaryRoots.push(root);
+    const launcherScript = path.join(root, "launcher.mjs");
+    const authFilePath = path.join(root, "auth.json");
+    await writeFile(authFilePath, '{"tokens":{"access_token":"test"}}', "utf8");
+    await writeFile(
+      launcherScript,
+      `let input = "";
+process.stdin.setEncoding("utf8");
+for await (const chunk of process.stdin) input += chunk;
+const request = JSON.parse(input);
+if (request.authentication.store !== "file") process.exit(21);
+if (request.authentication.authFilePath !== ${JSON.stringify(authFilePath)}) process.exit(22);
+if (request.codex.config.cli_auth_credentials_store !== "file") process.exit(23);
+process.stdout.write(JSON.stringify({
+  schemaVersion: 1,
+  challenge: request.challenge,
+  isolationKind: request.isolationKind,
+  workspacePath: request.workspacePath,
+  protectedPathsHash: request.protectedPathsHash,
+  workspaceReadable: true,
+  workspaceWritable: true,
+  protectedPathsDenied: true,
+  controllerIdentitySeparated: true,
+  shellToolsDisabled: true,
+  controlledWorkspaceToolsOnly: true,
+  finalResponse: JSON.stringify({status:"completed",summary:"done",tests:[]}),
+  threadId: "thread-file-auth"
+}));
+`,
+      "utf8",
+    );
+    const runner = new ExternalCodexIsolationRunner({
+      launcherPath: process.execPath,
+      launcherSha256: createHash("sha256")
+        .update(await readFile(process.execPath))
+        .digest("hex"),
+      launcherArguments: [launcherScript],
+      isolationKind: "separate_os_identity",
+    });
+
+    await expect(
+      runner.run({
+        workspacePath: path.join(root, "workspace"),
+        protectedPaths: [path.join(root, "worker.json")],
+        codexHomePath: path.join(root, "codex-home"),
+        authentication: { store: "file", authFilePath },
+        prompt: "implement",
+        outputSchema: { type: "object" },
+        reasoningEffort: "high",
+        environment: {},
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-file-auth" });
+  });
+
   it("同一系统用户在同次执行中仍能读取 Worker 配置时拒绝 Codex 结果", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-isolation-"));
     temporaryRoots.push(root);
