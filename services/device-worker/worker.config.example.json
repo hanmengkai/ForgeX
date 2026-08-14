@@ -9,6 +9,9 @@
     "generation": 1
   },
   "codexHomePath": "/var/lib/forgex/device-worker/codex-home",
+  "codexAuthentication": {
+    "store": "keyring"
+  },
   "codexIsolation": {
     "launcherPath": "/opt/forgex/bin/codex-isolation-launcher",
     "launcherSha256": "0000000000000000000000000000000000000000000000000000000000000000",

@@ -168,6 +168,8 @@ docker image inspect forgex/repository-integrity:local --format '{{.Id}}'
 
 Each worker uses a local Codex login and an isolated operating-system identity or container. Codex credentials, local MCP credentials, session secrets, and completion journals remain on the customer device. The control plane stores only account display information, irreversible fingerprints, capabilities, and online state.
 
+`codexAuthentication.store=keyring` remains the recommended default. On a trusted single-owner host, `store=file` with an absolute `authFilePath` can reuse an existing local user's Codex login. ForgeX copies only `auth.json` into the per-run `CODEX_HOME` and persists token refreshes after the run; it does not import the user's config, skills, plugins, hooks, or history. This mode weakens OS-level read isolation for other repositories owned by that user and must be an explicit operator choice. The Codex launcher must still run under a different identity from the Worker controller.
+
 The ForgeX isolation launcher verifies identity, file ownership, ACL/mode, launcher digest, Codex feature inventory, MCP inventory, and tool allowlists before each run. Codex receives a bounded worktree editing surface and cannot write `.git`, run a general shell, browse the web, or read customer secrets. A trusted worker host creates the local commit, while independent runner evidence remains required for acceptance.
 
 Enrollment codes are issued by an administrator in **Device Center**, expire after ten minutes, and do not consume an account slot until exchange succeeds. Copy `services/device-worker/worker.config.example.json` to a private location and then run:
