@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f4f8fd"/><stop offset="1" stop-color="#eaf2fb"/></linearGradient>
+    <marker id="arr2" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0L12 6L0 12Z" fill="#176dd0"/></marker>
+    <style>
+      .title{font:700 46px 'Microsoft YaHei',sans-serif;fill:#10233e}.sub{font:400 21px 'Microsoft YaHei',sans-serif;fill:#55708f}
+      .actor{font:700 22px 'Microsoft YaHei',sans-serif;fill:#fff}.step{font:600 20px 'Microsoft YaHei',sans-serif;fill:#17304f}
+      .note{font:400 18px 'Microsoft YaHei',sans-serif;fill:#526c89}.life{stroke:#94acc5;stroke-width:2;stroke-dasharray:8 9}
+      .msg{stroke:#176dd0;stroke-width:3;fill:none;marker-end:url(#arr2)}.return{stroke:#3e9d83;stroke-width:3;stroke-dasharray:8 7;fill:none;marker-end:url(#arr2)}
+    </style>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#bg2)"/>
+  <text x="70" y="75" class="title">一次需求交付，ForgeX 内部到底发生了什么？</text>
+  <text x="70" y="113" class="sub">从确认需求到人工验收的完整时序；“完成开发”和“验证通过”是两个不同事件</text>
+
+  <g><rect x="55" y="155" width="200" height="70" rx="18" fill="#1d67c8"/><text x="102" y="198" class="actor">产品负责人</text>
+  <rect x="355" y="155" width="220" height="70" rx="18" fill="#165391"/><text x="397" y="198" class="actor">Control Plane</text>
+  <rect x="675" y="155" width="200" height="70" rx="18" fill="#286da7"/><text x="718" y="198" class="actor">PostgreSQL</text>
+  <rect x="975" y="155" width="200" height="70" rx="18" fill="#1688a8"/><text x="1018" y="198" class="actor">Device Worker</text>
+  <rect x="1275" y="155" width="220" height="70" rx="18" fill="#1b8b78"/><text x="1312" y="198" class="actor">独立 Runner</text></g>
+  <path d="M155 225V925M465 225V925M775 225V925M1075 225V925M1385 225V925" class="life"/>
+
+  <path d="M155 280H455" class="msg"/><text x="210" y="267" class="step">① 确认 requirement revision</text>
+  <path d="M465 345H765" class="msg"/><text x="505" y="331" class="step">② 同一事务写状态 + audit + outbox</text>
+  <rect x="646" y="357" width="258" height="55" rx="12" fill="#fff3d9" stroke="#eba336"/><text x="670" y="391" class="note">断电后 outbox 仍可补偿派发</text>
+  <path d="M1075 445H475" class="msg"/><text x="650" y="431" class="step">③ 出站轮询领取租约</text>
+  <path d="M465 505H1065" class="msg"/><text x="610" y="491" class="step">④ assignmentKey + 单调 fencingToken</text>
+  <rect x="970" y="530" width="290" height="82" rx="14" fill="#e2f5fb" stroke="#38a7ca"/><text x="995" y="565" class="note">独立 worktree 执行 Codex</text><text x="995" y="591" class="note">宿主校验并生成本地提交</text>
+  <path d="M1075 645H475" class="return"/><text x="630" y="631" class="step">⑤ 上报“候选提交”，不是“验收通过”</text>
+  <path d="M465 705H1375" class="msg"/><text x="740" y="691" class="step">⑥ 派发精确仓库、commit 与验收条件</text>
+  <rect x="1260" y="727" width="270" height="80" rx="14" fill="#e1f5ee" stroke="#3eaa83"/><text x="1284" y="761" class="note">固定套件、受限容器</text><text x="1284" y="789" class="note">生成 Ed25519 签名 Evidence</text>
+  <path d="M1385 840H475" class="return"/><text x="760" y="826" class="step">⑦ 回传证据 + artifactHash + Preview</text>
+  <path d="M465 895H165" class="msg"/><text x="205" y="881" class="step">⑧ 人工操作 Preview 并验收</text>
+
+  <rect x="70" y="940" width="1460" height="38" rx="19" fill="#102d50"/><text x="205" y="966" class="actor">故障语义：只读任务可安全重试；写入/外部动作越过调用边界后结果未知，则进入人工核对，绝不自动重做</text>
+</svg>
