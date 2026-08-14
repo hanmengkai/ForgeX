@@ -66,6 +66,19 @@ const detail = {
   acceptance: null,
   revisions: [
     {
+      revision: 1,
+      version: "第 1 版",
+      changedBy: "创建者",
+      current: false,
+      confirmed: true,
+      changes: ["创建需求"],
+      contentState: "完整规格",
+      spec: {
+        ...spec,
+        goal: "保留既有业务行为并改善页面的基础视觉层级。",
+      },
+    },
+    {
       revision: 2,
       version: "第 2 版",
       changedBy: "产品负责人",
@@ -228,6 +241,19 @@ test("长需求弹窗在桌面和手机上保持可扫读且关键操作始终�
   await page.screenshot({
     path: "test-results/requirement-dialog-desktop-light.png",
   });
+  await dialog.getByRole("tab", { name: "执行记录" }).click();
+  await expect(
+    dialog.getByRole("log", { name: "Codex 实时执行记录" }),
+  ).toContainText("Codex 执行未完成");
+  await page.screenshot({
+    path: "test-results/requirement-dialog-desktop-activity.png",
+  });
+  await dialog.getByRole("tab", { name: "版本与验收" }).click();
+  await expect(dialog.getByText("页面视觉与交互")).toBeVisible();
+  await page.screenshot({
+    path: "test-results/requirement-dialog-desktop-history.png",
+  });
+  await dialog.getByRole("tab", { name: "需求概览" }).click();
   await page.evaluate(() => {
     document.documentElement.dataset.theme = "dark";
   });

@@ -409,6 +409,7 @@ describe("RequirementWorkbench", () => {
     expect(await screen.findByText("AI 分析与修改")).toBeInTheDocument();
     expect(screen.getByText("45%")).toBeInTheDocument();
     expect(screen.getByText("独立验证")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "执行记录" }));
     expect(
       screen.getByRole("log", { name: "Codex 实时执行记录" }),
     ).toHaveTextContent("检索相关代码已完成");
@@ -1392,6 +1393,7 @@ describe("RequirementWorkbench", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "确认验收通过" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "查看访客预约详情" }));
+    await user.click(screen.getByRole("tab", { name: "版本与验收" }));
     expect(await screen.findByText("独立验证已通过")).toBeInTheDocument();
     expect(screen.getByText(/独立测试 Runner/)).toBeInTheDocument();
     expect(screen.getAllByText("已通过")).toHaveLength(1);
@@ -1602,10 +1604,11 @@ describe("RequirementWorkbench", () => {
       1,
     );
     expect((await screen.findAllByText("第 1 版")).length).toBeGreaterThan(1);
-    expect(screen.getByText("创建需求")).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "修订需求" })).toHaveFocus(),
     );
+    await user.click(screen.getByRole("tab", { name: "版本与验收" }));
+    expect(screen.getByText("创建需求")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "修订需求" }));
     await user.click(screen.getByRole("button", { name: "取消修订" }));
     expect(screen.getByRole("button", { name: "修订需求" })).toHaveFocus();
@@ -1874,6 +1877,7 @@ describe("RequirementWorkbench", () => {
     await user.click(
       await screen.findByRole("button", { name: "查看访客预约新版详情" }),
     );
+    await user.click(screen.getByRole("tab", { name: "版本与验收" }));
     const summaries = screen.getAllByText("查看该版完整规格");
     for (const summary of summaries) {
       await user.click(summary);
