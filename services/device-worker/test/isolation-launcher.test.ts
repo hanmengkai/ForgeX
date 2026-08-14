@@ -168,18 +168,22 @@ describe("executeIsolatedCodexRun", () => {
         },
       }),
     }));
+    const assertPrivateCredentialPath = vi.fn();
 
     await executeIsolatedCodexRun(input, {
       currentIdentity: async () => "uid:2000",
       assertFilesystemBoundary: vi.fn(),
       assertToolSurface: vi.fn(),
-      assertPrivateCredentialPath: vi.fn(),
+      assertPrivateCredentialPath,
       createCodex,
     });
 
     expect(JSON.parse(await readFile(authFilePath, "utf8"))).toMatchObject({
       tokens: { access_token: "after" },
     });
+    expect(assertPrivateCredentialPath).toHaveBeenCalledWith(
+      path.dirname(authFilePath),
+    );
     await expect(readdir(codexHomePath)).resolves.toEqual([]);
   });
 
