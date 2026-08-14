@@ -511,6 +511,12 @@ const allowedEnabledRuntimeFeatures = new Set([
 const projectTrustOverrideKey = (workspacePath: string): string =>
   `projects.${JSON.stringify(workspacePath)}.trust_level`;
 
+const workspaceGitEnvironment = (workspacePath: string) => ({
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "safe.directory",
+  GIT_CONFIG_VALUE_0: path.normalize(path.resolve(workspacePath)),
+});
+
 const workspaceMcpConfiguration = (workspacePath: string) => ({
   command: process.execPath,
   args: [workspaceMcpPath, "--workspace", workspacePath],
@@ -566,6 +572,7 @@ export const assertCodexToolSurface = async (
     ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
     ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
     CODEX_HOME: request.codexHomePath,
+    ...workspaceGitEnvironment(request.workspacePath),
   };
   const version = await execFileAsync(
     process.execPath,
@@ -837,6 +844,7 @@ export const executeIsolatedCodexRun = async (
       env: {
         ...shellEnvironment,
         CODEX_HOME: runtimeRequest.codexHomePath,
+        ...workspaceGitEnvironment(request.workspacePath),
       },
       config: {
         ...request.codex.config,

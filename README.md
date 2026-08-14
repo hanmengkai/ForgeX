@@ -200,6 +200,8 @@ FORGEX_RUNNER_CONFIG=/private/runner/runner.config.json npm run --workspace @for
 
 客户设备 Worker 使用本机 Codex 登录，不把 Codex 凭据上传控制面。默认的 `codexAuthentication.store=keyring` 要求每个 Codex 账户使用独立受限操作系统账号或容器和该隔离身份独占的空 `codexHomePath`；该目录不得出现 `auth.json`、个人 `config.toml`、第三方 MCP、Skills、Hooks 或插件。受控单机环境也可显式配置 `codexAuthentication: { "store": "file", "authFilePath": "/home/<user>/.codex/auth.json" }`，让包装器切换到已有登录的本机用户。启动器只把该用户独占的 `auth.json` 复制进单次临时 `CODEX_HOME`，任务结束后原子回写刷新结果，不加载个人配置或扩展；此模式无法再用操作系统权限证明该用户拥有的其他仓库不可读，安全性低于独立账号模式，应仅在设备所有者明确接受时使用。仓库随设备包交付 `forgex-codex-isolation-launcher`（构建产物为 `dist/isolation-launcher-main.js`），它在同一次 `--forgex-codex-run` 中先验证身份和文件边界，再调用固定版本的官方 `@openai/codex-sdk`；同控制器身份运行会直接失败。每次任务都把仓库标记为不可信，使仓库内 `.codex/config.toml` 不能扩展工具面。模型侧关闭通用 Shell、统一执行、图片读取、浏览器、桌面操作、应用、插件、记忆、Hooks、工作区依赖、网络和 Web 搜索，只保留内置 `apply_patch` 与 ForgeX 自带的只读工作树 MCP；启动前会读取真实 Codex CLI feature inventory，任何未分类的默认启用能力都会失败关闭，并用同一组运行参数读取真实 MCP inventory，要求唯一启用的服务及其命令、参数和工具白名单都与 ForgeX 可信清单完全一致。该 MCP 只提供有界的列目录、读普通业务文本和字面量搜索，不执行命令、不读取 `.git`、凭据文件、符号链接或工作树外路径。生产需用 root/管理员持有且其他用户不可写的 OS 包装器，在与 Worker 控制器不同的账号或容器内调用该 launcher。复制 [设备配置示例](services/device-worker/worker.config.example.json)，填入包装器路径与真实 SHA-256，再替换设备连接信息、项目与仓库标识以及本机绝对路径，然后执行：
 
+当 `file` 模式复用的执行用户与 Worker 控制器不同，二者还必须通过一个仅供这两个身份使用的共享组共同读写 `repositoryRoot`、它的 `.git/worktrees` 元数据和 `worktreeRoot`。这些目录应归属共享组并启用 setgid，目录至少为 `2770`、普通 Git 元数据至少为 `660`；启动器只为本次绝对 worktree 注入 `safe.directory`，不得配置为 `*`。否则 Codex 会在解析 worktree 或 Git 所有权检查阶段失败，不能把这种失败误报为登录不可用。
+
 ```bash
 npm run --workspace @forgex/device-worker build
 FORGEX_WORKER_CONFIG=/absolute/path/worker.config.json npm run --workspace @forgex/device-worker start

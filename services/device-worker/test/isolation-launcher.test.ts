@@ -580,6 +580,9 @@ describe("executeIsolatedCodexRun", () => {
         env: {
           PATH: "/usr/bin",
           CODEX_HOME: expect.any(String),
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "safe.directory",
+          GIT_CONFIG_VALUE_0: input.workspacePath,
         },
         config: expect.objectContaining({
           cli_auth_credentials_store: "keyring",
