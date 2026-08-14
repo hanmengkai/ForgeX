@@ -206,6 +206,7 @@ const createClient = (): ForgeXClient => ({
   }),
   createRequirement: vi.fn().mockResolvedValue(undefined),
   reviseRequirement: vi.fn().mockResolvedValue(undefined),
+  deleteRequirement: vi.fn().mockResolvedValue(undefined),
   runRequirementAction: vi.fn().mockResolvedValue(undefined),
   approveMcpInvocation: vi.fn().mockResolvedValue(undefined),
   cancelMcpInvocation: vi.fn().mockResolvedValue(undefined),
@@ -1081,7 +1082,40 @@ describe("RequirementWorkbench", () => {
     );
 
     expect(client.getRequirement).toHaveBeenCalledWith(items[0]!.links.self);
-    expect(await screen.findByText("填写后能够提交")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", {
+      name: "访客预约详情",
+    });
+    expect(within(dialog).getByText("填写后能够提交")).toBeInTheDocument();
+    expect(
+      within(screen.getAllByRole("article")[0]!).queryByText(
+        "填写后能够提交",
+      ),
+    ).toBeNull();
+  });
+
+  it("删除需求前二次确认，完成后关闭详情并刷新列表", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const obsolete = {
+      ...items[0]!,
+      links: {
+        ...items[0]!.links,
+        actions: { delete: items[0]!.links.self },
+      },
+    };
+    vi.mocked(client.listRequirements)
+      .mockResolvedValueOnce({ items: [obsolete], nextCursor: null })
+      .mockResolvedValue({ items: [], nextCursor: null });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "删除需求" }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      "删除后，这条需求将从当前项目中移除。历史审计仍会保留，确定继续吗？",
+    );
+    expect(client.deleteRequirement).toHaveBeenCalledWith(obsolete.links.self);
+    await waitFor(() => expect(screen.queryByText("访客预约")).toBeNull());
   });
 
   it("用业务条件展示可信验证结果并允许产品验收", async () => {

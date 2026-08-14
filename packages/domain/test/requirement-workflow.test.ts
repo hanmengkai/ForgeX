@@ -414,7 +414,7 @@ describe("RequirementWorkflow", () => {
     expect(requirement.toPeopleView().status).toBe("AI 正在实现");
   });
 
-  it("交付中的误操作可以强制终止，继续交付前必须修订并重新确认", () => {
+  it("交付中的误操作可以强制终止，并直接重新发起当前已确认版本", () => {
     const requirement = createRequirement();
     confirmRequirement(requirement);
     requirement.startDelivery();
@@ -425,15 +425,17 @@ describe("RequirementWorkflow", () => {
 
     expect(requirement.toPeopleView()).toMatchObject({
       status: "已强制终止",
-      nextStep: "如需继续，请修订需求并重新确认",
+      nextStep: "可以直接重新安排 AI 实现",
     });
-    expect(requirement.listAllowedActions()).toEqual(["revise"]);
-    expect(() => requirement.startDelivery()).toThrow();
-    requirement.revise({
-      changedBy: "产品负责人",
-      spec: revisedSpec(requirement, { goal: "修订后重新交付访客预约" }),
-    });
-    expect(requirement.toPeopleView().status).toBe("内容已更新，等待重新确认");
+    expect(requirement.listAllowedActions()).toEqual([
+      "revise",
+      "startDelivery",
+      "delete",
+    ]);
+
+    requirement.startDelivery();
+
+    expect(requirement.toPeopleView().status).toBe("AI 正在实现");
   });
 
   it("等待确认和已确认状态提供清晰下一步", () => {

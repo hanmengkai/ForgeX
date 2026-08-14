@@ -760,6 +760,21 @@ describe("PostgresRequirementRepository", () => {
     expect(migration).toContain("'delivery.terminated'");
   });
 
+  it("删除与重试迁移使用软删除，并只限制同版本的活动交付", () => {
+    const migration = readFileSync(
+      new URL(
+        "../migrations/0024_requirement_deletion_and_delivery_retry.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    expect(migration).toContain("deleted_at timestamptz");
+    expect(migration).toContain("'requirement.deleted'");
+    expect(migration).toContain("forgex_delivery_outbox_active_revision_uidx");
+    expect(migration).toContain("WHERE cancelled_at IS NULL");
+  });
+
   it("过程事件以结构化 JSON 幂等写入，并按设备序号返回最近记录", async () => {
     const assignmentKey = "77777777-7777-4777-8777-777777777777";
     const firstEventKey = "88888888-8888-4888-8888-888888888888";

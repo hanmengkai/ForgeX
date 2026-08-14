@@ -1590,6 +1590,49 @@ describe("需求 API", () => {
     await app.close();
   });
 
+  it("通过需求自己的删除链接移除废弃需求，同时保留审计记录", async () => {
+    const { app, repository } = createTestApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/requirements",
+      headers: { authorization: "Bearer product-session" },
+      payload: validRequirement,
+    });
+    const self = created.headers.location!;
+    const detail = await app.inject({
+      method: "GET",
+      url: self,
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(detail.json().data.links.actions.delete).toBe(self);
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: self,
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(deleted.statusCode, deleted.body).toBe(204);
+
+    const missing = await app.inject({
+      method: "GET",
+      url: self,
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(missing.statusCode).toBe(404);
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/v1/requirements",
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(list.json().data).toEqual([]);
+    await expect(repository.listAuditEvents(tenantKey, projectKey)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "requirement.deleted" }),
+      ]),
+    );
+    await app.close();
+  });
+
   it("通过 HATEOAS 修订完整需求并读取不含内部键的版本差异", async () => {
     const { app } = createTestApp();
     const created = await app.inject({
@@ -2171,8 +2214,22 @@ describe("需求 API", () => {
     expect(terminated.statusCode, terminated.body).toBe(200);
     expect(terminated.json().data).toMatchObject({
       status: "已强制终止",
-      nextStep: "如需继续，请修订需求并重新确认",
+      nextStep: "可以直接重新安排 AI 实现",
     });
+    const terminatedDetail = await app.inject({
+      method: "GET",
+      url: self,
+      headers: { authorization: "Bearer product-session" },
+    });
+    const restartUrl = terminatedDetail.json().data.links.actions.startDelivery;
+    expect(restartUrl).toBe(`${self}/start-delivery`);
+    const restarted = await app.inject({
+      method: "POST",
+      url: restartUrl,
+      headers: { authorization: "Bearer product-session" },
+      payload: { schemaVersion: 1, requiredCapabilities: [] },
+    });
+    expect(restarted.statusCode, restarted.body).toBe(202);
     expect(await repository.listAuditEvents(tenantKey, projectKey)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: "delivery.terminated" }),

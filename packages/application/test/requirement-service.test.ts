@@ -307,7 +307,7 @@ describe("RequirementApplicationService", () => {
       ),
     ).resolves.toMatchObject({
       view: { status: "已强制终止" },
-      allowedActions: ["revise"],
+      allowedActions: ["revise", "startDelivery", "delete"],
     });
     expect(cancelAssignment).toHaveBeenCalledTimes(1);
     await expect(
@@ -335,6 +335,40 @@ describe("RequirementApplicationService", () => {
     ).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: "delivery.terminated" }),
+      ]),
+    );
+
+    await expect(
+      service.requestDelivery(principal, created.requirementKey, {
+        schemaVersion: 1,
+        requiredCapabilities: [],
+      }),
+    ).resolves.toMatchObject({ requirementRevision: 1 });
+    await expect(
+      repository.listPendingDeliveryDispatches(tenantKey, projectKey, 10),
+    ).resolves.toHaveLength(1);
+  });
+
+  it("删除不再需要的需求后不再出现在列表和详情中，并保留删除审计", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+    });
+    const created = await service.create(principal, spec);
+
+    await service.delete(principal, created.requirementKey);
+
+    await expect(service.list(principal)).resolves.toMatchObject({ items: [] });
+    await expect(service.get(principal, created.requirementKey)).rejects.toMatchObject(
+      { statusCode: 404, code: "requirement_not_found" },
+    );
+    await expect(
+      repository.listAuditEvents(tenantKey, projectKey),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "requirement.deleted" }),
       ]),
     );
   });
