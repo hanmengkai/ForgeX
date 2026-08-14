@@ -137,6 +137,7 @@ const executionEventView = (
       list_workspace: "浏览项目结构",
       read_workspace_file: "读取项目文件",
       search_workspace_text: "检索相关代码",
+      write_workspace_file: "写入项目文件",
     }[event.tool];
     return {
       title,

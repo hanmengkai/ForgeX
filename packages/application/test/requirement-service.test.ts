@@ -230,7 +230,7 @@ describe("RequirementApplicationService", () => {
         occurredAt: "2026-08-13T04:01:01.000Z",
         event: {
           kind: "tool",
-          tool: "read_workspace_file",
+          tool: "write_workspace_file",
           status: "completed",
         } as const,
       },
@@ -254,7 +254,7 @@ describe("RequirementApplicationService", () => {
         occurredAt: "2026-08-13T04:01:00.000Z",
       },
       {
-        title: "读取项目文件",
+        title: "写入项目文件",
         detail: "已完成",
         tone: "success",
         occurredAt: "2026-08-13T04:01:01.000Z",

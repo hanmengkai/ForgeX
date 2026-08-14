@@ -7,7 +7,7 @@ const toolError = (error: unknown) => ({
   content: [
     {
       type: "text" as const,
-      text: error instanceof Error ? error.message : "工作树读取失败",
+      text: error instanceof Error ? error.message : "工作树操作失败",
     },
   ],
   isError: true,
@@ -18,10 +18,10 @@ export const createWorkspaceMcpServer = async (
 ): Promise<McpServer> => {
   const workspace = await WorkspaceAccess.open(workspacePath);
   const server = new McpServer(
-    { name: "forgex-workspace-reader", version: "0.1.0" },
+    { name: "forgex-workspace-access", version: "0.2.0" },
     {
       instructions:
-        "只用于读取当前 ForgeX 任务工作树。不要请求凭据、Git 内部数据或工作树外路径。修改文件请使用 Codex 内置 apply_patch。",
+        "只用于读写当前 ForgeX 任务工作树。不要请求凭据、Git 内部数据或工作树外路径。修改文件只能使用 write_workspace_file。",
     },
   );
 
@@ -96,6 +96,36 @@ export const createWorkspaceMcpServer = async (
       try {
         return {
           content: [{ type: "text", text: await workspace.search(input) }],
+        };
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "write_workspace_file",
+    {
+      title: "写入项目文件",
+      description:
+        "原子创建或覆盖当前任务工作树内不超过 1 MiB 的 UTF-8 文本文件；拒绝凭据、Git 内部路径、符号链接和工作树外路径。",
+      inputSchema: z
+        .object({
+          path: z.string().min(1).max(500),
+          content: z.string().max(1_048_576),
+        })
+        .strict(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        return {
+          content: [{ type: "text", text: await workspace.writeFile(input) }],
         };
       } catch (error) {
         return toolError(error);

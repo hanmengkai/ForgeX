@@ -355,6 +355,21 @@ describe("executeIsolatedCodexRun", () => {
       {
         type: "item.completed",
         item: {
+          id: "tool-2",
+          type: "mcp_tool_call",
+          server: "forgex_workspace",
+          tool: "write_workspace_file",
+          arguments: { path: "src/generated.ts", content: "TOKEN=secret" },
+          result: {
+            content: [{ type: "text", text: "已写入" }],
+            structured_content: null,
+          },
+          status: "completed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
           id: "change-1",
           type: "file_change",
           changes: [{ path: "src/App.tsx", kind: "update" }],
@@ -408,6 +423,11 @@ describe("executeIsolatedCodexRun", () => {
       {
         kind: "tool",
         tool: "read_workspace_file",
+        status: "completed",
+      },
+      {
+        kind: "tool",
+        tool: "write_workspace_file",
         status: "completed",
       },
       {
@@ -601,6 +621,7 @@ describe("executeIsolatedCodexRun", () => {
                 "list_workspace",
                 "read_workspace_file",
                 "search_workspace_text",
+                "write_workspace_file",
               ],
             }),
           }),

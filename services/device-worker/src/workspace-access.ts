@@ -1,4 +1,14 @@
-import { lstat, opendir, readFile, realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+  lstat,
+  mkdir,
+  open,
+  opendir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+} from "node:fs/promises";
 import path from "node:path";
 
 const MAX_FILE_BYTES = 1_048_576;
@@ -70,6 +80,12 @@ const textFile = (value: Buffer): string => {
   if (value.includes(0)) throw new Error("当前只支持读取文本文件");
   return value.toString("utf8");
 };
+
+const isFileSystemError = (
+  error: unknown,
+  code: string,
+): error is NodeJS.ErrnoException =>
+  error instanceof Error && "code" in error && error.code === code;
 
 export class WorkspaceAccess {
   readonly #root: string;
@@ -255,6 +271,129 @@ export class WorkspaceAccess {
       });
     }
     return matches.join("\n") || "没有找到匹配内容";
+  }
+
+  async writeFile(input: { path: string; content: string }): Promise<string> {
+    const relativePath = safeRelativePath(input.path);
+    if (relativePath === ".") {
+      throw new Error("写入目标必须是当前工作树内的相对文件路径");
+    }
+    assertReadableBusinessPath(relativePath);
+    if (input.content.includes("\u0000")) {
+      throw new Error("当前只支持写入不含空字符的 UTF-8 文本");
+    }
+    const encoded = Buffer.from(input.content, "utf8");
+    if (encoded.toString("utf8") !== input.content) {
+      throw new Error("当前只支持写入有效的 UTF-8 文本");
+    }
+    if (encoded.byteLength > MAX_FILE_BYTES) {
+      throw new Error("只能写入当前工作树内不超过 1 MiB 的文本文件");
+    }
+
+    const target = path.resolve(this.#root, relativePath);
+    if (!isInside(this.#root, target)) {
+      throw new Error("只能写入当前工作树内的相对路径");
+    }
+    const parent = await this.#writableDirectory(path.dirname(relativePath));
+    const expectedTarget = path.join(parent, path.basename(relativePath));
+    if (!samePath(expectedTarget, target)) {
+      throw new Error("不能通过目录跳转写入工作树外文件");
+    }
+
+    let existing:
+      { dev: number | bigint; ino: number | bigint; mode: number } | undefined;
+    try {
+      const metadata = await lstat(target, { bigint: true });
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        throw new Error("写入目标必须是当前工作树内的普通文件，不能是符号链接");
+      }
+      if (metadata.size > BigInt(MAX_FILE_BYTES)) {
+        throw new Error("只能覆盖当前工作树内不超过 1 MiB 的普通文件");
+      }
+      const actual = path.normalize(await realpath(target));
+      if (!samePath(actual, target) || !isInside(this.#root, actual)) {
+        throw new Error("不能通过符号链接写入工作树外文件");
+      }
+      existing = {
+        dev: metadata.dev,
+        ino: metadata.ino,
+        mode: Number(metadata.mode & 0o777n),
+      };
+    } catch (error) {
+      if (!isFileSystemError(error, "ENOENT")) throw error;
+    }
+
+    const temporary = path.join(
+      parent,
+      `.${path.basename(relativePath)}.forgex-${randomUUID()}.tmp`,
+    );
+    let temporaryCreated = false;
+    try {
+      const handle = await open(temporary, "wx", existing?.mode ?? 0o660);
+      temporaryCreated = true;
+      try {
+        await handle.writeFile(encoded);
+        await handle.sync();
+        await handle.chmod(existing?.mode ?? 0o660);
+      } finally {
+        await handle.close();
+      }
+
+      try {
+        const current = await lstat(target, { bigint: true });
+        if (
+          !existing ||
+          !current.isFile() ||
+          current.isSymbolicLink() ||
+          current.dev !== existing.dev ||
+          current.ino !== existing.ino
+        ) {
+          throw new Error("写入目标在操作过程中发生变化，设备已拒绝覆盖");
+        }
+      } catch (error) {
+        if (!isFileSystemError(error, "ENOENT")) throw error;
+        if (existing) {
+          throw new Error("写入目标在操作过程中发生变化，设备已拒绝覆盖");
+        }
+      }
+
+      await rename(temporary, target);
+      temporaryCreated = false;
+    } finally {
+      if (temporaryCreated) {
+        await rm(temporary, { force: true });
+      }
+    }
+
+    return `已写入 ${relativePath.replaceAll("\\", "/")}（${encoded.byteLength} 字节）`;
+  }
+
+  async #writableDirectory(relativePath: string): Promise<string> {
+    const segments = relativePath === "." ? [] : relativePath.split(path.sep);
+    let current = this.#root;
+    for (const segment of segments) {
+      current = path.join(current, segment);
+      if (!isInside(this.#root, current)) {
+        throw new Error("只能写入当前工作树内的相对路径");
+      }
+      try {
+        await mkdir(current, { mode: 0o770 });
+      } catch (error) {
+        if (!isFileSystemError(error, "EEXIST")) throw error;
+      }
+      const metadata = await lstat(current);
+      if (metadata.isSymbolicLink()) {
+        throw new Error("不能通过符号链接写入工作树外目录");
+      }
+      if (!metadata.isDirectory()) {
+        throw new Error("写入路径的上级必须是当前工作树内的普通目录");
+      }
+      const actual = path.normalize(await realpath(current));
+      if (!samePath(actual, current) || !isInside(this.#root, actual)) {
+        throw new Error("不能通过符号链接写入工作树外目录");
+      }
+    }
+    return current;
   }
 
   async #regularFile(relativePath: string): Promise<string> {

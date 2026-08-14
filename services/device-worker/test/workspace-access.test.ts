@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -38,7 +45,7 @@ const workspace = async () => {
 };
 
 describe("WorkspaceAccess", () => {
-  it("通过官方 MCP 协议只暴露三个受控工作树工具", async () => {
+  it("通过官方 MCP 协议只暴露四个受控工作树工具", async () => {
     const { root } = await workspace();
     const server = await createWorkspaceMcpServer(root);
     const client = new Client({ name: "forgex-test", version: "0.1.0" });
@@ -53,6 +60,7 @@ describe("WorkspaceAccess", () => {
         "list_workspace",
         "read_workspace_file",
         "search_workspace_text",
+        "write_workspace_file",
       ]);
       const result = await client.callTool({
         name: "read_workspace_file",
@@ -81,6 +89,18 @@ describe("WorkspaceAccess", () => {
           }),
         ]),
       );
+
+      const written = await client.callTool({
+        name: "write_workspace_file",
+        arguments: {
+          path: "src/generated.ts",
+          content: "export const generated = true;\n",
+        },
+      });
+      expect(written.isError).not.toBe(true);
+      await expect(
+        readFile(path.join(root, "src/generated.ts"), "utf8"),
+      ).resolves.toBe("export const generated = true;\n");
     } finally {
       await client.close();
       await server.close();
@@ -129,5 +149,45 @@ describe("WorkspaceAccess", () => {
     await expect(access.list({ depth: 1 })).resolves.toContain(
       "linked [符号链接已忽略]",
     );
+  });
+
+  it("只原子写入工作树内的普通业务文本", async () => {
+    const { root, access } = await workspace();
+    const outside = await mkdtemp(
+      path.join(os.tmpdir(), "forgex-workspace-write-outside-"),
+    );
+    roots.push(outside);
+    await symlink(outside, path.join(root, "write-linked"), "junction");
+
+    await expect(
+      access.writeFile({
+        path: "generated/nested/result.txt",
+        content: "first\n",
+      }),
+    ).resolves.toBe("已写入 generated/nested/result.txt（6 字节）");
+    await expect(
+      access.writeFile({
+        path: "generated/nested/result.txt",
+        content: "second\n",
+      }),
+    ).resolves.toBe("已写入 generated/nested/result.txt（7 字节）");
+    await expect(
+      readFile(path.join(root, "generated/nested/result.txt"), "utf8"),
+    ).resolves.toBe("second\n");
+    await expect(
+      access.writeFile({ path: ".env", content: "TOKEN=blocked" }),
+    ).rejects.toThrow("凭据");
+    await expect(
+      access.writeFile({ path: "../outside.txt", content: "blocked" }),
+    ).rejects.toThrow("相对路径");
+    await expect(
+      access.writeFile({ path: "write-linked/outside.txt", content: "no" }),
+    ).rejects.toThrow("符号链接");
+    await expect(
+      access.writeFile({
+        path: "too-large.txt",
+        content: "x".repeat(1_048_577),
+      }),
+    ).rejects.toThrow("1 MiB");
   });
 });

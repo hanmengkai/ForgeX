@@ -161,6 +161,7 @@ const allowedWorkspaceTools = new Set([
   "list_workspace",
   "read_workspace_file",
   "search_workspace_text",
+  "write_workspace_file",
 ]);
 
 const commandCategory = (
@@ -525,6 +526,7 @@ const workspaceMcpConfiguration = (workspacePath: string) => ({
     "list_workspace",
     "read_workspace_file",
     "search_workspace_text",
+    "write_workspace_file",
   ],
   startup_timeout_sec: 10,
   tool_timeout_sec: 30,

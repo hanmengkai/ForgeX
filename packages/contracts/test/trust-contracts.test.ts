@@ -208,6 +208,16 @@ describe("Codex 设备注册契约", () => {
       WorkerRequirementProcessEventSchema.safeParse({
         ...event,
         event: {
+          kind: "tool",
+          tool: "write_workspace_file",
+          status: "completed",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      WorkerRequirementProcessEventSchema.safeParse({
+        ...event,
+        event: {
           kind: "lifecycle",
           status: "failed",
           reason: "authentication",

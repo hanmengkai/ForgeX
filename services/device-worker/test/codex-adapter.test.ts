@@ -107,6 +107,10 @@ describe("OpenAiCodexSdkAdapter", () => {
     expect(run.mock.calls[0]?.[0].prompt).toContain(
       "不要执行 git add、git commit",
     );
+    expect(run.mock.calls[0]?.[0].prompt).toContain("write_workspace_file");
+    expect(run.mock.calls[0]?.[0].prompt).not.toContain(
+      "Codex 内置 apply_patch",
+    );
     expect(run.mock.calls[0]?.[0].prompt).toContain(".forgex/preview.html");
     expect(run.mock.calls[0]?.[0].prompt).toContain("自包含的交互 Preview");
     expect(run.mock.calls[0]?.[0].prompt).toBe(

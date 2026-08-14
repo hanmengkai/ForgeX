@@ -420,6 +420,7 @@ export const CodexProcessEventSchema = z.discriminatedUnion("kind", [
         "list_workspace",
         "read_workspace_file",
         "search_workspace_text",
+        "write_workspace_file",
       ]),
       status: z.enum(["started", "completed", "failed"]),
     })
