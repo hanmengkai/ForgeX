@@ -59,6 +59,7 @@ describe("RunnerControlPlaneClient", () => {
     const fetch = vi.fn(async (_input, init) => {
       expect(init?.method).toBe("PUT");
       expect(JSON.parse(String(init?.body))).toEqual({
+        schemaVersion: 1,
         requirementRevision: 2,
         artifactHashAlgorithm: "sha256",
         artifactHash,

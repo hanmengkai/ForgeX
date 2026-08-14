@@ -200,6 +200,7 @@ export class RunnerControlPlaneClient {
       {
         method: "PUT",
         body: JSON.stringify({
+          schemaVersion: 1,
           requirementRevision: target.requirementRevision,
           artifactHashAlgorithm: "sha256",
           artifactHash: hash,

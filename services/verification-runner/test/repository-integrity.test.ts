@@ -1,4 +1,4 @@
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -40,6 +40,18 @@ afterEach(async () => {
 });
 
 describe("repository integrity verifier", () => {
+  it("镜像中的固定入口必须复制为计划声明的可执行路径", async () => {
+    const dockerfile = await readFile(
+      new URL("../verifier-image/Dockerfile", import.meta.url),
+      "utf8",
+    );
+
+    expect(dockerfile).toContain(
+      "COPY --chown=0:0 --chmod=0555 node-quality.mjs /forgex-verifier/node-quality",
+    );
+    expect(dockerfile).toContain('CMD ["/forgex-verifier/node-quality"]');
+  });
+
   it("只读取候选文件并验证锁文件、严格类型配置和源码边界", async () => {
     const root = await fixture();
 
