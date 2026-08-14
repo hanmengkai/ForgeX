@@ -1959,6 +1959,7 @@ describe("需求 API", () => {
       self,
       history: `${self}/revisions`,
       preview: `${self}/preview`,
+      executionLog: `${self}/execution-log`,
       actions: { accept: `${self}/accept` },
     });
     get.mockRestore();

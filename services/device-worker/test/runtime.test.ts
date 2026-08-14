@@ -1,6 +1,8 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WORKER_MCP_SUCCEEDED_SUMMARY } from "@forgex/contracts";
 
@@ -13,6 +15,15 @@ import {
   requirementAssignment,
   workerConfig,
 } from "./fixtures.js";
+
+const temporaryRoots: string[] = [];
+afterEach(async () => {
+  await Promise.all(
+    temporaryRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
 
 describe("DeviceWorkerRuntime", () => {
   it("非只读 MCP 在调用边界异常后只上报结果未知，不会自动重复副作用", async () => {
@@ -124,6 +135,10 @@ describe("DeviceWorkerRuntime", () => {
   });
 
   it("只在 Codex 生成干净本地提交后完成租约", async () => {
+    const worktreeRoot = await mkdtemp(
+      path.join(os.tmpdir(), "forgex-runtime-log-"),
+    );
+    temporaryRoots.push(worktreeRoot);
     const controlPlane = {
       heartbeat: vi.fn(async () => Promise.resolve()),
       poll: vi.fn(async () => Promise.resolve(requirementAssignment)),
@@ -131,6 +146,7 @@ describe("DeviceWorkerRuntime", () => {
       completeRequirement: vi.fn(async () => Promise.resolve(false)),
       completeMcp: vi.fn(async () => Promise.resolve(false)),
       reportRequirementProgress: vi.fn(async () => Promise.resolve(false)),
+      reportRequirementLog: vi.fn(async () => Promise.resolve(false)),
     };
     const workspaces = {
       prepare: vi.fn(async () =>
@@ -156,6 +172,10 @@ describe("DeviceWorkerRuntime", () => {
           tool: "search_workspace_text",
           status: "completed",
         });
+        input.onLog?.({
+          stream: "stderr",
+          text: "Authorization: Bearer runtime-secret-marker\n",
+        });
         input.onProgress?.({
           kind: "file_change",
           changes: [{ path: "src/App.tsx", kind: "update" }],
@@ -170,7 +190,7 @@ describe("DeviceWorkerRuntime", () => {
     };
     const config = workerConfig({
       repositoryRoot: path.resolve("repository"),
-      worktreeRoot: path.resolve("worktrees"),
+      worktreeRoot,
     });
     const runtime = new DeviceWorkerRuntime({
       config,
@@ -187,6 +207,26 @@ describe("DeviceWorkerRuntime", () => {
     });
     expect(controlPlane.completeRequirement).toHaveBeenCalledOnce();
     expect(controlPlane.reportRequirementProgress).toHaveBeenCalledTimes(2);
+    expect(controlPlane.reportRequirementLog).toHaveBeenCalledWith(
+      requirementAssignment,
+      expect.objectContaining({
+        sequence: 1,
+        stream: "stderr",
+        text: "Authorization: Bearer [REDACTED_SECRET]\n",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(
+      await readFile(
+        path.join(
+          worktreeRoot,
+          ".forgex-execution-logs",
+          assignmentKey,
+          "execution.log",
+        ),
+        "utf8",
+      ),
+    ).toContain("Authorization: Bearer [REDACTED_SECRET]");
     expect(controlPlane.reportRequirementProgress).toHaveBeenNthCalledWith(
       1,
       requirementAssignment,

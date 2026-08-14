@@ -58,6 +58,7 @@ export interface RequirementListItem {
   links: {
     self: string;
     history: string;
+    executionLog?: string | undefined;
     preview?: string | undefined;
     actions: RequirementActionLinks;
   };
@@ -80,6 +81,19 @@ export interface RequirementExecutionEvent {
   detail: string;
   tone: "running" | "success" | "error" | "neutral";
   occurredAt: string;
+}
+
+export interface RequirementExecutionLogLine {
+  occurredAt: string;
+  stream: "stdout" | "stderr" | "system";
+  text: string;
+}
+
+export interface RequirementExecutionLog {
+  totalLines: number;
+  truncated: boolean;
+  updatedAt: string | null;
+  lines: RequirementExecutionLogLine[];
 }
 
 export interface RequirementRevision {
@@ -458,6 +472,10 @@ export interface ForgeXClient {
     query: string,
   ): Promise<KnowledgeSearchResult[]>;
   getRequirement(selfUrl: string): Promise<RequirementDetail>;
+  getRequirementExecutionLog(
+    logUrl: string,
+    lineLimit: number | null,
+  ): Promise<RequirementExecutionLog>;
   watchRequirementEvents?(
     requirementsUrl: string,
     onRefresh: () => void,
@@ -788,6 +806,7 @@ const requirementLinksSchema = z
   .object({
     self: z.string().regex(requirementSelfPattern),
     history: z.string(),
+    executionLog: z.string().optional(),
     preview: z.string().optional(),
     actions: z
       .object({
@@ -808,6 +827,16 @@ const requirementLinksSchema = z
         code: "custom",
         path: ["history"],
         message: "版本链接与需求不匹配",
+      });
+    }
+    if (
+      links.executionLog !== undefined &&
+      links.executionLog !== `${links.self}/execution-log`
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["executionLog"],
+        message: "执行日志链接与需求不匹配",
       });
     }
     if (
@@ -1024,6 +1053,27 @@ const requirementDetailResponseSchema = z
           });
         }
       }),
+  })
+  .strict();
+
+const requirementExecutionLogResponseSchema = z
+  .object({
+    data: z
+      .object({
+        totalLines: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+        updatedAt: z.iso.datetime().nullable(),
+        lines: z.array(
+          z
+            .object({
+              occurredAt: z.iso.datetime(),
+              stream: z.enum(["stdout", "stderr", "system"]),
+              text: z.string(),
+            })
+            .strict(),
+        ),
+      })
+      .strict(),
   })
   .strict();
 
@@ -1374,6 +1424,15 @@ const assertRequirementSelfUrl = (url: string): void => {
   if (!requirementSelfPattern.test(url)) {
     throw new Error("这个需求入口已经失效，请刷新页面后重试");
   }
+};
+
+const assertRequirementExecutionLogUrl = (url: string): string => {
+  const suffix = "/execution-log";
+  const self = url.endsWith(suffix) ? url.slice(0, -suffix.length) : "";
+  if (!self || !requirementSelfPattern.test(self)) {
+    throw new Error("需求执行日志入口已经失效，请刷新页面后重试");
+  }
+  return url;
 };
 
 const assertPlatformUrl = (
@@ -2040,6 +2099,26 @@ export const createHttpForgeXClient = (
       }
       if (parsed.data.data.links.self !== selfUrl) {
         throw new Error("需求详情与当前需求不匹配，请刷新页面后重试");
+      }
+      return parsed.data.data;
+    },
+    getRequirementExecutionLog: async (logUrl, lineLimit) => {
+      if (
+        lineLimit !== null &&
+        (!Number.isSafeInteger(lineLimit) || lineLimit < 1)
+      ) {
+        throw new Error("日志显示行数需要是正整数");
+      }
+      const response = await request(
+        `${assertRequirementExecutionLogUrl(logUrl)}?lines=${
+          lineLimit === null ? "all" : String(lineLimit)
+        }`,
+      );
+      const parsed = requirementExecutionLogResponseSchema.safeParse(
+        await response.json(),
+      );
+      if (!parsed.success) {
+        throw new Error("需求执行日志格式不正确，请联系管理员");
       }
       return parsed.data.data;
     },

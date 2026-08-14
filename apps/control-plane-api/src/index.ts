@@ -22,6 +22,7 @@ import {
   PlatformConfigurationService,
   ProjectInitializationService,
   RequirementApplicationService,
+  InMemoryExecutionLogStore,
   AuthenticatedRunnerSchema,
   RunnerVerificationFailureCommandSchema,
   VerificationCoordinatorService,
@@ -46,6 +47,7 @@ import {
   type ProjectInitializationRepository,
   type PreviewArtifactStore,
   type RequirementRepository,
+  type ExecutionLogStore,
   type RunnerSessionAuthenticator,
   type SessionAuthenticator,
   type SkillArtifactStore,
@@ -65,8 +67,10 @@ import {
   WorkerLeaseCommandSchema,
   WorkerMcpCompletionSchema,
   WorkerRequirementProcessEventSchema,
+  WorkerRequirementLogChunkSchema,
   WorkerRequirementCompletionSchema,
   SignedEvidenceSchema,
+  sanitizeExecutionLogText,
   type WorkerConnectionCredentialPayload,
   type McpInvocationPeopleRequestPayload,
   type McpInvocationRequestPayload,
@@ -118,6 +122,7 @@ export interface ControlPlaneApiOptions {
   skillRegistryRepository: SkillRegistryRepository;
   requirementRepository: RequirementRepository;
   previewArtifactStore: PreviewArtifactStore;
+  executionLogStore?: ExecutionLogStore;
   workerFleetRepository: WorkerFleetRepository;
   platformConfigurationRepository?: PlatformConfigurationRepository;
   projectInitializationRepository?: ProjectInitializationRepository;
@@ -303,6 +308,16 @@ const requirementListQuerySchema = z
   .object({
     cursor: z.string().trim().min(1).max(500).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+const executionLogQuerySchema = z
+  .object({
+    lines: z
+      .union([
+        z.literal("all"),
+        z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+      ])
+      .default(300),
   })
   .strict();
 const runnerVerificationListQuerySchema = z
@@ -720,6 +735,7 @@ const requirementLinks = (
   return {
     self,
     history: `${self}/revisions`,
+    executionLog: `${self}/execution-log`,
     ...(previewAvailable ? { preview: `${self}/preview` } : {}),
     actions,
   };
@@ -879,6 +895,8 @@ export const buildControlPlaneApi = (
     repositoryKey: options.repositoryKey,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+  const executionLogs =
+    options.executionLogStore ?? new InMemoryExecutionLogStore();
   const knowledgeServiceFor = (projectKey: string) =>
     new KnowledgeBaseApplicationService({
       repository: options.knowledgeBaseRepository,
@@ -3174,6 +3192,47 @@ export const buildControlPlaneApi = (
     },
   );
 
+  app.get(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey/execution-log",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      const query = executionLogQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) {
+        const error = !params.success ? params.error : query.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "日志显示行数需要是正整数或 all",
+          validationDetails(error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      const detail = await requirementServiceFor(params.data.projectKey).get(
+        principal,
+        params.data.requirementKey,
+      );
+      const currentRevision = detail.revisions.find(
+        (revision) => revision.current,
+      );
+      if (!currentRevision) throw new Error("当前需求版本不存在");
+      const snapshot = await executionLogs.readLatest(
+        {
+          tenantKey: principal.tenantKey,
+          projectKey: params.data.projectKey,
+          requirementKey: params.data.requirementKey,
+          requirementRevision: currentRevision.revision,
+        },
+        query.data.lines === "all" ? null : query.data.lines,
+      );
+      const { assignmentKey: _assignmentKey, ...view } = snapshot;
+      return reply.header("Cache-Control", "no-store").send({ data: view });
+    },
+  );
+
   app.delete(
     "/api/v1/projects/:projectKey/requirements/:requirementKey",
     async (request, reply) => {
@@ -3483,6 +3542,43 @@ export const buildControlPlaneApi = (
       },
     });
   });
+
+  app.get(
+    "/api/v1/requirements/:requirementKey/execution-log",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      const query = executionLogQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) {
+        const error = !params.success ? params.error : query.error!;
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "日志显示行数需要是正整数或 all",
+          validationDetails(error),
+        );
+      }
+      const detail = await requirements.get(
+        principal,
+        params.data.requirementKey,
+      );
+      const currentRevision = detail.revisions.find(
+        (revision) => revision.current,
+      );
+      if (!currentRevision) throw new Error("当前需求版本不存在");
+      const snapshot = await executionLogs.readLatest(
+        {
+          tenantKey: principal.tenantKey,
+          projectKey: options.projectKey,
+          requirementKey: params.data.requirementKey,
+          requirementRevision: currentRevision.revision,
+        },
+        query.data.lines === "all" ? null : query.data.lines,
+      );
+      const { assignmentKey: _assignmentKey, ...view } = snapshot;
+      return reply.header("Cache-Control", "no-store").send({ data: view });
+    },
+  );
 
   app.delete("/api/v1/requirements/:requirementKey", async (request, reply) => {
     const principal = principalFrom(request);
@@ -4050,6 +4146,58 @@ export const buildControlPlaneApi = (
         event: command.data.event,
       });
       return reply.send({ data: { alreadyRecorded: !recorded } });
+    },
+  );
+
+  app.post(
+    "/api/v1/worker-connection/requirement-log",
+    async (request, reply) => {
+      const command = WorkerRequirementLogChunkSchema.safeParse(request.body);
+      if (!command.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "Codex 终端日志需要调整",
+          validationDetails(command.error),
+        );
+      }
+      const connection = workerConnectionFrom(request);
+      const assignment = await workers.getCurrentLease(connection, {
+        schemaVersion: 1,
+        assignmentKey: command.data.assignmentKey,
+        fencingToken: command.data.fencingToken,
+      });
+      if (assignment.workKind !== "requirement_delivery") {
+        throw new ApplicationError(
+          409,
+          "requirement_log_not_allowed",
+          "当前设备任务不是需求交付",
+        );
+      }
+      await deliveries.assertRequirementDeliveryActive(connection.tenantKey, {
+        workKind: "requirement_delivery",
+        projectKey: assignment.projectKey,
+        requirementKey: assignment.requirementKey,
+        requirementRevision: assignment.requirementRevision,
+        title: assignment.title,
+      });
+      const stored = await executionLogs.append(
+        {
+          tenantKey: connection.tenantKey,
+          projectKey: assignment.projectKey,
+          requirementKey: assignment.requirementKey,
+          requirementRevision: assignment.requirementRevision,
+          assignmentKey: assignment.assignmentKey,
+        },
+        {
+          chunkKey: command.data.chunkKey,
+          sequence: command.data.sequence,
+          occurredAt: command.data.occurredAt,
+          stream: command.data.stream,
+          text: sanitizeExecutionLogText(command.data.text),
+        },
+      );
+      return reply.send({ data: { alreadyStored: !stored } });
     },
   );
 

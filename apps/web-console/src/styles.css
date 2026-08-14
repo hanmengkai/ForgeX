@@ -1137,6 +1137,127 @@ h1 {
   border-radius: 9px;
 }
 
+.execution-terminal {
+  display: grid;
+  overflow: hidden;
+  color: #d8e2e8;
+  background: #0b1116;
+  border: 1px solid #26343d;
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
+}
+
+.execution-terminal-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 16px 12px;
+  background: #111a21;
+  border-bottom: 1px solid #26343d;
+}
+
+.execution-terminal-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.execution-terminal .detail-label {
+  color: #f1f6f8;
+}
+
+.execution-terminal-heading small,
+.execution-terminal-controls small {
+  color: #8fa3af;
+}
+
+.execution-terminal-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 16px;
+  background: #0f171d;
+  border-bottom: 1px solid #26343d;
+}
+
+.execution-terminal-controls label {
+  color: #aebdc5;
+  font-size: 0.78rem;
+}
+
+.execution-terminal-controls input {
+  width: 96px;
+  min-height: 34px;
+  padding: 6px 9px;
+  color: #edf5f7;
+  background: #080d11;
+  border: 1px solid #344650;
+  border-radius: 7px;
+}
+
+.execution-terminal-controls .button.compact {
+  min-height: 34px;
+  padding: 6px 11px;
+  color: #d8e2e8;
+  background: #17232b;
+  border-color: #344650;
+}
+
+.execution-terminal-controls small {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.execution-terminal-viewport {
+  min-height: 280px;
+  max-height: 430px;
+  padding: 10px 0;
+  overflow: auto;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  scrollbar-color: #425762 #0b1116;
+}
+
+.execution-terminal-line {
+  display: grid;
+  grid-template-columns: 72px 52px minmax(0, 1fr);
+  gap: 9px;
+  min-width: max-content;
+  padding: 2px 16px;
+  white-space: pre-wrap;
+}
+
+.execution-terminal-line:hover {
+  background: rgb(124 167 187 / 8%);
+}
+
+.execution-terminal-line time {
+  color: #637986;
+  font-variant-numeric: tabular-nums;
+}
+
+.execution-terminal-stream {
+  color: #7e9aa8;
+}
+
+.execution-terminal-line.stderr > span:last-child,
+.execution-terminal-line.stderr .execution-terminal-stream,
+.execution-terminal-error {
+  color: #ff9f98;
+}
+
+.execution-terminal-line.system > span:last-child {
+  color: #9fc6d8;
+}
+
+.execution-terminal-viewport > p {
+  padding: 16px;
+  margin: 0;
+  color: #8fa3af;
+}
+
 .detail-error {
   color: var(--danger);
 }

@@ -390,7 +390,10 @@ describe("Codex 设备网关 API", () => {
       payload: {},
     });
     const assignment = poll.json().data.assignment;
-    const lines = Array.from({ length: 305 }, (_, index) => `line-${index + 1}`);
+    const lines = Array.from(
+      { length: 305 },
+      (_, index) => `line-${index + 1}`,
+    );
     const firstChunk = {
       schemaVersion: 1,
       assignmentKey: assignment.assignmentKey,

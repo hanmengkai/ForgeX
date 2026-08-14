@@ -45,9 +45,9 @@ describe("createHttpForgeXClient", () => {
       `${logUrl}?lines=300`,
       `${logUrl}?lines=all`,
     ]);
-    await expect(
-      client.getRequirementExecutionLog(logUrl, 0),
-    ).rejects.toThrow("日志显示行数需要是正整数");
+    await expect(client.getRequirementExecutionLog(logUrl, 0)).rejects.toThrow(
+      "日志显示行数需要是正整数",
+    );
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 

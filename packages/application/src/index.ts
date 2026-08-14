@@ -44,6 +44,16 @@ export {
 export { ApplicationError } from "./errors.js";
 export type { ApplicationErrorDetail } from "./errors.js";
 export {
+  FileSystemExecutionLogStore,
+  InMemoryExecutionLogStore,
+  type ExecutionLogAttemptScope,
+  type ExecutionLogChunk,
+  type ExecutionLogLine,
+  type ExecutionLogScope,
+  type ExecutionLogSnapshot,
+  type ExecutionLogStore,
+} from "./execution-log-store.js";
+export {
   InMemoryPlatformConfigurationRepository,
   PlatformConfigurationService,
   type PlatformConfigurationDeleteInput,

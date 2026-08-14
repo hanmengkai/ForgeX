@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   type CodexProcessEventPayload,
+  type CodexTerminalLogChunkPayload,
   WORKER_MCP_FAILED_SUMMARY,
   WORKER_MCP_SUCCEEDED_SUMMARY,
   WORKER_MCP_UNKNOWN_SUMMARY,
@@ -29,6 +30,10 @@ import type {
   WorkerCompletionJournal,
 } from "./completion-journal.js";
 import type { DeviceWorkerConfig } from "./config.js";
+import {
+  RequirementExecutionLogWriter,
+  sanitizeExecutionLogText,
+} from "./execution-log.js";
 import type {
   CompletedWorkspace,
   RequirementWorkspaceProvider,
@@ -76,6 +81,17 @@ interface ControlPlanePort {
       sequence: number;
       occurredAt: string;
       event: CodexProcessEventPayload;
+    },
+    signal?: AbortSignal,
+  ): Promise<boolean>;
+  reportRequirementLog?(
+    assignment: Pick<WorkerAssignment, "assignmentKey" | "fencingToken">,
+    chunk: {
+      chunkKey: string;
+      sequence: number;
+      occurredAt: string;
+      stream: CodexTerminalLogChunkPayload["stream"];
+      text: string;
     },
     signal?: AbortSignal,
   ): Promise<boolean>;
@@ -369,6 +385,7 @@ export class DeviceWorkerRuntime {
       throw new Error("设备项目配置的仓库与权威交付任务不一致");
     }
     const workspace = await this.#workspaces.prepare(project, assignment);
+    let executionLog: Promise<RequirementExecutionLogWriter> | null = null;
     let progressSequence = 0;
     let progressReportingFailed = false;
     let progressQueue = Promise.resolve();
@@ -400,14 +417,50 @@ export class DeviceWorkerRuntime {
         }
       });
     };
-    const codex = await this.#codex.execute({
-      project,
-      assignment,
-      workspacePath: workspace.path,
-      signal,
-      onProgress,
-    });
-    await progressQueue;
+    let logSequence = 0;
+    let logReportingFailed = false;
+    let logQueue = Promise.resolve();
+    const onLog = (chunk: CodexTerminalLogChunkPayload): void => {
+      logSequence += 1;
+      const log = {
+        chunkKey: randomUUID(),
+        sequence: logSequence,
+        occurredAt: new Date().toISOString(),
+        stream: chunk.stream,
+        text: sanitizeExecutionLogText(chunk.text),
+      };
+      logQueue = logQueue.then(async () => {
+        executionLog ??= RequirementExecutionLogWriter.open({
+          worktreeRoot: project.worktreeRoot,
+          assignmentKey: assignment.assignmentKey,
+        });
+        await (await executionLog).append(log);
+        if (!this.#controlPlane.reportRequirementLog || logReportingFailed)
+          return;
+        try {
+          await this.#controlPlane.reportRequirementLog(
+            assignment,
+            log,
+            signal,
+          );
+        } catch {
+          logReportingFailed = true;
+        }
+      });
+    };
+    let codex: CodexRequirementResult;
+    try {
+      codex = await this.#codex.execute({
+        project,
+        assignment,
+        workspacePath: workspace.path,
+        signal,
+        onProgress,
+        onLog,
+      });
+    } finally {
+      await Promise.all([progressQueue, logQueue]);
+    }
     const commitIntent: PendingRequirementCommit = {
       schemaVersion: 1,
       kind: "requirement_commit_pending",

@@ -18,8 +18,23 @@ const scope = {
 };
 const assignmentKey = "44444444-4444-4444-8444-444444444444";
 
-const exerciseStore = (name: string, create: () => Promise<ExecutionLogStore>) => {
+const exerciseStore = (
+  name: string,
+  create: () => Promise<ExecutionLogStore>,
+) => {
   describe(name, () => {
+    it("尚未产生输出时返回空日志快照", async () => {
+      const store = await create();
+
+      await expect(store.readLatest(scope, 300)).resolves.toEqual({
+        assignmentKey: null,
+        totalLines: 0,
+        truncated: false,
+        updatedAt: null,
+        lines: [],
+      });
+    });
+
     it("按最新执行轮次保存日志，默认尾部读取且允许读取全部行", async () => {
       const store = await create();
       const append = (input: {
@@ -121,9 +136,9 @@ exerciseStore("InMemoryExecutionLogStore", async () =>
 const temporaryRoots: string[] = [];
 afterEach(async () => {
   await Promise.all(
-    temporaryRoots.splice(0).map((root) =>
-      rm(root, { recursive: true, force: true }),
-    ),
+    temporaryRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 

@@ -6,13 +6,16 @@ import { promisify } from "node:util";
 
 import { z } from "zod";
 import {
+  CodexTerminalLogChunkSchema,
   CodexProcessEventSchema,
+  type CodexTerminalLogChunkPayload,
   type CodexProcessEventPayload,
 } from "@forgex/contracts";
 
 import type { CodexAuthentication } from "./codex-auth.js";
 
 export const CODEX_PROGRESS_PREFIX = "FORGEX_CODEX_EVENT:";
+export const CODEX_LOG_PREFIX = "FORGEX_CODEX_LOG:";
 
 const execFileAsync = promisify(execFile);
 
@@ -47,6 +50,7 @@ export interface IsolatedCodexRunInput {
   environment: Record<string, string>;
   signal?: AbortSignal;
   onProgress?: (event: CodexProcessEventPayload) => void;
+  onLog?: (chunk: CodexTerminalLogChunkPayload) => void;
 }
 
 export interface CodexIsolationRunner {
@@ -210,6 +214,7 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
       request,
       input.signal,
       input.onProgress,
+      input.onLog,
     );
     let response: unknown;
     try {
@@ -252,6 +257,7 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
     request: string,
     signal?: AbortSignal,
     onProgress?: (event: CodexProcessEventPayload) => void,
+    onLog?: (chunk: CodexTerminalLogChunkPayload) => void,
   ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const child = spawn(
@@ -318,6 +324,17 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
             } catch {
               child.kill();
               finish(new Error("Codex 隔离启动器返回了无效的过程事件"));
+              return;
+            }
+          } else if (line.startsWith(CODEX_LOG_PREFIX)) {
+            try {
+              const chunk = CodexTerminalLogChunkSchema.parse(
+                JSON.parse(line.slice(CODEX_LOG_PREFIX.length)) as unknown,
+              );
+              onLog?.(chunk);
+            } catch {
+              child.kill();
+              finish(new Error("Codex 隔离启动器返回了无效的终端日志"));
               return;
             }
           } else if (line.trim()) {

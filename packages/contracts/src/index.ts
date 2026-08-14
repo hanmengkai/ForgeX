@@ -460,6 +460,47 @@ export const WorkerRequirementProcessEventSchema =
     event: CodexProcessEventSchema,
   }).strict();
 
+export const ExecutionLogStreamSchema = z.enum(["stdout", "stderr", "system"]);
+
+export const CodexTerminalLogChunkSchema = z
+  .object({
+    stream: ExecutionLogStreamSchema,
+    text: z.string().min(1).max(32_768),
+  })
+  .strict();
+
+export const WorkerRequirementLogChunkSchema = WorkerLeaseCommandSchema.extend({
+  chunkKey: internalKey,
+  sequence: z.number().int().positive().max(1_000_000),
+  occurredAt: z.iso.datetime(),
+  stream: ExecutionLogStreamSchema,
+  text: z.string().min(1).max(32_768),
+}).strict();
+
+export const sanitizeExecutionLogText = (value: string): string =>
+  value
+    .replace(
+      /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/giu,
+      "[REDACTED_SECRET]",
+    )
+    .replace(
+      /(\bAuthorization\s*:\s*(?:Bearer|Basic)\s+)[^\s]+/giu,
+      "$1[REDACTED_SECRET]",
+    )
+    .replace(
+      /(\b(?:password|passwd|pwd|client[\s_-]?secret|api[\s_-]?key|access[\s_-]?token|auth[\s_-]?token|secret[\s_-]?key|token)\s*[:=]\s*)"[^"\r\n]+"/giu,
+      '$1"[REDACTED_SECRET]"',
+    )
+    .replace(
+      /(\b(?:password|passwd|pwd|client[\s_-]?secret|api[\s_-]?key|access[\s_-]?token|auth[\s_-]?token|secret[\s_-]?key|token)\s*[:=]\s*)'[^'\r\n]+'/giu,
+      "$1'[REDACTED_SECRET]'",
+    )
+    .replace(
+      /(\b(?:password|passwd|pwd|client[\s_-]?secret|api[\s_-]?key|access[\s_-]?token|auth[\s_-]?token|secret[\s_-]?key|token)\s*[:=]\s*)(?!\[REDACTED_SECRET\])[^\s\r\n]+/giu,
+      "$1[REDACTED_SECRET]",
+    )
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/gu, "[REDACTED_SECRET]");
+
 const DeliverySkillResourceSchema = z
   .object({
     path: z
@@ -750,6 +791,13 @@ export type WorkerLeaseCommandPayload = z.infer<
   typeof WorkerLeaseCommandSchema
 >;
 export type CodexProcessEventPayload = z.infer<typeof CodexProcessEventSchema>;
+export type ExecutionLogStream = z.infer<typeof ExecutionLogStreamSchema>;
+export type CodexTerminalLogChunkPayload = z.infer<
+  typeof CodexTerminalLogChunkSchema
+>;
+export type WorkerRequirementLogChunkPayload = z.infer<
+  typeof WorkerRequirementLogChunkSchema
+>;
 export type WorkerRequirementProcessEventPayload = z.infer<
   typeof WorkerRequirementProcessEventSchema
 >;

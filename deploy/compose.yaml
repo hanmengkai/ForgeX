@@ -40,8 +40,10 @@ services:
       FORGEX_BOOTSTRAP_ADMIN_USERNAME: ${FORGEX_BOOTSTRAP_ADMIN_USERNAME:-}
       FORGEX_BOOTSTRAP_ADMIN_NAME: ${FORGEX_BOOTSTRAP_ADMIN_NAME:-超级管理员}
       FORGEX_BOOTSTRAP_ADMIN_PASSWORD: ${FORGEX_BOOTSTRAP_ADMIN_PASSWORD:-}
+      FORGEX_EXECUTION_LOG_ROOT: /var/lib/forgex/execution-logs
     volumes:
       - ./config/control-plane.json:/run/forgex/control-plane.json:ro
+      - forgex-execution-logs:/var/lib/forgex/execution-logs
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -86,3 +88,4 @@ services:
 
 volumes:
   forgex-postgres:
+  forgex-execution-logs:

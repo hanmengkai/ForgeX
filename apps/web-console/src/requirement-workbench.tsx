@@ -17,6 +17,7 @@ import type {
   RequirementContextProject,
   RequirementActionLinks,
   RequirementDetail,
+  RequirementExecutionLog,
   RequirementListItem,
   RequirementSpecInput,
 } from "./api.js";
@@ -738,7 +739,148 @@ function RequirementDetailDialog({
   );
 }
 
+function ExecutionLogViewer({
+  client,
+  logUrl,
+  live,
+}: {
+  client: ForgeXClient;
+  logUrl: string;
+  live: boolean;
+}) {
+  const [lineLimit, setLineLimit] = useState<number | null>(300);
+  const [lineLimitInput, setLineLimitInput] = useState("300");
+  const [snapshot, setSnapshot] = useState<RequirementExecutionLog | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  const refresh = useCallback(async () => {
+    const request = ++requestRef.current;
+    try {
+      if (!client.getRequirementExecutionLog) {
+        throw new Error("当前客户端暂不支持读取需求执行日志");
+      }
+      const result = await client.getRequirementExecutionLog(logUrl, lineLimit);
+      if (request !== requestRef.current) return;
+      setSnapshot(result);
+      setError(null);
+    } catch (caught) {
+      if (request !== requestRef.current) return;
+      setError(
+        caught instanceof Error ? caught.message : "暂时无法读取需求执行日志",
+      );
+    } finally {
+      if (request === requestRef.current) setLoading(false);
+    }
+  }, [client, lineLimit, logUrl]);
+
+  useEffect(() => {
+    setLoading(true);
+    void refresh();
+    if (!live) return () => void (requestRef.current += 1);
+    const interval = window.setInterval(() => void refresh(), 1_000);
+    return () => {
+      window.clearInterval(interval);
+      requestRef.current += 1;
+    };
+  }, [live, refresh]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  }, [snapshot]);
+
+  const applyLineLimit = (event: FormEvent) => {
+    event.preventDefault();
+    const value = Number(lineLimitInput);
+    if (!Number.isSafeInteger(value) || value < 1) {
+      setError("显示行数需要是正整数");
+      return;
+    }
+    setLoading(true);
+    setLineLimit(value);
+  };
+
+  return (
+    <section className="execution-terminal">
+      <div className="execution-terminal-heading">
+        <div>
+          <span className="detail-label">Codex 实时终端日志</span>
+          <small>设备 stdout、stderr 与受控工具输出 · 已自动脱敏</small>
+        </div>
+        <span className={`status-pill ${live ? "running" : "neutral"}`}>
+          {live ? "实时更新" : "执行日志"}
+        </span>
+      </div>
+      <form className="execution-terminal-controls" onSubmit={applyLineLimit}>
+        <label htmlFor="execution-log-line-limit">显示最后行数</label>
+        <input
+          id="execution-log-line-limit"
+          type="number"
+          min="1"
+          step="1"
+          value={lineLimitInput}
+          onChange={(event) => setLineLimitInput(event.target.value)}
+        />
+        <button className="button secondary compact" type="submit">
+          应用行数
+        </button>
+        <button
+          className="button secondary compact"
+          type="button"
+          disabled={lineLimit === null}
+          onClick={() => {
+            setLoading(true);
+            setLineLimit(null);
+          }}
+        >
+          显示全部
+        </button>
+        <small>
+          {snapshot
+            ? `当前显示 ${snapshot.lines.length} / ${snapshot.totalLines} 行`
+            : "默认显示最后 300 行"}
+        </small>
+      </form>
+      <div
+        ref={viewportRef}
+        className="execution-terminal-viewport"
+        role="log"
+        aria-label="Codex 实时终端日志"
+        aria-live="polite"
+      >
+        {snapshot?.lines.map((line, index) => (
+          <div
+            className={`execution-terminal-line ${line.stream}`}
+            key={`${line.occurredAt}:${index}:${line.stream}`}
+          >
+            <time dateTime={line.occurredAt}>
+              {formatExecutionTime(line.occurredAt)}
+            </time>
+            <span className="execution-terminal-stream">{line.stream}</span>
+            <span>{line.text || " "}</span>
+          </div>
+        ))}
+        {loading && !snapshot ? <p>正在读取执行日志…</p> : null}
+        {!loading && !error && snapshot?.lines.length === 0 ? (
+          <p>设备开始执行后，终端输出会实时出现在这里。</p>
+        ) : null}
+        {error ? (
+          <p className="execution-terminal-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function RequirementCard({
+  client,
   item,
   busyAction,
   actionsBusy,
@@ -751,6 +893,7 @@ function RequirementCard({
   onRevise,
   onToggleDetail,
 }: {
+  client: ForgeXClient;
   item: RequirementListItem;
   busyAction: string | null;
   actionsBusy: boolean;
@@ -1102,56 +1245,65 @@ function RequirementCard({
                     role="tabpanel"
                     aria-labelledby="requirement-detail-tab-activity"
                   >
-                    <section
-                      className="codex-process-log"
-                      role="log"
-                      aria-label="Codex 实时执行记录"
-                      aria-live="polite"
-                    >
-                      <div className="codex-process-heading">
-                        <div>
-                          <span className="detail-label">
-                            Codex 实时执行记录
+                    {detail.links.executionLog ? (
+                      <ExecutionLogViewer
+                        client={client}
+                        logUrl={detail.links.executionLog}
+                        live={detail.status === "AI 正在实现"}
+                      />
+                    ) : (
+                      <section
+                        className="codex-process-log"
+                        role="log"
+                        aria-label="Codex 实时执行记录"
+                        aria-live="polite"
+                      >
+                        <div className="codex-process-heading">
+                          <div>
+                            <span className="detail-label">
+                              Codex 实时执行记录
+                            </span>
+                            <small>仅展示脱敏后的工具、文件和检查事件</small>
+                          </div>
+                          <span
+                            className={`status-pill ${
+                              detail.status === "AI 正在实现"
+                                ? "running"
+                                : statusTone(detail.status)
+                            }`}
+                          >
+                            {detail.status === "AI 正在实现"
+                              ? "实时更新"
+                              : detail.status}
                           </span>
-                          <small>仅展示脱敏后的工具、文件和检查事件</small>
                         </div>
-                        <span
-                          className={`status-pill ${
-                            detail.status === "AI 正在实现"
-                              ? "running"
-                              : statusTone(detail.status)
-                          }`}
-                        >
-                          {detail.status === "AI 正在实现"
-                            ? "实时更新"
-                            : detail.status}
-                        </span>
-                      </div>
-                      {detail.executionEvents &&
-                      detail.executionEvents.length > 0 ? (
-                        <ol>
-                          {detail.executionEvents.map((event, index) => (
-                            <li
-                              className={`codex-process-event ${event.tone}`}
-                              key={`${event.occurredAt}:${index}`}
-                            >
-                              <time dateTime={event.occurredAt}>
-                                {formatExecutionTime(event.occurredAt)}
-                              </time>
-                              <span aria-hidden="true" />
-                              <div>
-                                <strong>{event.title}</strong>
-                                <small>{event.detail}</small>
-                              </div>
-                            </li>
-                          ))}
-                        </ol>
-                      ) : (
-                        <p className="codex-process-empty">
-                          设备领取任务后，这里会持续显示 Codex 的受控执行事件。
-                        </p>
-                      )}
-                    </section>
+                        {detail.executionEvents &&
+                        detail.executionEvents.length > 0 ? (
+                          <ol>
+                            {detail.executionEvents.map((event, index) => (
+                              <li
+                                className={`codex-process-event ${event.tone}`}
+                                key={`${event.occurredAt}:${index}`}
+                              >
+                                <time dateTime={event.occurredAt}>
+                                  {formatExecutionTime(event.occurredAt)}
+                                </time>
+                                <span aria-hidden="true" />
+                                <div>
+                                  <strong>{event.title}</strong>
+                                  <small>{event.detail}</small>
+                                </div>
+                              </li>
+                            ))}
+                          </ol>
+                        ) : (
+                          <p className="codex-process-empty">
+                            设备领取任务后，这里会持续显示 Codex
+                            的受控执行事件。
+                          </p>
+                        )}
+                      </section>
+                    )}
                   </div>
                 ) : null}
 
@@ -2234,6 +2386,7 @@ export function RequirementWorkbench({
                   <div className="requirement-list">
                     {filteredItems.map((item) => (
                       <RequirementCard
+                        client={client}
                         key={item.links.self}
                         item={item}
                         busyAction={busyAction}

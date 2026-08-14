@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  CODEX_LOG_PREFIX,
   CODEX_PROGRESS_PREFIX,
   ExternalCodexIsolationRunner,
 } from "../src/codex-isolation.js";
@@ -32,6 +33,7 @@ const request = JSON.parse(input);
 if (request.codex.config.features.code_mode_host !== true) process.exit(31);
 if (request.codex.config.features.shell_tool !== false) process.exit(32);
 process.stderr.write(${JSON.stringify(CODEX_PROGRESS_PREFIX)} + JSON.stringify({kind:"tool",tool:"search_workspace_text",status:"completed"}) + "\\n");
+process.stderr.write(${JSON.stringify(CODEX_LOG_PREFIX)} + JSON.stringify({stream:"stdout",text:"$ rg executionEvents\\n"}) + "\\n");
 process.stdout.write(JSON.stringify({
   schemaVersion: 1,
   challenge: request.challenge,
@@ -59,6 +61,7 @@ process.stdout.write(JSON.stringify({
       isolationKind: "separate_os_identity",
     });
     const progress: unknown[] = [];
+    const logs: unknown[] = [];
 
     await expect(
       runner.run({
@@ -70,6 +73,7 @@ process.stdout.write(JSON.stringify({
         reasoningEffort: "high",
         environment: {},
         onProgress: (event) => progress.push(event),
+        onLog: (chunk) => logs.push(chunk),
       }),
     ).resolves.toMatchObject({ threadId: "thread-local" });
     expect(progress).toEqual([
@@ -78,6 +82,9 @@ process.stdout.write(JSON.stringify({
         tool: "search_workspace_text",
         status: "completed",
       },
+    ]);
+    expect(logs).toEqual([
+      { stream: "stdout", text: "$ rg executionEvents\n" },
     ]);
   });
 

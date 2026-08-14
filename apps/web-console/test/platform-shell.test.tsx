@@ -90,6 +90,7 @@ const createClient = (): ForgeXClient =>
     archiveKnowledgeSource: vi.fn(),
     searchKnowledgeBase: vi.fn(),
     getRequirement: vi.fn(),
+    getRequirementExecutionLog: vi.fn(),
     createRequirement: vi.fn(),
     reviseRequirement: vi.fn(),
     deleteRequirement: vi.fn(),

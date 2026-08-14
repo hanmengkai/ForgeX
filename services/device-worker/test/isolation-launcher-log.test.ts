@@ -38,7 +38,7 @@ describe("terminalLogChunksFromThreadEvent", () => {
     ]);
   });
 
-  it("保留 Codex 推理、工具、文件和错误事件的终端语义", () => {
+  it("保留工具、文件和错误事件的终端语义且不暴露内部推理", () => {
     const events: ThreadEvent[] = [
       { type: "turn.started" },
       {
@@ -75,15 +75,19 @@ describe("terminalLogChunksFromThreadEvent", () => {
     const chunks = events.flatMap(terminalLogChunksFromThreadEvent);
     expect(chunks).toEqual([
       { stream: "system", text: "[codex] turn started\n" },
-      { stream: "stdout", text: "[thinking] 检查现有组件\n" },
+      { stream: "system", text: "[codex] reasoning completed\n" },
       {
         stream: "system",
         text: "[tool] forgex_workspace.search_workspace_text completed\n",
       },
       { stream: "system", text: "[file] update src/App.tsx\n" },
-      { stream: "stderr", text: "[error] Authorization: Bearer [REDACTED_SECRET]\n" },
+      {
+        stream: "stderr",
+        text: "[error] Authorization: Bearer [REDACTED_SECRET]\n",
+      },
     ]);
     expect(JSON.stringify(chunks)).not.toContain("do-not-print");
     expect(JSON.stringify(chunks)).not.toContain("local-secret-marker");
+    expect(JSON.stringify(chunks)).not.toContain("检查现有组件");
   });
 });

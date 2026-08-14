@@ -70,6 +70,9 @@ export const startControlPlane = async (
       migrations,
       pool,
       serviceVersion: SERVICE_VERSION,
+      executionLogRoot:
+        environment.FORGEX_EXECUTION_LOG_ROOT ??
+        "/var/lib/forgex/execution-logs",
       logger: true,
     });
     try {
