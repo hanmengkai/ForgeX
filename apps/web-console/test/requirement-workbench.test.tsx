@@ -424,6 +424,177 @@ describe("RequirementWorkbench", () => {
     );
   });
 
+  it("终止后的长需求在首屏突出下一步，并按标签分层详情内容", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const self = items[1]!.links.self;
+    const terminated = {
+      ...items[1]!,
+      title: "重构手串配置工具的页面视觉样式",
+      summary: "在保留既有业务行为的前提下重构桌面和手机页面",
+      status: "已强制终止" as const,
+      nextStep: "可以直接重新安排 AI 实现",
+      links: {
+        ...items[1]!.links,
+        actions: {
+          startDelivery: `${self}/start-delivery`,
+          delete: self,
+        },
+      },
+    };
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [terminated],
+      nextCursor: null,
+    });
+    vi.mocked(client.getRequirement).mockResolvedValue({
+      ...terminated,
+      links: {
+        ...terminated.links,
+        actions: {
+          ...terminated.links.actions,
+          revise: `${self}/revisions`,
+        },
+      },
+      spec: {
+        schemaVersion: 1,
+        title: terminated.title,
+        goal: "在不改变现有配置、搜索、排序和删除等业务行为的前提下，把页面重构为信息层次清晰、适合桌面和手机使用的界面。",
+        userStories: [],
+        acceptanceCriteria: [
+          {
+            title: "关键操作首屏可达",
+            description: "重新安排、修订和删除无需滚动到底部",
+            priority: "must",
+          },
+        ],
+        openQuestions: [],
+      },
+      acceptance: null,
+      revisions: [
+        {
+          revision: 2,
+          version: "第 2 版",
+          changedBy: "产品负责人",
+          current: true,
+          confirmed: true,
+          changes: ["页面视觉与交互"],
+          contentState: "完整规格",
+          spec: {
+            schemaVersion: 1,
+            title: terminated.title,
+            goal: terminated.summary,
+            userStories: [],
+            acceptanceCriteria: [
+              {
+                title: "关键操作首屏可达",
+                description: "重新安排、修订和删除无需滚动到底部",
+                priority: "must",
+              },
+            ],
+            openQuestions: [],
+          },
+        },
+      ],
+      progress: {
+        percent: 35,
+        currentStage: "交付已强制终止",
+        updatedAt: "2026-08-14T05:29:21.000Z",
+        stages: [
+          {
+            key: "confirmation",
+            label: "需求确认",
+            status: "completed",
+            detail: "负责人已确认当前版本",
+          },
+          {
+            key: "queue",
+            label: "设备排队",
+            status: "completed",
+            detail: "设备曾领取交付任务",
+          },
+          {
+            key: "implementation",
+            label: "AI 实现",
+            status: "terminated",
+            detail: "设备租约已撤销，未提交修改不会进入结果",
+          },
+          {
+            key: "commit",
+            label: "本地提交",
+            status: "pending",
+            detail: "等待设备生成提交",
+          },
+          {
+            key: "verification",
+            label: "独立验证",
+            status: "pending",
+            detail: "等待独立 Runner 验证",
+          },
+          {
+            key: "acceptance",
+            label: "产品验收",
+            status: "pending",
+            detail: "等待产品负责人体验并验收",
+          },
+        ],
+      },
+      executionEvents: [
+        {
+          title: "Codex 开始分析需求",
+          detail: "已进入受控项目工作区",
+          tone: "running",
+          occurredAt: "2026-08-14T05:29:17.000Z",
+        },
+        {
+          title: "Codex 执行未完成",
+          detail: "Codex 登录不可用，请在设备端重新完成登录",
+          tone: "error",
+          occurredAt: "2026-08-14T05:29:21.000Z",
+        },
+      ],
+    });
+    render(<RequirementWorkbench client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: `查看${terminated.title}详情`,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: `${terminated.title}详情`,
+    });
+    expect(
+      within(dialog).getByRole("tablist", { name: "需求详情分类" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("已终止于 35%")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("可以直接重新安排 AI 实现"),
+    ).toBeInTheDocument();
+    const actions = within(dialog).getByRole("group", { name: "需求操作" });
+    expect(
+      within(actions).getByRole("button", { name: "重新安排 AI 实现" }),
+    ).toBeInTheDocument();
+    expect(
+      within(actions).getByRole("button", { name: "修订需求" }),
+    ).toBeInTheDocument();
+    expect(
+      within(actions).getByRole("button", { name: "删除需求" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByRole("log")).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("tab", { name: "执行记录" }));
+    expect(
+      within(dialog).getByRole("log", { name: "Codex 实时执行记录" }),
+    ).toHaveTextContent("Codex 执行未完成");
+    expect(
+      within(dialog).getByRole("tab", { name: "执行记录" }),
+    ).toHaveAttribute("aria-selected", "true");
+
+    await user.click(within(dialog).getByRole("tab", { name: "版本与验收" }));
+    expect(within(dialog).getByText("页面视觉与交互")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("log")).not.toBeInTheDocument();
+  });
+
   it("实时事件密集到达时只保留一个在途刷新和一次补偿刷新", async () => {
     const client = createClient();
     let refresh = () => undefined;
