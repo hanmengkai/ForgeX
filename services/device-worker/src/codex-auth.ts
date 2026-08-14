@@ -22,3 +22,12 @@ export const CodexAuthenticationSchema = z
   .default({ store: "keyring" });
 
 export type CodexAuthentication = z.infer<typeof CodexAuthenticationSchema>;
+
+export const codexProtectedPaths = (
+  authentication: CodexAuthentication,
+  controllerPaths: string[],
+  repositoryPaths: string[],
+): string[] => [
+  ...controllerPaths,
+  ...(authentication.store === "keyring" ? repositoryPaths : []),
+];

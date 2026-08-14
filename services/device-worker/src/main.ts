@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { OpenAiCodexSdkAdapter } from "./codex-adapter.js";
+import { codexProtectedPaths } from "./codex-auth.js";
 import { ExternalCodexIsolationRunner } from "./codex-isolation.js";
 import { FileWorkerCompletionJournal } from "./completion-journal.js";
 import { loadDeviceWorkerConfig } from "./config.js";
@@ -37,12 +38,15 @@ const runtime = new DeviceWorkerRuntime({
       launcherSha256: config.codexIsolation.launcherSha256,
       isolationKind: config.codexIsolation.isolationKind,
     }),
-    protectedPaths: [
-      resolvedConfigPath,
-      config.completionJournalPath,
-      path.dirname(config.completionJournalPath),
-      ...config.projects.flatMap((project) => [project.repositoryRoot]),
-    ],
+    protectedPaths: codexProtectedPaths(
+      config.codexAuthentication,
+      [
+        resolvedConfigPath,
+        config.completionJournalPath,
+        path.dirname(config.completionJournalPath),
+      ],
+      config.projects.map((project) => project.repositoryRoot),
+    ),
   }),
   completionJournal: new FileWorkerCompletionJournal(
     config.completionJournalPath,
