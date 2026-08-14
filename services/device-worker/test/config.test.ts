@@ -9,6 +9,7 @@ import {
   DeviceWorkerConfigSchema,
   loadDeviceWorkerConfig,
 } from "../src/config.js";
+import { codexProtectedPaths } from "../src/codex-auth.js";
 import { projectKey, repositoryKey, tenantKey } from "./fixtures.js";
 
 const base = {
@@ -47,6 +48,26 @@ afterEach(async () => {
 });
 
 describe("设备 Worker 配置", () => {
+  it("复用本机登录文件时只声明执行用户实际不可读的控制器路径", () => {
+    const controllerPaths = [path.resolve("fixtures/worker.json")];
+    const repositoryPaths = [path.resolve("fixtures/repository")];
+
+    expect(
+      codexProtectedPaths(
+        { store: "file", authFilePath: path.resolve("fixtures/auth.json") },
+        controllerPaths,
+        repositoryPaths,
+      ),
+    ).toEqual(controllerPaths);
+    expect(
+      codexProtectedPaths(
+        { store: "keyring" },
+        controllerPaths,
+        repositoryPaths,
+      ),
+    ).toEqual([...controllerPaths, ...repositoryPaths]);
+  });
+
   it("默认使用隔离 keyring，也允许显式绑定本机 Codex 登录文件", () => {
     const isolated = DeviceWorkerConfigSchema.parse(base);
     expect(isolated.codexAuthentication).toEqual({ store: "keyring" });
