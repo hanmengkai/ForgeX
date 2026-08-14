@@ -181,9 +181,13 @@ describe("executeIsolatedCodexRun", () => {
     expect(JSON.parse(await readFile(authFilePath, "utf8"))).toMatchObject({
       tokens: { access_token: "after" },
     });
-    expect(assertPrivateCredentialPath).toHaveBeenCalledWith(
-      path.dirname(authFilePath),
-    );
+    if (process.platform === "win32") {
+      expect(assertPrivateCredentialPath).toHaveBeenCalledWith(
+        path.dirname(authFilePath),
+      );
+    } else {
+      expect(assertPrivateCredentialPath).not.toHaveBeenCalled();
+    }
     await expect(readdir(codexHomePath)).resolves.toEqual([]);
   });
 
