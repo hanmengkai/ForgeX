@@ -29,6 +29,8 @@ describe("ExternalCodexIsolationRunner", () => {
 process.stdin.setEncoding("utf8");
 for await (const chunk of process.stdin) input += chunk;
 const request = JSON.parse(input);
+if (request.codex.config.features.code_mode_host !== true) process.exit(31);
+if (request.codex.config.features.shell_tool !== false) process.exit(32);
 process.stderr.write(${JSON.stringify(CODEX_PROGRESS_PREFIX)} + JSON.stringify({kind:"tool",tool:"search_workspace_text",status:"completed"}) + "\\n");
 process.stdout.write(JSON.stringify({
   schemaVersion: 1,

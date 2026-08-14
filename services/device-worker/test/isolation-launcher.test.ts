@@ -61,7 +61,7 @@ const request = (): IsolatedCodexRunRequest => {
           browser_use: false as const,
           browser_use_external: false as const,
           browser_use_full_cdp_access: false as const,
-          code_mode_host: false as const,
+          code_mode_host: true as const,
           computer_use: false as const,
           goals: false as const,
           guardian_approval: false as const,
@@ -445,7 +445,7 @@ describe("executeIsolatedCodexRun", () => {
     );
   });
 
-  it("以真实固定版本 CLI 证明除受控工作树工具外的内置工具均已关闭", async () => {
+  it("以真实固定版本 CLI 证明只启用受控 MCP 所需的 Code Mode Host", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-tools-"));
     temporaryRoots.push(root);
     const workspacePath = path.join(root, "workspace");
@@ -609,6 +609,7 @@ describe("executeIsolatedCodexRun", () => {
           features: expect.objectContaining({
             apps: false,
             browser_use: false,
+            code_mode_host: true,
             computer_use: false,
             shell_tool: false,
             unified_exec: false,
@@ -617,6 +618,7 @@ describe("executeIsolatedCodexRun", () => {
           }),
           mcp_servers: expect.objectContaining({
             forgex_workspace: expect.objectContaining({
+              default_tools_approval_mode: "approve",
               enabled_tools: [
                 "list_workspace",
                 "read_workspace_file",

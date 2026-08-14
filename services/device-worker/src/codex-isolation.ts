@@ -168,7 +168,7 @@ export class ExternalCodexIsolationRunner implements CodexIsolationRunner {
             browser_use: false,
             browser_use_external: false,
             browser_use_full_cdp_access: false,
-            code_mode_host: false,
+            code_mode_host: true,
             computer_use: false,
             goals: false,
             guardian_approval: false,

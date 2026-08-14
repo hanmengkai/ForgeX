@@ -77,7 +77,7 @@ export const IsolatedCodexRunRequestSchema = z
                 browser_use: z.literal(false),
                 browser_use_external: z.literal(false),
                 browser_use_full_cdp_access: z.literal(false),
-                code_mode_host: z.literal(false),
+                code_mode_host: z.literal(true),
                 computer_use: z.literal(false),
                 goals: z.literal(false),
                 guardian_approval: z.literal(false),
@@ -476,7 +476,6 @@ const disabledToolFeatures = [
   "browser_use",
   "browser_use_external",
   "browser_use_full_cdp_access",
-  "code_mode_host",
   "computer_use",
   "goals",
   "guardian_approval",
@@ -501,7 +500,10 @@ const disabledToolFeatures = [
   "workspace_dependencies",
 ] as const;
 
+const requiredEnabledToolFeatures = ["code_mode_host"] as const;
+
 const allowedEnabledRuntimeFeatures = new Set([
+  "code_mode_host",
   "enable_request_compression",
   "fast_mode",
   "personality",
@@ -528,6 +530,7 @@ const workspaceMcpConfiguration = (workspacePath: string) => ({
     "search_workspace_text",
     "write_workspace_file",
   ],
+  default_tools_approval_mode: "approve",
   startup_timeout_sec: 10,
   tool_timeout_sec: 30,
 });
@@ -590,10 +593,16 @@ export const assertCodexToolSurface = async (
   if (version.stdout.trim() !== "codex-cli 0.147.0") {
     throw new Error("ForgeX 设备只允许经过验证的 Codex CLI 0.147.0");
   }
-  const featureOverrides = disabledToolFeatures.flatMap((feature) => [
-    "-c",
-    `features.${feature}=false`,
-  ]);
+  const featureOverrides = [
+    ...disabledToolFeatures.flatMap((feature) => [
+      "-c",
+      `features.${feature}=false`,
+    ]),
+    ...requiredEnabledToolFeatures.flatMap((feature) => [
+      "-c",
+      `features.${feature}=true`,
+    ]),
+  ];
   const projectTrustOverride = projectTrustOverrideKey(request.workspacePath);
   const inventory = await execFileAsync(
     process.execPath,
@@ -627,6 +636,11 @@ export const assertCodexToolSurface = async (
   for (const feature of disabledToolFeatures) {
     if (states.get(feature)?.enabled !== false) {
       throw new Error(`Codex 工具特性 ${feature} 没有被可靠关闭`);
+    }
+  }
+  for (const feature of requiredEnabledToolFeatures) {
+    if (states.get(feature)?.enabled !== true) {
+      throw new Error(`Codex 受控 MCP 所需特性 ${feature} 没有可靠启用`);
     }
   }
   const unclassifiedEnabled = [...states.entries()]
