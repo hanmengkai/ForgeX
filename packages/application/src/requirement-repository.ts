@@ -17,6 +17,7 @@ export type RequirementAuditAction =
   | "requirement.revised"
   | "requirement.confirmation_submitted"
   | "requirement.confirmed"
+  | "requirement.deleted"
   | "requirement.accepted"
   | "delivery.requested"
   | "delivery.dispatched"
@@ -263,6 +264,7 @@ export interface RequirementListPage {
 export interface RequirementTransaction {
   find(requirementKey: string): Promise<RequirementRecord | null>;
   save(record: RequirementRecord): void;
+  softDelete(requirementKey: string, deletedAt: string): void;
   appendAudit(event: RequirementAuditEvent): void;
   appendDeliveryDispatch(record: DeliveryDispatchRecord): void;
   appendDeliveryExecutionEvent(

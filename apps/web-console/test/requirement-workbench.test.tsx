@@ -528,6 +528,31 @@ describe("RequirementWorkbench", () => {
     expect(screen.getByText("验证失败，版本已封存")).toHaveClass("attention");
   });
 
+  it("只有删除入口的需求不计入需要处理事项", async () => {
+    const client = createClient();
+    vi.mocked(client.listRequirements).mockResolvedValue({
+      items: [
+        {
+          ...items[0]!,
+          status: "已完成",
+          nextStep: "无需处理",
+          links: {
+            ...items[0]!.links,
+            actions: { delete: items[0]!.links.self },
+          },
+        },
+      ],
+      nextCursor: null,
+    });
+
+    render(<RequirementWorkbench client={client} />);
+
+    expect(await screen.findByText("已完成")).toBeInTheDocument();
+    expect(
+      screen.getByText("需要我处理").closest(".summary-card"),
+    ).toHaveTextContent("0");
+  });
+
   it("列表读取失败时只显示错误，不把故障误报成空项目", async () => {
     const client = createClient();
     vi.mocked(client.listRequirements).mockRejectedValue(
@@ -1085,12 +1110,18 @@ describe("RequirementWorkbench", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "访客预约详情",
     });
+    expect(
+      within(dialog).getByRole("button", { name: "关闭访客预约详情" }),
+    ).toBeInTheDocument();
     expect(within(dialog).getByText("填写后能够提交")).toBeInTheDocument();
     expect(
-      within(screen.getAllByRole("article")[0]!).queryByText(
-        "填写后能够提交",
-      ),
+      within(screen.getAllByRole("article")[0]!).queryByText("填写后能够提交"),
     ).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "访客预约详情" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "查看访客预约详情" }),
+    ).toHaveFocus();
   });
 
   it("删除需求前二次确认，完成后关闭详情并刷新列表", async () => {
@@ -1543,11 +1574,11 @@ describe("RequirementWorkbench", () => {
     await user.click(screen.getByRole("button", { name: "保存新版本" }));
     await waitFor(() => expect(firstReads).toBe(2));
     await user.click(screen.getByRole("button", { name: "查看工单审批详情" }));
-    const secondCard = screen.getByRole("button", {
-      name: "收起工单审批详情",
-    }).parentElement!;
+    const secondDialog = await screen.findByRole("dialog", {
+      name: "工单审批详情",
+    });
     expect(
-      (await within(secondCard).findAllByText("工单审批只属于第二个需求"))
+      (await within(secondDialog).findAllByText("工单审批只属于第二个需求"))
         .length,
     ).toBeGreaterThan(0);
 
@@ -1555,15 +1586,14 @@ describe("RequirementWorkbench", () => {
     await waitFor(() =>
       expect(
         within(
-          screen.getByRole("button", { name: "收起工单审批详情" })
-            .parentElement!,
+          screen.getByRole("dialog", { name: "工单审批详情" }),
         ).getAllByText("工单审批只属于第二个需求").length,
       ).toBeGreaterThan(0),
     );
     expect(
-      within(
-        screen.getByRole("button", { name: "收起工单审批详情" }).parentElement!,
-      ).queryByText("让访客到访过程更顺畅"),
+      within(screen.getByRole("dialog", { name: "工单审批详情" })).queryByText(
+        "让访客到访过程更顺畅",
+      ),
     ).not.toBeInTheDocument();
   });
 

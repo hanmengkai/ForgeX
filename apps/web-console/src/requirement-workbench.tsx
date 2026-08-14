@@ -5,7 +5,9 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 
 import type {
   ForgeXClient,
@@ -605,6 +607,125 @@ function RequirementRevisionEditor({
   );
 }
 
+function RequirementDetailDialog({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose(): void;
+}) {
+  const backdropRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  const previousFocusRef = useRef<HTMLElement | null>(
+    typeof document === "undefined"
+      ? null
+      : (document.activeElement as HTMLElement | null),
+  );
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const backdrop = backdropRef.current;
+    const dialog = dialogRef.current;
+    const backgroundElements = backdrop
+      ? [...(backdrop.parentElement?.children ?? [])].filter(
+          (element): element is HTMLElement =>
+            element instanceof HTMLElement && element !== backdrop,
+        )
+      : [];
+    const previousInertValues = backgroundElements.map((element) =>
+      element.hasAttribute("inert"),
+    );
+    for (const element of backgroundElements) element.setAttribute("inert", "");
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const focusableSelector =
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])';
+    const focusable = dialog?.querySelector<HTMLElement>(focusableSelector);
+    (focusable ?? dialog)?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const elements = [
+        ...dialog.querySelectorAll<HTMLElement>(focusableSelector),
+      ];
+      if (elements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = elements[0]!;
+      const last = elements.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last ||
+          !dialog.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      document.body.style.overflow = previousOverflow;
+      backgroundElements.forEach((element, index) => {
+        if (previousInertValues[index]) element.setAttribute("inert", "");
+        else element.removeAttribute("inert");
+      });
+      previousFocusRef.current?.focus();
+    };
+  }, []);
+
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      ref={backdropRef}
+      className="dialog-backdrop requirement-detail-backdrop"
+      onMouseDown={() => onCloseRef.current()}
+    >
+      <div
+        ref={dialogRef}
+        className="dialog requirement-detail-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="requirement-detail-title"
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-heading requirement-detail-heading">
+          <div>
+            <span className="eyebrow">需求详情</span>
+            <h2 id="requirement-detail-title">{title}详情</h2>
+            <p>在这里查看业务内容、版本记录与当前交付进展。</p>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={`关闭${title}详情`}
+            onClick={() => onCloseRef.current()}
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function RequirementCard({
   item,
   busyAction,
@@ -614,6 +735,7 @@ function RequirementCard({
   detailLoading,
   expanded,
   onAction,
+  onDelete,
   onRevise,
   onToggleDetail,
 }: {
@@ -625,6 +747,7 @@ function RequirementCard({
   detailLoading: boolean;
   expanded: boolean;
   onAction(actionUrl: string, body: Record<string, unknown>): Promise<void>;
+  onDelete(selfUrl: string): Promise<void>;
   onRevise(
     actionUrl: string,
     spec: RequirementSpecInput,
@@ -660,245 +783,253 @@ function RequirementCard({
         <ArrowIcon />
       </button>
       {expanded ? (
-        <div className="card-detail" aria-live="polite">
-          {detailLoading ? <p>正在读取需求详情…</p> : null}
-          {detailError ? <p className="detail-error">{detailError}</p> : null}
-          {detail ? (
-            <>
-              {detail.progress ? (
-                <section
-                  className="delivery-progress"
-                  aria-label="交付实时进度"
-                >
-                  <div className="delivery-progress-heading">
-                    <div>
-                      <span className="detail-label">当前进展</span>
-                      <strong>{detail.progress.currentStage}</strong>
-                    </div>
-                    <strong>{detail.progress.percent}%</strong>
-                  </div>
-                  <div
-                    className="delivery-progress-track"
-                    role="progressbar"
-                    aria-label="交付完成度"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={detail.progress.percent}
+        <RequirementDetailDialog
+          title={item.title}
+          onClose={() => void onToggleDetail(item.links.self)}
+        >
+          <div className="card-detail" aria-live="polite">
+            {detailLoading ? <p>正在读取需求详情…</p> : null}
+            {detailError ? <p className="detail-error">{detailError}</p> : null}
+            {detail ? (
+              <>
+                {detail.progress ? (
+                  <section
+                    className="delivery-progress"
+                    aria-label="交付实时进度"
                   >
-                    <span style={{ width: `${detail.progress.percent}%` }} />
-                  </div>
-                  <ol className="delivery-progress-stages">
-                    {detail.progress.stages.map((stage) => (
-                      <li className={stage.status} key={stage.key}>
-                        <span aria-hidden="true" />
-                        <div>
-                          <strong>{stage.label}</strong>
-                          <small>{stage.detail}</small>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-              ) : null}
-              {(detail.executionEvents?.length ?? 0) > 0 ||
-              detail.status === "AI 正在实现" ? (
-                <section
-                  className="codex-process-log"
-                  role="log"
-                  aria-label="Codex 实时执行记录"
-                  aria-live="polite"
-                >
-                  <div className="codex-process-heading">
-                    <div>
-                      <span className="detail-label">Codex 实时执行记录</span>
-                      <small>仅展示脱敏后的工具、文件和检查事件</small>
+                    <div className="delivery-progress-heading">
+                      <div>
+                        <span className="detail-label">当前进展</span>
+                        <strong>{detail.progress.currentStage}</strong>
+                      </div>
+                      <strong>{detail.progress.percent}%</strong>
                     </div>
-                    <span className="status-pill running">
-                      {(detail.executionEvents?.length ?? 0) > 0
-                        ? "实时更新"
-                        : "等待输出"}
-                    </span>
-                  </div>
-                  {detail.executionEvents &&
-                  detail.executionEvents.length > 0 ? (
-                    <ol>
-                      {detail.executionEvents.map((event, index) => (
-                        <li
-                          className={`codex-process-event ${event.tone}`}
-                          key={`${event.occurredAt}:${index}`}
-                        >
-                          <time dateTime={event.occurredAt}>
-                            {formatExecutionTime(event.occurredAt)}
-                          </time>
+                    <div
+                      className="delivery-progress-track"
+                      role="progressbar"
+                      aria-label="交付完成度"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={detail.progress.percent}
+                    >
+                      <span style={{ width: `${detail.progress.percent}%` }} />
+                    </div>
+                    <ol className="delivery-progress-stages">
+                      {detail.progress.stages.map((stage) => (
+                        <li className={stage.status} key={stage.key}>
                           <span aria-hidden="true" />
                           <div>
-                            <strong>{event.title}</strong>
-                            <small>{event.detail}</small>
+                            <strong>{stage.label}</strong>
+                            <small>{stage.detail}</small>
                           </div>
                         </li>
                       ))}
                     </ol>
-                  ) : (
-                    <p className="codex-process-empty">
-                      设备领取任务后，这里会持续显示 Codex 的受控执行事件。
-                    </p>
-                  )}
-                </section>
-              ) : null}
-              <div>
-                <span className="detail-label">要解决的问题</span>
-                <p>{detail.spec.goal}</p>
-              </div>
-              <div>
-                <span className="detail-label">完成标准</span>
-                <ul>
-                  {detail.spec.acceptanceCriteria.map((criterion) => (
-                    <li key={`${criterion.title}:${criterion.description}`}>
-                      <strong>{criterion.title}</strong>
-                      <span>{criterion.description}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              {detail.spec.userStories.length > 0 ? (
+                  </section>
+                ) : null}
+                {(detail.executionEvents?.length ?? 0) > 0 ||
+                detail.status === "AI 正在实现" ? (
+                  <section
+                    className="codex-process-log"
+                    role="log"
+                    aria-label="Codex 实时执行记录"
+                    aria-live="polite"
+                  >
+                    <div className="codex-process-heading">
+                      <div>
+                        <span className="detail-label">Codex 实时执行记录</span>
+                        <small>仅展示脱敏后的工具、文件和检查事件</small>
+                      </div>
+                      <span className="status-pill running">
+                        {(detail.executionEvents?.length ?? 0) > 0
+                          ? "实时更新"
+                          : "等待输出"}
+                      </span>
+                    </div>
+                    {detail.executionEvents &&
+                    detail.executionEvents.length > 0 ? (
+                      <ol>
+                        {detail.executionEvents.map((event, index) => (
+                          <li
+                            className={`codex-process-event ${event.tone}`}
+                            key={`${event.occurredAt}:${index}`}
+                          >
+                            <time dateTime={event.occurredAt}>
+                              {formatExecutionTime(event.occurredAt)}
+                            </time>
+                            <span aria-hidden="true" />
+                            <div>
+                              <strong>{event.title}</strong>
+                              <small>{event.detail}</small>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="codex-process-empty">
+                        设备领取任务后，这里会持续显示 Codex 的受控执行事件。
+                      </p>
+                    )}
+                  </section>
+                ) : null}
                 <div>
-                  <span className="detail-label">用户故事</span>
+                  <span className="detail-label">要解决的问题</span>
+                  <p>{detail.spec.goal}</p>
+                </div>
+                <div>
+                  <span className="detail-label">完成标准</span>
                   <ul>
-                    {detail.spec.userStories.map((story) => (
-                      <li key={`${story.role}:${story.need}:${story.value}`}>
-                        <strong>{story.role}</strong>
-                        <span>
-                          希望 {story.need}，从而 {story.value}
-                        </span>
+                    {detail.spec.acceptanceCriteria.map((criterion) => (
+                      <li key={`${criterion.title}:${criterion.description}`}>
+                        <strong>{criterion.title}</strong>
+                        <span>{criterion.description}</span>
                       </li>
                     ))}
                   </ul>
                 </div>
-              ) : null}
-              {detail.spec.openQuestions.length > 0 ? (
-                <div>
-                  <span className="detail-label">待澄清问题</span>
-                  <ul>
-                    {detail.spec.openQuestions.map((question) => (
-                      <li key={question}>{question}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              <div className="revision-history">
-                <span className="detail-label">版本记录</span>
-                <ol>
-                  {detail.revisions.map((revision) => (
-                    <li key={revision.version}>
-                      <strong>{revision.version}</strong>
-                      <span>{revision.changedBy}</span>
-                      <small>{revision.changes.join("、")}</small>
-                      {revision.contentState === "仅保留摘要" ? (
-                        <small>旧版仅保留摘要</small>
-                      ) : (
-                        <details className="revision-spec-detail">
-                          <summary>查看该版完整规格</summary>
-                          <p>
-                            <strong>需求名称：</strong>
-                            {revision.spec.title}
-                          </p>
-                          <p>
-                            <strong>业务目标：</strong>
-                            {revision.spec.goal}
-                          </p>
-                          {revision.spec.userStories.length > 0 ? (
-                            <ul>
-                              {revision.spec.userStories.map((story) => (
-                                <li
-                                  key={`${story.role}:${story.need}:${story.value}`}
-                                >
-                                  {story.role}：{story.need}，从而 {story.value}
-                                </li>
-                              ))}
-                            </ul>
-                          ) : null}
-                          <ul>
-                            {revision.spec.acceptanceCriteria.map(
-                              (criterion) => (
-                                <li
-                                  key={`${criterion.title}:${criterion.description}`}
-                                >
-                                  {criterion.title}：{criterion.description}（
-                                  {priorityLabel[criterion.priority]}）
-                                </li>
-                              ),
-                            )}
-                          </ul>
-                          {revision.spec.openQuestions.length > 0 ? (
-                            <p>
-                              <strong>待澄清：</strong>
-                              {revision.spec.openQuestions.join("；")}
-                            </p>
-                          ) : null}
-                        </details>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              </div>
-              {detail.links.actions.revise ? (
-                <RequirementRevisionEditor
-                  detail={detail}
-                  actionUrl={detail.links.actions.revise}
-                  busy={actionsBusy}
-                  onSave={onRevise}
-                />
-              ) : null}
-              {detail.acceptance ? (
-                <div className="acceptance-evidence">
-                  <div className="acceptance-heading">
-                    <span>
-                      <CheckIcon /> 独立验证已通过
-                    </span>
-                    <small>
-                      {detail.acceptance.verifiedBy} ·{" "}
-                      {formatVerifiedAt(detail.acceptance.verifiedAt)}
-                    </small>
+                {detail.spec.userStories.length > 0 ? (
+                  <div>
+                    <span className="detail-label">用户故事</span>
+                    <ul>
+                      {detail.spec.userStories.map((story) => (
+                        <li key={`${story.role}:${story.need}:${story.value}`}>
+                          <strong>{story.role}</strong>
+                          <span>
+                            希望 {story.need}，从而 {story.value}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <ul>
-                    {detail.acceptance.checks.map((check, index) => (
-                      <li key={`${check.title}:${index}`}>
-                        <CheckIcon />
-                        <span>{check.title}</span>
-                        <strong>{check.status}</strong>
+                ) : null}
+                {detail.spec.openQuestions.length > 0 ? (
+                  <div>
+                    <span className="detail-label">待澄清问题</span>
+                    <ul>
+                      {detail.spec.openQuestions.map((question) => (
+                        <li key={question}>{question}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <div className="revision-history">
+                  <span className="detail-label">版本记录</span>
+                  <ol>
+                    {detail.revisions.map((revision) => (
+                      <li key={revision.version}>
+                        <strong>{revision.version}</strong>
+                        <span>{revision.changedBy}</span>
+                        <small>{revision.changes.join("、")}</small>
+                        {revision.contentState === "仅保留摘要" ? (
+                          <small>旧版仅保留摘要</small>
+                        ) : (
+                          <details className="revision-spec-detail">
+                            <summary>查看该版完整规格</summary>
+                            <p>
+                              <strong>需求名称：</strong>
+                              {revision.spec.title}
+                            </p>
+                            <p>
+                              <strong>业务目标：</strong>
+                              {revision.spec.goal}
+                            </p>
+                            {revision.spec.userStories.length > 0 ? (
+                              <ul>
+                                {revision.spec.userStories.map((story) => (
+                                  <li
+                                    key={`${story.role}:${story.need}:${story.value}`}
+                                  >
+                                    {story.role}：{story.need}，从而{" "}
+                                    {story.value}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
+                            <ul>
+                              {revision.spec.acceptanceCriteria.map(
+                                (criterion) => (
+                                  <li
+                                    key={`${criterion.title}:${criterion.description}`}
+                                  >
+                                    {criterion.title}：{criterion.description}（
+                                    {priorityLabel[criterion.priority]}）
+                                  </li>
+                                ),
+                              )}
+                            </ul>
+                            {revision.spec.openQuestions.length > 0 ? (
+                              <p>
+                                <strong>待澄清：</strong>
+                                {revision.spec.openQuestions.join("；")}
+                              </p>
+                            ) : null}
+                          </details>
+                        )}
                       </li>
                     ))}
-                  </ul>
-                  {detail.links.preview ? (
-                    <a
-                      className="button preview-action"
-                      href={detail.links.preview}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                    >
-                      打开效果预览
-                      <ArrowIcon />
-                    </a>
-                  ) : null}
-                  {item.links.actions.accept ? (
-                    <button
-                      className="button acceptance-action"
-                      type="button"
-                      disabled={actionsBusy}
-                      onClick={() => onAction(item.links.actions.accept!, {})}
-                    >
-                      {busyAction === item.links.actions.accept
-                        ? "正在记录验收…"
-                        : "确认验收通过"}
-                    </button>
-                  ) : null}
+                  </ol>
                 </div>
-              ) : null}
-            </>
-          ) : null}
-        </div>
+                {detail.links.actions.revise ? (
+                  <RequirementRevisionEditor
+                    detail={detail}
+                    actionUrl={detail.links.actions.revise}
+                    busy={actionsBusy}
+                    onSave={onRevise}
+                  />
+                ) : null}
+                {detail.acceptance ? (
+                  <div className="acceptance-evidence">
+                    <div className="acceptance-heading">
+                      <span>
+                        <CheckIcon /> 独立验证已通过
+                      </span>
+                      <small>
+                        {detail.acceptance.verifiedBy} ·{" "}
+                        {formatVerifiedAt(detail.acceptance.verifiedAt)}
+                      </small>
+                    </div>
+                    <ul>
+                      {detail.acceptance.checks.map((check, index) => (
+                        <li key={`${check.title}:${index}`}>
+                          <CheckIcon />
+                          <span>{check.title}</span>
+                          <strong>{check.status}</strong>
+                        </li>
+                      ))}
+                    </ul>
+                    {detail.links.preview ? (
+                      <a
+                        className="button preview-action"
+                        href={detail.links.preview}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        打开效果预览
+                        <ArrowIcon />
+                      </a>
+                    ) : null}
+                    {item.links.actions.accept ? (
+                      <button
+                        className="button acceptance-action"
+                        type="button"
+                        disabled={actionsBusy}
+                        onClick={() => onAction(item.links.actions.accept!, {})}
+                      >
+                        {busyAction === item.links.actions.accept
+                          ? "正在记录验收…"
+                          : "确认验收通过"}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        </RequirementDetailDialog>
       ) : null}
-      {actions.length > 0 || item.links.actions.terminateDelivery ? (
+      {actions.length > 0 ||
+      item.links.actions.terminateDelivery ||
+      item.links.actions.delete ? (
         <div className="card-actions">
           {actions.map((action) => (
             <button
@@ -929,6 +1060,26 @@ function RequirementCard({
               {busyAction === item.links.actions.terminateDelivery
                 ? "正在终止…"
                 : "强制终止交付"}
+            </button>
+          ) : null}
+          {item.links.actions.delete ? (
+            <button
+              className="text-action danger"
+              type="button"
+              disabled={actionsBusy}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "删除后，这条需求将从当前项目中移除。历史审计仍会保留，确定继续吗？",
+                  )
+                ) {
+                  void onDelete(item.links.actions.delete!);
+                }
+              }}
+            >
+              {busyAction === item.links.actions.delete
+                ? "正在删除…"
+                : "删除需求"}
             </button>
           ) : null}
         </div>
@@ -1211,8 +1362,9 @@ export function RequirementWorkbench({
     () => ({
       needsAction: items.filter(
         (item) =>
-          Object.keys(item.links.actions).length > 0 ||
-          item.status === "验证失败，版本已封存",
+          Object.keys(item.links.actions).some(
+            (action) => action !== "delete",
+          ) || item.status === "验证失败，版本已封存",
       ).length,
       running: items.filter((item) => item.status === "AI 正在实现").length,
       accepting: items.filter((item) => item.status === "等待产品验收").length,
@@ -1250,6 +1402,35 @@ export function RequirementWorkbench({
         caught instanceof Error ? caught.message : "操作没有完成，请重试",
       );
       return false;
+    } finally {
+      actionActiveRef.current = false;
+      if (mountedRef.current) setBusyAction(null);
+    }
+  };
+
+  const deleteRequirement = async (selfUrl: string) => {
+    if (actionActiveRef.current) return;
+    actionActiveRef.current = true;
+    setBusyAction(selfUrl);
+    setError(null);
+    try {
+      await client.deleteRequirement(selfUrl);
+      setItems((current) =>
+        current.filter((item) => item.links.self !== selfUrl),
+      );
+      if (expandedDetailRef.current === selfUrl) {
+        detailGenerationRef.current += 1;
+        expandedDetailRef.current = null;
+        setExpandedDetail(null);
+        setDetail(null);
+        setDetailError(null);
+        setDetailLoading(false);
+      }
+      await load(true);
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "需求删除没有完成，请重试",
+      );
     } finally {
       actionActiveRef.current = false;
       if (mountedRef.current) setBusyAction(null);
@@ -1857,6 +2038,7 @@ export function RequirementWorkbench({
                           expandedDetail === item.links.self && detailLoading
                         }
                         onAction={runAction}
+                        onDelete={deleteRequirement}
                         onRevise={reviseRequirement}
                         onToggleDetail={toggleDetail}
                       />

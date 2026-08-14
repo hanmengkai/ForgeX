@@ -70,6 +70,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
 
     const pendingRecords = new Map<string, RequirementRecord>();
     const loadedRecords = new Map<string, RequirementRecord>();
+    const pendingDeletedRecords = new Set<string>();
     const pendingAuditEvents: RequirementAuditEvent[] = [];
     const pendingDeliveryDispatches = new Map<string, DeliveryDispatchRecord>();
     const pendingDeliveryRunResults = new Map<string, DeliveryRunResult>();
@@ -92,6 +93,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           normalizedProjectKey,
           requirementKey,
         );
+        if (pendingDeletedRecords.has(key)) return null;
         const pending = pendingRecords.get(key);
         if (pending) {
           return this.#copyRecord(pending);
@@ -130,6 +132,19 @@ export class InMemoryRequirementRepository implements RequirementRepository {
         const detached = this.#copyRecord(record);
         loadedRecords.set(key, detached);
         pendingRecords.set(key, detached);
+      },
+      softDelete: (requirementKey, deletedAt) => {
+        if (!Number.isFinite(Date.parse(deletedAt))) {
+          throw new Error("需求删除时间无效");
+        }
+        const key = scopedKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          requirementKey.toLowerCase(),
+        );
+        pendingDeletedRecords.add(key);
+        pendingRecords.delete(key);
+        loadedRecords.delete(key);
       },
       appendAudit: (event) => {
         if (event.tenantKey.toLowerCase() !== normalizedTenantKey) {
@@ -465,11 +480,16 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     try {
       const result = await operation(transaction);
       for (const [key, record] of pendingRecords) {
+        if (pendingDeletedRecords.has(key)) continue;
         if (!this.#records.has(key)) {
           this.#nextPosition += 1;
           this.#positions.set(key, this.#nextPosition);
         }
         this.#records.set(key, this.#copyRecord(record));
+      }
+      for (const key of pendingDeletedRecords) {
+        this.#records.delete(key);
+        this.#positions.delete(key);
       }
       this.#auditEvents.push(...pendingAuditEvents);
       for (const [key, dispatch] of pendingDeliveryDispatches) {

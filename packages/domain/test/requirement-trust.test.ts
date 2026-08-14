@@ -195,7 +195,7 @@ describe("独立验证证据", () => {
       status: "等待产品验收",
       acceptanceProgress: "2 / 2 项已通过",
     });
-    expect(requirement.listAllowedActions()).toEqual(["accept"]);
+    expect(requirement.listAllowedActions()).toEqual(["accept", "delete"]);
     expect(requirement.toPreviewArtifactReference()).toEqual({
       requirementRevision: 1,
       artifactHashAlgorithm: "sha256",

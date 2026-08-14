@@ -481,6 +481,43 @@ export class RequirementApplicationService {
     );
   }
 
+  async delete(
+    principal: AuthenticatedPrincipal,
+    requirementKey: string,
+  ): Promise<void> {
+    this.#requireAction(principal, "delete");
+    await this.#repository.transaction(
+      principal.tenantKey,
+      this.#projectKey,
+      async (transaction) => {
+        const record = await transaction.find(requirementKey);
+        if (!record || record.projectKey !== this.#projectKey) {
+          throw new ApplicationError(
+            404,
+            "requirement_not_found",
+            "没有找到这个需求",
+          );
+        }
+        if (record.workflow.toSnapshot().status === "inDelivery") {
+          throw new ApplicationError(
+            409,
+            "requirement_state_conflict",
+            "需求正在交付，请先强制终止再删除",
+          );
+        }
+        const deletedAt = this.#nowIso();
+        this.#appendAudit(
+          transaction,
+          record,
+          principal,
+          "requirement.deleted",
+          deletedAt,
+        );
+        transaction.softDelete(record.requirementKey, deletedAt);
+      },
+    );
+  }
+
   async submitForConfirmation(
     principal: AuthenticatedPrincipal,
     requirementKey: string,
@@ -634,6 +671,22 @@ export class RequirementApplicationService {
             "requirement_not_found",
             "没有找到这个需求",
           );
+        }
+        if (record.workflow.toSnapshot().status === "terminated") {
+          const previousDispatch = await transaction.findDeliveryDispatch(
+            record.requirementKey,
+            record.workflow.currentRevision,
+          );
+          if (
+            previousDispatch?.cancelledAt &&
+            !previousDispatch.cancellationCompletedAt
+          ) {
+            throw new ApplicationError(
+              409,
+              "delivery_cancellation_pending",
+              "正在撤销上一次设备任务，完成后即可重新发起",
+            );
+          }
         }
         try {
           record.workflow.startDelivery();

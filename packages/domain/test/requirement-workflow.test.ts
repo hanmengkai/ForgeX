@@ -225,7 +225,7 @@ describe("RequirementWorkflow", () => {
       nextStep: "请创建新的变更需求",
       acceptanceProgress: "独立验证未通过，当前版本已封存",
     });
-    expect(requirement.listAllowedActions()).toEqual([]);
+    expect(requirement.listAllowedActions()).toEqual(["delete"]);
     expect(requirement.toSnapshot().revisions).toHaveLength(100);
     expect(() =>
       RequirementWorkflow.fromSnapshot(requirement.toSnapshot()),
@@ -760,6 +760,7 @@ describe("RequirementWorkflow", () => {
     expect(restored.listAllowedActions()).toEqual([
       "revise",
       "submitForConfirmation",
+      "delete",
     ]);
     restored.submitForConfirmation();
     restored.confirm({ actor });

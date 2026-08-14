@@ -8,6 +8,7 @@ export type RequirementAuthorizedAction =
   | "startDelivery"
   | "terminateDelivery"
   | "accept"
+  | "delete"
   | "viewPreview";
 
 const rolesByAction = {
@@ -30,6 +31,11 @@ const rolesByAction = {
   startDelivery: new Set<PlatformRole>(["product_owner", "administrator"]),
   terminateDelivery: new Set<PlatformRole>(["product_owner", "administrator"]),
   accept: new Set<PlatformRole>(["product_owner", "administrator"]),
+  delete: new Set<PlatformRole>([
+    "product_owner",
+    "requirement_analyst",
+    "administrator",
+  ]),
   viewPreview: new Set<PlatformRole>([
     "product_owner",
     "requirement_analyst",

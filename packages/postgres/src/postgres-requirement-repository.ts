@@ -40,6 +40,7 @@ const auditActions = new Set<RequirementAuditAction>([
   "requirement.revised",
   "requirement.confirmation_submitted",
   "requirement.confirmed",
+  "requirement.deleted",
   "requirement.accepted",
   "delivery.requested",
   "delivery.dispatched",
@@ -114,6 +115,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       );
       const loaded = new Map<string, RequirementRecord>();
       const pendingRecords = new Map<string, RequirementRecord>();
+      const pendingDeletedRecords = new Map<string, string>();
       const pendingAudit: RequirementAuditEvent[] = [];
       const pendingDispatches = new Map<string, DeliveryDispatchRecord>();
       const pendingDeliveryRuns = new Map<string, DeliveryRunResult>();
@@ -128,6 +130,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       const transaction: RequirementTransaction = {
         find: async (requirementKey) => {
           const key = parseInternalKey(requirementKey, "需求标识");
+          if (pendingDeletedRecords.has(key)) return null;
           const pending = pendingRecords.get(key);
           if (pending) {
             return this.#copyRecord(pending);
@@ -137,7 +140,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
             return this.#copyRecord(cached);
           }
           const result = await client.query(
-            "SELECT created_at, repository_key, spec, workflow FROM forgex_requirements WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3",
+            "SELECT created_at, repository_key, spec, workflow FROM forgex_requirements WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND deleted_at IS NULL",
             [tenant, project, key],
           );
           const row = result.rows[0];
@@ -153,6 +156,15 @@ export class PostgresRequirementRepository implements RequirementRepository {
           const detached = this.#copyRecord(record);
           pendingRecords.set(detached.requirementKey, detached);
           loaded.set(detached.requirementKey, detached);
+        },
+        softDelete: (requirementKey, deletedAt) => {
+          const key = parseInternalKey(requirementKey, "需求标识");
+          pendingDeletedRecords.set(
+            key,
+            parseIsoDate(deletedAt, "需求删除时间"),
+          );
+          pendingRecords.delete(key);
+          loaded.delete(key);
         },
         appendAudit: (event) => {
           this.#assertAuditScope(event, tenant, project);
@@ -291,7 +303,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
           );
           if (pending) return this.#copyDispatch(pending);
           const result = await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4 ORDER BY requested_at DESC, dispatch_key DESC LIMIT 1",
             [tenant, project, requirement, requirementRevision],
           );
           const row = result.rows[0];
@@ -470,6 +482,15 @@ export class PostgresRequirementRepository implements RequirementRepository {
           ],
         );
       }
+      for (const [requirementKey, deletedAt] of pendingDeletedRecords) {
+        const deleted = await client.query(
+          "UPDATE forgex_requirements SET deleted_at = $4, updated_at = now() WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND deleted_at IS NULL RETURNING requirement_key",
+          [tenant, project, requirementKey, deletedAt],
+        );
+        if (deleted.rows.length !== 1) {
+          throw new Error("需求已被删除，请刷新后重试");
+        }
+      }
       for (const dispatch of pendingDispatches.values()) {
         await client.query(
           "INSERT INTO forgex_delivery_outbox (dispatch_key, tenant_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)",
@@ -633,7 +654,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
     }
     return this.#withClient(async (client) => {
       const result = await client.query(
-        "SELECT requirement_key, repository_key, workflow, position FROM forgex_requirements WHERE tenant_key = $1 AND project_key = $2 AND position > $3 ORDER BY position ASC LIMIT $4",
+        "SELECT requirement_key, repository_key, workflow, position FROM forgex_requirements WHERE tenant_key = $1 AND project_key = $2 AND deleted_at IS NULL AND position > $3 ORDER BY position ASC LIMIT $4",
         [tenant, project, after, options.limit + 1],
       );
       const parsed = result.rows.map((row) => {

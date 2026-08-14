@@ -343,6 +343,37 @@ describe("RequirementApplicationService", () => {
         schemaVersion: 1,
         requiredCapabilities: [],
       }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "delivery_cancellation_pending",
+      message: "正在撤销上一次设备任务，完成后即可重新发起",
+    });
+    await expect(
+      repository.listPendingDeliveryDispatches(tenantKey, projectKey, 10),
+    ).resolves.toHaveLength(0);
+  });
+
+  it("旧设备任务撤销完成后可以直接重新发起同一个已确认版本", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+    });
+    const created = await service.create(principal, spec);
+    await service.submitForConfirmation(principal, created.requirementKey);
+    await service.confirm(principal, created.requirementKey);
+    await service.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+    await service.terminateDelivery(principal, created.requirementKey);
+
+    await expect(
+      service.requestDelivery(principal, created.requirementKey, {
+        schemaVersion: 1,
+        requiredCapabilities: [],
+      }),
     ).resolves.toMatchObject({ requirementRevision: 1 });
     await expect(
       repository.listPendingDeliveryDispatches(tenantKey, projectKey, 10),
@@ -361,9 +392,9 @@ describe("RequirementApplicationService", () => {
     await service.delete(principal, created.requirementKey);
 
     await expect(service.list(principal)).resolves.toMatchObject({ items: [] });
-    await expect(service.get(principal, created.requirementKey)).rejects.toMatchObject(
-      { statusCode: 404, code: "requirement_not_found" },
-    );
+    await expect(
+      service.get(principal, created.requirementKey),
+    ).rejects.toMatchObject({ statusCode: 404, code: "requirement_not_found" });
     await expect(
       repository.listAuditEvents(tenantKey, projectKey),
     ).resolves.toEqual(
@@ -371,6 +402,35 @@ describe("RequirementApplicationService", () => {
         expect.objectContaining({ action: "requirement.deleted" }),
       ]),
     );
+  });
+
+  it("正在交付的需求必须先终止任务，不能直接删除", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+    });
+    const created = await service.create(principal, spec);
+    await service.submitForConfirmation(principal, created.requirementKey);
+    await service.confirm(principal, created.requirementKey);
+    await service.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+
+    await expect(
+      service.delete(principal, created.requirementKey),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "requirement_state_conflict",
+      message: "需求正在交付，请先强制终止再删除",
+    });
+    await expect(service.list(principal)).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({ requirementKey: created.requirementKey }),
+      ],
+    });
   });
 
   it("需求分析师可修订完整规格并留下版本审计，研发不能修改", async () => {

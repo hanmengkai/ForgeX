@@ -18,6 +18,7 @@ export interface RequirementActionLinks {
   startDelivery?: string | undefined;
   terminateDelivery?: string | undefined;
   accept?: string | undefined;
+  delete?: string | undefined;
 }
 
 export interface RequirementProgress {
@@ -472,6 +473,7 @@ export interface ForgeXClient {
     spec: RequirementSpecInput,
     expectedRevision: number,
   ): Promise<void>;
+  deleteRequirement(selfUrl: string): Promise<void>;
   runRequirementAction(
     actionUrl: string | undefined,
     body: Record<string, unknown>,
@@ -795,6 +797,7 @@ const requirementLinksSchema = z
         startDelivery: z.string().optional(),
         terminateDelivery: z.string().optional(),
         accept: z.string().optional(),
+        delete: z.string().optional(),
       })
       .strict(),
   })
@@ -817,8 +820,18 @@ const requirementLinksSchema = z
         message: "Preview 链接与需求不匹配",
       });
     }
+    if (
+      links.actions.delete !== undefined &&
+      links.actions.delete !== links.self
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["actions", "delete"],
+        message: "删除链接与需求不匹配",
+      });
+    }
     for (const [action, suffix] of Object.entries(actionSuffixes) as Array<
-      [keyof RequirementActionLinks, string]
+      [keyof typeof actionSuffixes, string]
     >) {
       const actionUrl = links.actions[action];
       if (actionUrl !== undefined && actionUrl !== `${links.self}${suffix}`) {
@@ -2060,6 +2073,10 @@ export const createHttpForgeXClient = (
           spec,
         }),
       });
+    },
+    deleteRequirement: async (selfUrl) => {
+      assertRequirementSelfUrl(selfUrl);
+      await request(selfUrl, { method: "DELETE" });
     },
     runRequirementAction: async (actionUrl, body) => {
       await request(assertRequirementActionUrl(actionUrl), {

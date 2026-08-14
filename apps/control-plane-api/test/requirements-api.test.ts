@@ -1625,7 +1625,9 @@ describe("需求 API", () => {
       headers: { authorization: "Bearer product-session" },
     });
     expect(list.json().data).toEqual([]);
-    await expect(repository.listAuditEvents(tenantKey, projectKey)).resolves.toEqual(
+    await expect(
+      repository.listAuditEvents(tenantKey, projectKey),
+    ).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: "requirement.deleted" }),
       ]),
@@ -2524,6 +2526,7 @@ describe("需求 API", () => {
       analystItems.find((item: any) => item.title === "等待确认").links.actions,
     ).toEqual({
       revise: expect.stringMatching(/\/revisions$/u),
+      delete: expect.stringMatching(/^\/api\/v1\/requirements\//u),
     });
 
     const ownerItems = (

@@ -674,7 +674,9 @@ h1 {
 
 .card-actions {
   display: flex;
+  gap: 12px;
   justify-content: flex-end;
+  flex-wrap: wrap;
   padding: 10px 18px;
   background: var(--surface-muted);
   border-top: 1px solid var(--line);
@@ -687,6 +689,26 @@ h1 {
   color: var(--ink-soft);
   font-size: 13px;
   border-top: 1px solid var(--line);
+}
+
+.requirement-detail-dialog {
+  width: min(960px, 100%);
+  padding: 0;
+}
+
+.requirement-detail-heading {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  padding: 22px 28px 18px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(12px);
+}
+
+.requirement-detail-dialog .card-detail {
+  padding: 24px 28px 32px;
+  border-top: 0;
 }
 
 .card-detail p {
@@ -2003,6 +2025,18 @@ h1 {
     max-height: 92vh;
     padding: 22px 18px;
     border-radius: 6px 6px 0 0;
+  }
+
+  .requirement-detail-dialog {
+    border-radius: 14px 14px 0 0;
+  }
+
+  .requirement-detail-heading {
+    padding: 18px;
+  }
+
+  .requirement-detail-dialog .card-detail {
+    padding: 20px 18px 28px;
   }
 
   .worker-center {

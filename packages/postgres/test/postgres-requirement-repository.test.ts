@@ -204,6 +204,45 @@ describe("PostgresRequirementRepository", () => {
     expect(database.wasReleased()).toBe(true);
   });
 
+  it("软删除需求时先保留审计，再把需求排除在后续读取之外", async () => {
+    const database = fakeDatabase({
+      respond: (text) =>
+        text.startsWith("UPDATE forgex_requirements SET deleted_at")
+          ? [{ requirement_key: requirementKey }]
+          : undefined,
+    });
+    const repository = new PostgresRequirementRepository(database.pool);
+
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      const record = await transaction.find(requirementKey);
+      transaction.appendAudit({
+        eventKey: "55555555-5555-4555-8555-555555555555",
+        tenantKey,
+        projectKey,
+        requirementKey,
+        action: "requirement.deleted",
+        actorKey: "66666666-6666-4666-8666-666666666666",
+        actorName: "产品负责人",
+        recordedAt: now,
+      });
+      transaction.softDelete(record!.requirementKey, now);
+      await expect(transaction.find(requirementKey)).resolves.toBeNull();
+    });
+
+    const texts = database.queries.map((query) => query.text);
+    expect(texts.find((text) => text.includes("SELECT created_at"))).toContain(
+      "deleted_at IS NULL",
+    );
+    expect(texts).toEqual([
+      "BEGIN",
+      expect.stringContaining("pg_advisory_xact_lock"),
+      expect.stringContaining("SELECT created_at"),
+      expect.stringContaining("INSERT INTO forgex_requirement_audit"),
+      expect.stringContaining("UPDATE forgex_requirements SET deleted_at"),
+      "COMMIT",
+    ]);
+  });
+
   it("项目事务失败时回滚并释放连接", async () => {
     const database = fakeDatabase();
     const repository = new PostgresRequirementRepository(database.pool);

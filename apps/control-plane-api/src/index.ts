@@ -673,6 +673,7 @@ const requirementLinks = (
     startDelivery?: string;
     terminateDelivery?: string;
     accept?: string;
+    delete?: string;
   } = {};
   if (
     allowedActions.includes("revise") &&
@@ -709,6 +710,12 @@ const requirementLinks = (
     canPerformRequirementAction(principal, "accept")
   ) {
     actions.accept = `${self}/accept`;
+  }
+  if (
+    allowedActions.includes("delete") &&
+    canPerformRequirementAction(principal, "delete")
+  ) {
+    actions.delete = self;
   }
   return {
     self,
@@ -3167,6 +3174,31 @@ export const buildControlPlaneApi = (
     },
   );
 
+  app.delete(
+    "/api/v1/projects/:projectKey/requirements/:requirementKey",
+    async (request, reply) => {
+      const principal = principalFrom(request);
+      const params = scopedRequirementParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "需求删除请求需要调整",
+          validationDetails(params.error),
+        );
+      }
+      await platformConfiguration.getRequirementProject(
+        principal,
+        params.data.projectKey,
+      );
+      await requirementServiceFor(params.data.projectKey).delete(
+        principal,
+        params.data.requirementKey,
+      );
+      return reply.status(204).send();
+    },
+  );
+
   app.get(
     "/api/v1/projects/:projectKey/requirements/:requirementKey/revisions",
     async (request, reply) => {
@@ -3450,6 +3482,21 @@ export const buildControlPlaneApi = (
         ),
       },
     });
+  });
+
+  app.delete("/api/v1/requirements/:requirementKey", async (request, reply) => {
+    const principal = principalFrom(request);
+    const params = requirementParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      throw new ApplicationError(
+        422,
+        "validation_error",
+        "需求删除请求需要调整",
+        validationDetails(params.error),
+      );
+    }
+    await requirements.delete(principal, params.data.requirementKey);
+    return reply.status(204).send();
   });
 
   app.get(

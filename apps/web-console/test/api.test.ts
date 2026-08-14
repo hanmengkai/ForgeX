@@ -466,6 +466,27 @@ describe("createHttpForgeXClient", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it("删除需求只接受需求自身链接并使用 DELETE", async () => {
+    const self = "/api/v1/requirements/33333333-3333-4333-8333-333333333333";
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const client = createHttpForgeXClient({ fetcher });
+
+    await client.deleteRequirement(self);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      self,
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(
+      new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("X-ForgeX-CSRF"),
+    ).toBe("1");
+    await expect(
+      client.deleteRequirement("https://attacker.example/requirements/1"),
+    ).rejects.toThrow("这个需求入口已经失效");
+  });
+
   it("列表响应损坏时不把未知数据直接交给页面", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

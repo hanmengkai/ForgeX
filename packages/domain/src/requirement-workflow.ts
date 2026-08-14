@@ -190,7 +190,8 @@ export type RequirementAllowedAction =
   | "confirm"
   | "startDelivery"
   | "terminateDelivery"
-  | "accept";
+  | "accept"
+  | "delete";
 
 export class RequirementWorkflow {
   readonly #key: string;
@@ -336,7 +337,7 @@ export class RequirementWorkflow {
 
   startDelivery(): void {
     if (
-      this.#status !== "confirmed" ||
+      (this.#status !== "confirmed" && this.#status !== "terminated") ||
       this.#confirmedVersion !== this.#current.version
     ) {
       throw new RequirementStateConflictError(
@@ -590,17 +591,33 @@ export class RequirementWorkflow {
         return [
           ...(canRevise ? (["revise"] as const) : []),
           "submitForConfirmation",
+          "delete",
         ];
       case "awaitingConfirmation":
-        return [...(canRevise ? (["revise"] as const) : []), "confirm"];
+        return [
+          ...(canRevise ? (["revise"] as const) : []),
+          "confirm",
+          "delete",
+        ];
       case "confirmed":
-        return [...(canRevise ? (["revise"] as const) : []), "startDelivery"];
+        return [
+          ...(canRevise ? (["revise"] as const) : []),
+          "startDelivery",
+          "delete",
+        ];
       case "inDelivery":
         return ["terminateDelivery"];
       case "terminated":
-        return canRevise ? ["revise"] : [];
+        return [
+          ...(canRevise ? (["revise"] as const) : []),
+          "startDelivery",
+          "delete",
+        ];
       case "awaitingAcceptance":
-        return ["accept"];
+        return ["accept", "delete"];
+      case "completed":
+      case "verificationFailedAtLimit":
+        return ["delete"];
       default:
         return [];
     }
@@ -858,7 +875,7 @@ export class RequirementWorkflow {
       case "terminated":
         return {
           label: "已强制终止",
-          nextStep: "如需继续，请修订需求并重新确认",
+          nextStep: "可以直接重新安排 AI 实现",
         };
       case "awaitingAcceptance":
         return {
