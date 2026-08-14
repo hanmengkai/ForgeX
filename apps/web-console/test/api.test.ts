@@ -3,6 +3,54 @@ import { describe, expect, it, vi } from "vitest";
 import { createHttpForgeXClient } from "../src/index.js";
 
 describe("createHttpForgeXClient", () => {
+  it("按需求日志链接读取默认尾部行数，并允许显式读取全部日志", async () => {
+    const logUrl =
+      "/api/v1/projects/22222222-2222-4222-8222-222222222222/requirements/33333333-3333-4333-8333-333333333333/execution-log";
+    const body = {
+      data: {
+        totalLines: 2,
+        truncated: false,
+        updatedAt: "2026-08-14T01:00:01.000Z",
+        lines: [
+          {
+            occurredAt: "2026-08-14T01:00:00.000Z",
+            stream: "stdout",
+            text: "$ npm test",
+          },
+          {
+            occurredAt: "2026-08-14T01:00:01.000Z",
+            stream: "stdout",
+            text: "Tests: 12 passed",
+          },
+        ],
+      },
+    };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
+      Promise.resolve(
+        new Response(JSON.stringify(body), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const client = createHttpForgeXClient({ fetcher });
+
+    await expect(
+      client.getRequirementExecutionLog(logUrl, 300),
+    ).resolves.toMatchObject(body.data);
+    await expect(
+      client.getRequirementExecutionLog(logUrl, null),
+    ).resolves.toMatchObject(body.data);
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      `${logUrl}?lines=300`,
+      `${logUrl}?lines=all`,
+    ]);
+    await expect(
+      client.getRequirementExecutionLog(logUrl, 0),
+    ).rejects.toThrow("日志显示行数需要是正整数");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("通过同源 SSE 订阅当前项目进度，并在断线后交给浏览器自动重连", () => {
     const listeners = new Map<string, Array<() => void>>();
     const source = {

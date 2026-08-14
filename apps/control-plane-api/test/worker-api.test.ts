@@ -375,6 +375,94 @@ describe("Codex 设备网关 API", () => {
     await app.close();
   });
 
+  it("设备日志按需求持久化，页面默认读取最后 300 行且可读取全部", async () => {
+    const { app } = createTestApp();
+    const connection = await connectWorker(app, 1);
+    const { location } = await requestConfirmedDelivery(
+      app,
+      "显示真实终端日志",
+      [],
+    );
+    const poll = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/poll",
+      headers: workerHeaders(connection),
+      payload: {},
+    });
+    const assignment = poll.json().data.assignment;
+    const lines = Array.from({ length: 305 }, (_, index) => `line-${index + 1}`);
+    const firstChunk = {
+      schemaVersion: 1,
+      assignmentKey: assignment.assignmentKey,
+      fencingToken: assignment.fencingToken,
+      chunkKey: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      sequence: 1,
+      occurredAt: "2026-08-14T01:00:00.000Z",
+      stream: "stdout",
+      text: `${lines.join("\n")}\n`,
+    };
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/requirement-log",
+      headers: workerHeaders(connection),
+      payload: firstChunk,
+    });
+    const repeated = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/requirement-log",
+      headers: workerHeaders(connection),
+      payload: firstChunk,
+    });
+    const secret = await app.inject({
+      method: "POST",
+      url: "/api/v1/worker-connection/requirement-log",
+      headers: workerHeaders(connection),
+      payload: {
+        ...firstChunk,
+        chunkKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        sequence: 2,
+        occurredAt: "2026-08-14T01:00:01.000Z",
+        stream: "stderr",
+        text: "Authorization: Bearer local-secret-marker\n",
+      },
+    });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json().data).toEqual({ alreadyStored: false });
+    expect(repeated.json().data).toEqual({ alreadyStored: true });
+    expect(secret.statusCode, secret.body).toBe(200);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: location,
+      headers: { authorization: "Bearer product-session" },
+    });
+    const logUrl = detail.json().data.links.executionLog;
+    expect(logUrl).toBe(`${location}/execution-log`);
+    const tail = await app.inject({
+      method: "GET",
+      url: `${logUrl}?lines=300`,
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(tail.statusCode, tail.body).toBe(200);
+    expect(tail.json().data).toMatchObject({
+      totalLines: 306,
+      truncated: true,
+    });
+    expect(tail.json().data.lines).toHaveLength(300);
+    expect(tail.json().data.lines[0].text).toBe("line-7");
+    expect(tail.body).toContain("[REDACTED_SECRET]");
+    expect(tail.body).not.toContain("local-secret-marker");
+
+    const complete = await app.inject({
+      method: "GET",
+      url: `${logUrl}?lines=all`,
+      headers: { authorization: "Bearer product-session" },
+    });
+    expect(complete.json().data.lines).toHaveLength(306);
+    expect(complete.json().data.truncated).toBe(false);
+    await app.close();
+  });
+
   it("只有管理员可连接设备，普通列表不泄漏指纹和连接密钥", async () => {
     const { app } = createTestApp();
     const forbidden = await app.inject({
