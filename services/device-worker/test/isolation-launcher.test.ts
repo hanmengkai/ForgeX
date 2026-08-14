@@ -112,11 +112,11 @@ describe("executeIsolatedCodexRun", () => {
     temporaryRoots.push(root);
     const codexHomePath = path.join(root, "isolated-home");
     const authFilePath = path.join(root, "hmk-auth.json");
-    await mkdir(codexHomePath);
+    await mkdir(codexHomePath, { mode: 0o700 });
     await writeFile(
       authFilePath,
       JSON.stringify({ tokens: { access_token: "before" } }),
-      "utf8",
+      { encoding: "utf8", mode: 0o600 },
     );
     const input = request();
     input.codexHomePath = codexHomePath;
@@ -192,8 +192,11 @@ describe("executeIsolatedCodexRun", () => {
     temporaryRoots.push(root);
     const codexHomePath = path.join(root, "isolated-home");
     const authFilePath = path.join(root, "hmk-auth.json");
-    await mkdir(codexHomePath);
-    await writeFile(authFilePath, "not-json", "utf8");
+    await mkdir(codexHomePath, { mode: 0o700 });
+    await writeFile(authFilePath, "not-json", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     const input = request();
     input.codexHomePath = codexHomePath;
     input.authentication = { store: "file", authFilePath };
