@@ -183,6 +183,33 @@ describe("executeIsolatedCodexRun", () => {
     await expect(readdir(codexHomePath)).resolves.toEqual([]);
   });
 
+  it("登录文件不是有效 JSON 时在创建 Codex 前失败关闭并清理临时目录", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "forgex-auth-invalid-"));
+    temporaryRoots.push(root);
+    const codexHomePath = path.join(root, "isolated-home");
+    const authFilePath = path.join(root, "hmk-auth.json");
+    await mkdir(codexHomePath);
+    await writeFile(authFilePath, "not-json", "utf8");
+    const input = request();
+    input.codexHomePath = codexHomePath;
+    input.authentication = { store: "file", authFilePath };
+    input.codex.config.cli_auth_credentials_store = "file";
+    const createCodex = vi.fn();
+
+    await expect(
+      executeIsolatedCodexRun(input, {
+        currentIdentity: async () => "uid:2000",
+        assertFilesystemBoundary: vi.fn(),
+        assertToolSurface: vi.fn(),
+        assertPrivateCredentialPath: vi.fn(),
+        createCodex,
+      }),
+    ).rejects.toThrow("Codex 登录缓存不是有效的 JSON 对象");
+
+    expect(createCodex).not.toHaveBeenCalled();
+    await expect(readdir(codexHomePath)).resolves.toEqual([]);
+  });
+
   it("每轮结束后清理 Codex 自动生成的禁止配置，避免后续任务被旧状态阻断", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "forgex-home-cleanup-"));
     temporaryRoots.push(root);
