@@ -650,7 +650,7 @@ describe("PostgresRequirementRepository", () => {
     ]);
   });
 
-  it("按项目、仓库和已完成状态读取待独立验证交付", async () => {
+  it("只读取当前需求版本的待独立验证交付", async () => {
     const database = fakeDatabase({
       respond: (text) =>
         text.includes("list")
@@ -696,6 +696,9 @@ describe("PostgresRequirementRepository", () => {
     );
     expect(query?.text).toContain("run.status = 'completed'");
     expect(query?.text).toContain("workflow ->> 'status' = 'inDelivery'");
+    expect(query?.text).toContain(
+      "run.requirement_revision = (requirement.workflow ->> 'currentRevision')::integer",
+    );
     expect(query?.text).toContain(
       "NOT EXISTS (SELECT 1 FROM forgex_verification_failures",
     );
