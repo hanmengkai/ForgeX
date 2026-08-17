@@ -697,7 +697,7 @@ describe("PostgresRequirementRepository", () => {
     expect(query?.text).toContain("run.status = 'completed'");
     expect(query?.text).toContain("workflow ->> 'status' = 'inDelivery'");
     expect(query?.text).toContain(
-      "run.requirement_revision = (requirement.workflow ->> 'currentRevision')::integer",
+      "run.requirement_revision = jsonb_array_length(requirement.workflow -> 'revisions')",
     );
     expect(query?.text).toContain(
       "NOT EXISTS (SELECT 1 FROM forgex_verification_failures",
