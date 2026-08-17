@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { CodexProcessEventPayload } from "@forgex/contracts";
+import type {
+  CodexProcessEventPayload,
+  CodexTerminalLogChunkPayload,
+} from "@forgex/contracts";
 
 import type { CodexAuthentication } from "./codex-auth.js";
 import type { CodexIsolationRunner } from "./codex-isolation.js";
@@ -42,6 +45,7 @@ export interface CodexRequirementAdapter {
     workspacePath: string;
     signal?: AbortSignal;
     onProgress?: (event: CodexProcessEventPayload) => void;
+    onLog?: (chunk: CodexTerminalLogChunkPayload) => void;
   }): Promise<CodexRequirementResult>;
 }
 
@@ -169,6 +173,7 @@ export class OpenAiCodexSdkAdapter implements CodexRequirementAdapter {
     workspacePath: string;
     signal?: AbortSignal;
     onProgress?: (event: CodexProcessEventPayload) => void;
+    onLog?: (chunk: CodexTerminalLogChunkPayload) => void;
   }): Promise<CodexRequirementResult> {
     const { CODEX_HOME: _codexHome, ...shellEnvironment } = this.#environment;
     const turn = await this.#runner.run({
@@ -183,6 +188,7 @@ export class OpenAiCodexSdkAdapter implements CodexRequirementAdapter {
       environment: shellEnvironment,
       ...(input.signal ? { signal: input.signal } : {}),
       ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+      ...(input.onLog ? { onLog: input.onLog } : {}),
     });
     let raw: unknown;
     try {

@@ -6,8 +6,10 @@ import {
   WorkerLeaseCommandSchema,
   WorkerMcpCompletionSchema,
   WorkerRequirementProcessEventSchema,
+  WorkerRequirementLogChunkSchema,
   WorkerRequirementCompletionSchema,
   type CodexProcessEventPayload,
+  type CodexTerminalLogChunkPayload,
   type WorkerConnectionCredentialPayload,
 } from "@forgex/contracts";
 
@@ -129,6 +131,11 @@ const completionResponseSchema = z
 const processEventResponseSchema = z
   .object({
     data: z.object({ alreadyRecorded: z.boolean() }).strict(),
+  })
+  .strict();
+const logChunkResponseSchema = z
+  .object({
+    data: z.object({ alreadyStored: z.boolean() }).strict(),
   })
   .strict();
 
@@ -298,6 +305,31 @@ export class WorkerControlPlaneClient {
       signal,
     );
     return response.data.alreadyRecorded;
+  }
+
+  async reportRequirementLog(
+    assignment: Pick<WorkerAssignment, "assignmentKey" | "fencingToken">,
+    chunk: {
+      chunkKey: string;
+      sequence: number;
+      occurredAt: string;
+      stream: CodexTerminalLogChunkPayload["stream"];
+      text: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const response = await this.#post(
+      "/api/v1/worker-connection/requirement-log",
+      WorkerRequirementLogChunkSchema.parse({
+        schemaVersion: 1,
+        assignmentKey: assignment.assignmentKey,
+        fencingToken: assignment.fencingToken,
+        ...chunk,
+      }),
+      logChunkResponseSchema,
+      signal,
+    );
+    return response.data.alreadyStored;
   }
 
   async completeMcp(

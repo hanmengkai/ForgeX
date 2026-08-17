@@ -21,6 +21,8 @@ import { promisify } from "node:util";
 import { Codex, type CodexOptions, type ThreadEvent } from "@openai/codex-sdk";
 import {
   CodexProcessEventSchema,
+  sanitizeExecutionLogText,
+  type CodexTerminalLogChunkPayload,
   type CodexProcessEventPayload,
 } from "@forgex/contracts";
 import { z } from "zod";
@@ -303,6 +305,110 @@ const processEventFromThreadEvent = (
   }
   return null;
 };
+
+const terminalChunk = (
+  stream: CodexTerminalLogChunkPayload["stream"],
+  text: string,
+): CodexTerminalLogChunkPayload[] => {
+  const sanitized = sanitizeExecutionLogText(text).replace(/\r\n?/gu, "\n");
+  if (!sanitized) return [];
+  const chunks: CodexTerminalLogChunkPayload[] = [];
+  let remaining = sanitized.endsWith("\n") ? sanitized : `${sanitized}\n`;
+  while (remaining.length > 0) {
+    let end = Math.min(16_000, remaining.length);
+    if (end < remaining.length) {
+      const lineEnd = remaining.lastIndexOf("\n", end - 1);
+      if (lineEnd >= 0) end = lineEnd + 1;
+    }
+    chunks.push({ stream, text: remaining.slice(0, end) });
+    remaining = remaining.slice(end);
+  }
+  return chunks;
+};
+
+export const createTerminalLogMapper = () => {
+  const commandOutputs = new Map<string, string>();
+  return (event: ThreadEvent): CodexTerminalLogChunkPayload[] => {
+    if (event.type === "turn.started") {
+      return terminalChunk("system", "[codex] turn started");
+    }
+    if (event.type === "turn.completed") {
+      return terminalChunk("system", "[codex] turn completed");
+    }
+    if (event.type === "turn.failed") {
+      return terminalChunk("stderr", `[error] ${event.error.message}`);
+    }
+    if (event.type === "error") {
+      return terminalChunk("stderr", `[error] ${event.message}`);
+    }
+    if (
+      event.type !== "item.started" &&
+      event.type !== "item.updated" &&
+      event.type !== "item.completed"
+    ) {
+      return [];
+    }
+    const item = event.item;
+    if (item.type === "command_execution") {
+      if (event.type === "item.started") {
+        commandOutputs.set(item.id, item.aggregated_output);
+        return terminalChunk("stdout", `$ ${item.command}`);
+      }
+      const previous = commandOutputs.get(item.id) ?? "";
+      const output = item.aggregated_output.startsWith(previous)
+        ? item.aggregated_output.slice(previous.length)
+        : item.aggregated_output;
+      if (event.type === "item.completed") {
+        commandOutputs.delete(item.id);
+      } else {
+        commandOutputs.set(item.id, item.aggregated_output);
+      }
+      const exit =
+        event.type === "item.completed"
+          ? `[process exited with code ${item.exit_code ?? -1}]`
+          : "";
+      const separator = output && exit && !output.endsWith("\n") ? "\n" : "";
+      return terminalChunk("stdout", `${output}${separator}${exit}`);
+    }
+    if (event.type !== "item.completed") return [];
+    if (item.type === "reasoning") {
+      return terminalChunk("system", "[codex] reasoning completed");
+    }
+    if (item.type === "agent_message") {
+      return terminalChunk("stdout", item.text);
+    }
+    if (item.type === "mcp_tool_call") {
+      return terminalChunk(
+        item.status === "failed" ? "stderr" : "system",
+        `[tool] ${item.server}.${item.tool} ${item.status}`,
+      );
+    }
+    if (item.type === "file_change") {
+      return item.changes.flatMap((change) =>
+        terminalChunk("system", `[file] ${change.kind} ${change.path}`),
+      );
+    }
+    if (item.type === "todo_list") {
+      return item.items.flatMap((todo) =>
+        terminalChunk(
+          "system",
+          `[plan] ${todo.completed ? "completed" : "pending"} ${todo.text}`,
+        ),
+      );
+    }
+    if (item.type === "web_search") {
+      return terminalChunk("system", `[search] ${item.query}`);
+    }
+    if (item.type === "error") {
+      return terminalChunk("stderr", `[error] ${item.message}`);
+    }
+    return [];
+  };
+};
+
+export const terminalLogChunksFromThreadEvent = (
+  event: ThreadEvent,
+): CodexTerminalLogChunkPayload[] => createTerminalLogMapper()(event);
 
 const samePath = (left: string, right: string): boolean =>
   process.platform === "win32"
@@ -795,6 +901,7 @@ export interface IsolationLauncherDependencies {
   assertToolSurface?: (request: IsolatedCodexRunRequest) => Promise<void>;
   createCodex?: (options: CodexOptions) => CodexLike;
   emitProgress?: (event: CodexProcessEventPayload) => void | Promise<void>;
+  emitLog?: (chunk: CodexTerminalLogChunkPayload) => void | Promise<void>;
   prepareRuntimeCodexHome?: (
     codexHomePath: string,
     authentication: CodexAuthentication,
@@ -885,7 +992,11 @@ export const executeIsolatedCodexRun = async (
     });
     let finalResponse = "";
     let failed = false;
+    const mapTerminalLog = createTerminalLogMapper();
     for await (const event of turn.events) {
+      for (const chunk of mapTerminalLog(event)) {
+        await dependencies.emitLog?.(chunk);
+      }
       if (
         event.type === "item.completed" &&
         event.item.type === "agent_message"

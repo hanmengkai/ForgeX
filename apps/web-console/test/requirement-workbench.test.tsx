@@ -140,6 +140,12 @@ const createClient = (): ForgeXClient => ({
   publishKnowledgeSource: vi.fn(),
   archiveKnowledgeSource: vi.fn(),
   searchKnowledgeBase: vi.fn(),
+  getRequirementExecutionLog: vi.fn().mockResolvedValue({
+    totalLines: 0,
+    truncated: false,
+    updatedAt: null,
+    lines: [],
+  }),
   listWorkers: vi.fn().mockResolvedValue({
     workers: [
       {
@@ -302,6 +308,10 @@ describe("RequirementWorkbench", () => {
     });
     vi.mocked(client.getRequirement).mockResolvedValue({
       ...running,
+      links: {
+        ...running.links,
+        executionLog: `${running.links.self}/execution-log`,
+      },
       spec: {
         schemaVersion: 1,
         title: running.title,
@@ -400,6 +410,28 @@ describe("RequirementWorkbench", () => {
         },
       ],
     });
+    vi.mocked(client.getRequirementExecutionLog).mockResolvedValue({
+      totalLines: 3,
+      truncated: false,
+      updatedAt: "2026-08-13T02:00:03.000Z",
+      lines: [
+        {
+          occurredAt: "2026-08-13T02:00:01.000Z",
+          stream: "stdout",
+          text: "$ rg executionEvents apps/web-console",
+        },
+        {
+          occurredAt: "2026-08-13T02:00:02.000Z",
+          stream: "stdout",
+          text: "apps/web-console/src/requirement-workbench.tsx:1130",
+        },
+        {
+          occurredAt: "2026-08-13T02:00:03.000Z",
+          stream: "system",
+          text: "[file] update src/App.tsx",
+        },
+      ],
+    });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<RequirementWorkbench client={client} />);
 
@@ -411,9 +443,27 @@ describe("RequirementWorkbench", () => {
     expect(screen.getByText("独立验证")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "执行记录" }));
     expect(
-      screen.getByRole("log", { name: "Codex 实时执行记录" }),
-    ).toHaveTextContent("检索相关代码已完成");
-    expect(screen.getByText("src/App.tsx（更新）")).toBeInTheDocument();
+      await screen.findByRole("log", { name: "Codex 实时终端日志" }),
+    ).toHaveTextContent("$ rg executionEvents apps/web-console");
+    expect(client.getRequirementExecutionLog).toHaveBeenCalledWith(
+      `${running.links.self}/execution-log`,
+      300,
+    );
+    const lineLimit = screen.getByRole("spinbutton", {
+      name: "显示最后行数",
+    });
+    await userEvent.clear(lineLimit);
+    await userEvent.type(lineLimit, "1200");
+    await userEvent.click(screen.getByRole("button", { name: "应用行数" }));
+    expect(client.getRequirementExecutionLog).toHaveBeenCalledWith(
+      `${running.links.self}/execution-log`,
+      1200,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "显示全部" }));
+    expect(client.getRequirementExecutionLog).toHaveBeenCalledWith(
+      `${running.links.self}/execution-log`,
+      null,
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "强制终止交付" }));
     expect(confirm).toHaveBeenCalledWith(

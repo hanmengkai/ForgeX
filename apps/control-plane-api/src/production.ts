@@ -1,8 +1,11 @@
+import path from "node:path";
+
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
 
 import { EvidenceAuthority } from "@forgex/domain";
 import {
   AccountAdministrationService,
+  FileSystemExecutionLogStore,
   type AccountRepository,
 } from "@forgex/application";
 import {
@@ -50,6 +53,7 @@ export interface ProductionControlPlaneOptions {
   accountRepository?: AccountRepository;
   serviceVersion?: string;
   logger?: FastifyServerOptions["logger"];
+  executionLogRoot?: string;
 }
 
 export const createProductionControlPlane = (
@@ -97,6 +101,9 @@ export const createProductionControlPlane = (
     mcpInvocationRepository: new PostgresMcpInvocationRepository(options.pool),
     mcpRegistryRepository: new PostgresMcpRegistryRepository(options.pool),
     previewArtifactStore: new PostgresPreviewArtifactStore(options.pool),
+    executionLogStore: new FileSystemExecutionLogStore(
+      options.executionLogRoot ?? path.resolve(".forgex-execution-logs"),
+    ),
     projectKey: options.config.projectKey,
     repositoryKey: options.config.repositoryKey,
     sessionCookieSecure: options.config.sessionCookieSecure,
