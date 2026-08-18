@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 
 import type { ExtensionCatalogItem } from "./api.js";
 
@@ -121,10 +122,11 @@ export function SkillSelectionDialog({
     else setError("交付安排没有完成，请检查页面提示后重试");
   };
 
-  return (
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <div
       ref={backdropRef}
-      className="dialog-backdrop"
+      className="dialog-backdrop skill-selection-backdrop"
       onMouseDown={requestClose}
     >
       <div
@@ -204,6 +206,7 @@ export function SkillSelectionDialog({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -2040,6 +2040,10 @@ h1 {
   backdrop-filter: blur(5px);
 }
 
+.dialog-backdrop.skill-selection-backdrop {
+  z-index: 30;
+}
+
 .dialog {
   width: min(620px, 100%);
   max-height: calc(100vh - 48px);

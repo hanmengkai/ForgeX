@@ -82,7 +82,8 @@ describe("SkillSelectionDialog", () => {
     const confirm = screen.getByRole("button", {
       name: "确认并开始交付",
     });
-    expect(opener.closest("main")).toHaveAttribute("inert");
+    const applicationRoot = opener.closest("main")?.parentElement;
+    expect(applicationRoot).toHaveAttribute("inert");
     expect(checkbox).toHaveFocus();
 
     close.focus();
@@ -104,6 +105,6 @@ describe("SkillSelectionDialog", () => {
     await act(async () => confirmation.resolve(true));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(opener).toHaveFocus();
-    expect(opener.closest("main")).not.toHaveAttribute("inert");
+    expect(applicationRoot).not.toHaveAttribute("inert");
   });
 });
