@@ -261,20 +261,10 @@ describe("PostgresWorkerFleetRepository", () => {
 
     await repository.transaction(tenantKey, async (transaction) => {
       await expect(
-        transaction.prepareRetry(
-          retryDispatchKey,
-          projectKey,
-          workKey,
-          2,
-        ),
+        transaction.prepareRetry(retryDispatchKey, projectKey, workKey, 2),
       ).resolves.toBe(true);
       await expect(
-        transaction.prepareRetry(
-          retryDispatchKey,
-          projectKey,
-          workKey,
-          2,
-        ),
+        transaction.prepareRetry(retryDispatchKey, projectKey, workKey, 2),
       ).resolves.toBe(false);
     });
 

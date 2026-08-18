@@ -819,7 +819,10 @@ describe("PostgresRequirementRepository", () => {
 
   it("同版本重试迁移记录来源派发，并幂等登记旧完成标记清理", () => {
     const migration = readFileSync(
-      new URL("../migrations/0025_delivery_retry_attempts.sql", import.meta.url),
+      new URL(
+        "../migrations/0025_delivery_retry_attempts.sql",
+        import.meta.url,
+      ),
       "utf8",
     );
 

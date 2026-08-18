@@ -289,11 +289,11 @@ export class WorkerFleetService {
         }
         if (
           !retryPrepared &&
-          await transaction.hasCompletedWork(
+          (await transaction.hasCompletedWork(
             dispatch.projectKey,
             dispatch.requirementKey,
             dispatch.requirementRevision,
-          )
+          ))
         ) {
           return { title: dispatch.title, status: "已经完成" as const };
         }
