@@ -249,9 +249,12 @@ const progressStages = [
   readonly [RequirementProgressStageKey, string]
 >;
 
+const VERIFICATION_RESULT_WAIT_WARNING_MS = 10 * 60_000;
+
 const requirementProgress = (input: {
   status: RequirementStatus;
   createdAt: string;
+  now: Date;
   dispatch: DeliveryDispatchRecord | null;
   run: import("./requirement-repository.js").DeliveryRunResult | null;
   verificationFailed: boolean;
@@ -330,6 +333,22 @@ const requirementProgress = (input: {
         ? "独立 Runner 正在验证真实交付结果"
         : "等待本地提交完成登记",
     );
+  }
+
+  const verificationCompletedAtMs = input.run?.completedAt
+    ? Date.parse(input.run.completedAt)
+    : Number.NaN;
+  const nowMs = input.now.getTime();
+  if (
+    input.status === "inDelivery" &&
+    input.run?.status === "completed" &&
+    Number.isFinite(verificationCompletedAtMs) &&
+    Number.isFinite(nowMs) &&
+    nowMs - verificationCompletedAtMs >= VERIFICATION_RESULT_WAIT_WARNING_MS
+  ) {
+    currentStage = "独立验证等待处理";
+    details.verification =
+      "长时间未收到可信验证结果，请检查验收计划；可强制终止后调整并重新发起";
   }
 
   if (input.verificationFailed) {
@@ -911,6 +930,7 @@ export class RequirementApplicationService {
           progress: requirementProgress({
             status: record.workflow.toSnapshot().status,
             createdAt: record.createdAt,
+            now: this.#clock(),
             dispatch,
             run,
             verificationFailed: verificationFailure !== null,
