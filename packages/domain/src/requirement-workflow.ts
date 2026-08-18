@@ -298,11 +298,7 @@ export class RequirementWorkflow {
   }
 
   revise(input: RequirementRevisionInput): void {
-    if (
-      this.#status === "inDelivery" ||
-      this.#status === "awaitingAcceptance" ||
-      this.#status === "completed"
-    ) {
+    if (this.#status === "inDelivery" || this.#status === "completed") {
       throw new Error("需求已经进入交付，请创建新的变更需求");
     }
     if (!input.changedBy.trim()) {
@@ -332,6 +328,10 @@ export class RequirementWorkflow {
       spec: RequirementWorkflow.#copySpec(parsedSpec),
     });
     this.#confirmedVersion = null;
+    this.#deliveryCandidate = null;
+    this.#deliveryCandidateRecordedAtMs = null;
+    this.#evidence = null;
+    this.#verifiedEvidenceReceipt = null;
     this.#status = "needsReconfirmation";
   }
 
@@ -614,7 +614,11 @@ export class RequirementWorkflow {
           "delete",
         ];
       case "awaitingAcceptance":
-        return ["accept", "delete"];
+        return [
+          ...(canRevise ? (["revise"] as const) : []),
+          "accept",
+          "delete",
+        ];
       case "completed":
       case "verificationFailedAtLimit":
         return ["delete"];

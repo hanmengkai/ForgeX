@@ -248,6 +248,7 @@ function RequirementRevisionEditor({
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const wasEditingRef = useRef(false);
+  const isAcceptanceRework = detail.status === "等待产品验收";
 
   useEffect(() => {
     if (editing) {
@@ -327,6 +328,11 @@ function RequirementRevisionEditor({
 
   return (
     <form className="revision-editor" onSubmit={submit}>
+      {isAcceptanceRework ? (
+        <p className="revision-rework-note">
+          保存后会生成新版本，并重新经过需求确认、AI 实现和独立验证。
+        </p>
+      ) : null}
       <div className="field">
         <label htmlFor="revision-title">需求名称</label>
         <input
@@ -594,7 +600,11 @@ function RequirementRevisionEditor({
           取消修订
         </button>
         <button className="button primary" type="submit" disabled={busy}>
-          {busy ? "正在保存…" : "保存新版本"}
+          {busy
+            ? "正在保存…"
+            : isAcceptanceRework
+              ? "保存修复版本"
+              : "保存新版本"}
         </button>
       </div>
     </form>
@@ -1010,7 +1020,9 @@ function RequirementCard({
                     setEditingRevision(true);
                   }}
                 >
-                  修订需求
+                  {item.status === "等待产品验收"
+                    ? "反馈问题并继续修复"
+                    : "修订需求"}
                 </button>
               ) : null}
               {detail?.links.preview ? (

@@ -1337,11 +1337,13 @@ h1 {
 }
 
 .revision-editor .field,
+.revision-editor .revision-rework-note,
 .revision-editor .form-error,
 .revision-editor .inline-form-actions {
   margin: 0;
 }
 
+.revision-editor .revision-rework-note,
 .revision-editor .field:nth-of-type(n + 2),
 .revision-editor .structured-editor-list,
 .revision-editor .form-error,
@@ -1353,6 +1355,14 @@ h1 {
 .revision-editor textarea,
 .revision-editor select {
   background: var(--surface);
+}
+
+.revision-rework-note {
+  padding: 12px 14px;
+  color: var(--ink-soft);
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
 }
 
 .structured-editor-list {
