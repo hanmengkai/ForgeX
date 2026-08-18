@@ -1224,9 +1224,24 @@ h1 {
   display: grid;
   grid-template-columns: 72px 52px minmax(0, 1fr);
   gap: 9px;
-  min-width: max-content;
   padding: 2px 16px;
+}
+
+.execution-terminal-viewport.no-wrap .execution-terminal-line {
+  min-width: max-content;
+  white-space: pre;
+}
+
+.execution-terminal-viewport.wrap-lines .execution-terminal-line {
+  min-width: 0;
   white-space: pre-wrap;
+}
+
+.execution-terminal-viewport.wrap-lines
+  .execution-terminal-line
+  > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .execution-terminal-line:hover {

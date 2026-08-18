@@ -765,6 +765,8 @@ function ExecutionLogViewer({
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [wrapLines, setWrapLines] = useState(false);
   const requestRef = useRef(0);
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -789,6 +791,7 @@ function ExecutionLogViewer({
   }, [client, lineLimit, logUrl]);
 
   useEffect(() => {
+    if (paused) return () => void (requestRef.current += 1);
     setLoading(true);
     void refresh();
     if (!live) return () => void (requestRef.current += 1);
@@ -797,7 +800,11 @@ function ExecutionLogViewer({
       window.clearInterval(interval);
       requestRef.current += 1;
     };
-  }, [live, refresh]);
+  }, [live, paused, refresh]);
+
+  useEffect(() => {
+    if (!live) setPaused(false);
+  }, [live]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -822,8 +829,10 @@ function ExecutionLogViewer({
           <span className="detail-label">Codex 实时终端日志</span>
           <small>设备 stdout、stderr 与受控工具输出 · 已自动脱敏</small>
         </div>
-        <span className={`status-pill ${live ? "running" : "neutral"}`}>
-          {live ? "实时更新" : "执行日志"}
+        <span
+          className={`status-pill ${live && !paused ? "running" : "neutral"}`}
+        >
+          {live ? (paused ? "已暂停" : "实时更新") : "执行日志"}
         </span>
       </div>
       <form className="execution-terminal-controls" onSubmit={applyLineLimit}>
@@ -850,18 +859,38 @@ function ExecutionLogViewer({
         >
           显示全部
         </button>
+        {live ? (
+          <button
+            className="button secondary compact"
+            type="button"
+            aria-label={paused ? "恢复日志刷新" : "暂停日志刷新"}
+            onClick={() => setPaused((current) => !current)}
+          >
+            {paused ? "继续打印" : "暂停打印"}
+          </button>
+        ) : null}
+        <button
+          className="button secondary compact"
+          type="button"
+          aria-pressed={wrapLines}
+          onClick={() => setWrapLines((current) => !current)}
+        >
+          {wrapLines ? "保持单行" : "按宽度换行"}
+        </button>
         <small>
-          {snapshot
-            ? `当前显示 ${snapshot.lines.length} / ${snapshot.totalLines} 行`
-            : "默认显示最后 300 行"}
+          {paused
+            ? "页面已暂停，服务器仍在采集日志"
+            : snapshot
+              ? `当前显示 ${snapshot.lines.length} / ${snapshot.totalLines} 行`
+              : "默认显示最后 300 行"}
         </small>
       </form>
       <div
         ref={viewportRef}
-        className="execution-terminal-viewport"
+        className={`execution-terminal-viewport ${wrapLines ? "wrap-lines" : "no-wrap"}`}
         role="log"
         aria-label="Codex 实时终端日志"
-        aria-live="polite"
+        aria-live={paused ? "off" : "polite"}
       >
         {snapshot?.lines.map((line, index) => (
           <div

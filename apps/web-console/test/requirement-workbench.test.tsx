@@ -455,13 +455,14 @@ describe("RequirementWorkbench", () => {
     expect(wrapToggle).toHaveAttribute("aria-pressed", "false");
     await userEvent.click(wrapToggle);
     expect(terminal).toHaveClass("wrap-lines");
-    expect(
-      screen.getByRole("button", { name: "保持单行" }),
-    ).toHaveAttribute("aria-pressed", "true");
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "暂停日志刷新" }),
+    expect(screen.getByRole("button", { name: "保持单行" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
+    await userEvent.click(screen.getByRole("button", { name: "保持单行" }));
+    expect(terminal).toHaveClass("no-wrap");
+
+    await userEvent.click(screen.getByRole("button", { name: "暂停日志刷新" }));
     expect(screen.getByText("已暂停")).toBeInTheDocument();
     expect(terminal).toHaveAttribute("aria-live", "off");
     const callsWhilePaused = vi.mocked(client.getRequirementExecutionLog).mock
@@ -470,9 +471,7 @@ describe("RequirementWorkbench", () => {
     expect(client.getRequirementExecutionLog).toHaveBeenCalledTimes(
       callsWhilePaused,
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "恢复日志刷新" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "恢复日志刷新" }));
     await waitFor(() =>
       expect(client.getRequirementExecutionLog).toHaveBeenCalledTimes(
         callsWhilePaused + 1,
