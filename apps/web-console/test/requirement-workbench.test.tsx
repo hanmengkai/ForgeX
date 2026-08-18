@@ -442,13 +442,45 @@ describe("RequirementWorkbench", () => {
     expect(screen.getByText("45%")).toBeInTheDocument();
     expect(screen.getByText("独立验证")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "执行记录" }));
-    expect(
-      await screen.findByRole("log", { name: "Codex 实时终端日志" }),
-    ).toHaveTextContent("$ rg executionEvents apps/web-console");
+    const terminal = await screen.findByRole("log", {
+      name: "Codex 实时终端日志",
+    });
+    expect(terminal).toHaveTextContent("$ rg executionEvents apps/web-console");
     expect(client.getRequirementExecutionLog).toHaveBeenCalledWith(
       `${running.links.self}/execution-log`,
       300,
     );
+    expect(terminal).toHaveClass("no-wrap");
+    const wrapToggle = screen.getByRole("button", { name: "按宽度换行" });
+    expect(wrapToggle).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(wrapToggle);
+    expect(terminal).toHaveClass("wrap-lines");
+    expect(
+      screen.getByRole("button", { name: "保持单行" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "暂停日志刷新" }),
+    );
+    expect(screen.getByText("已暂停")).toBeInTheDocument();
+    expect(terminal).toHaveAttribute("aria-live", "off");
+    const callsWhilePaused = vi.mocked(client.getRequirementExecutionLog).mock
+      .calls.length;
+    await new Promise((resolve) => window.setTimeout(resolve, 1_100));
+    expect(client.getRequirementExecutionLog).toHaveBeenCalledTimes(
+      callsWhilePaused,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "恢复日志刷新" }),
+    );
+    await waitFor(() =>
+      expect(client.getRequirementExecutionLog).toHaveBeenCalledTimes(
+        callsWhilePaused + 1,
+      ),
+    );
+    expect(screen.getByText("实时更新")).toBeInTheDocument();
+    expect(terminal).toHaveAttribute("aria-live", "polite");
+
     const lineLimit = screen.getByRole("spinbutton", {
       name: "显示最后行数",
     });
