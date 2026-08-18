@@ -598,4 +598,99 @@ describe("DeliveryCoordinatorService", () => {
       code: "delivery_completion_stale",
     });
   });
+
+  it("已完成但被强制终止的同一版本重新发起时创建新的设备任务", async () => {
+    const requirementRepository = new InMemoryRequirementRepository();
+    const requirements = new RequirementApplicationService({
+      repository: requirementRepository,
+      projectKey,
+      repositoryKey,
+    });
+    const workers = new WorkerFleetService({
+      repository: new InMemoryWorkerFleetRepository(),
+    });
+    const coordinator = new DeliveryCoordinatorService({
+      requirements,
+      requirementRepository,
+      workers,
+      projectKey,
+    });
+    const connection = (
+      await workers.connect(principal, {
+        schemaVersion: 1,
+        deviceName: "研发电脑",
+        accountName: "Codex 账号",
+        accountFingerprint: "e".repeat(64),
+        capabilities: [],
+      })
+    ).connection;
+    const created = await requirements.create(principal, spec);
+    await requirements.submitForConfirmation(principal, created.requirementKey);
+    await requirements.confirm(principal, created.requirementKey);
+    await coordinator.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+    const firstAssignment = (await workers.poll(connection)).assignment!;
+    const completion = {
+      schemaVersion: 1 as const,
+      assignmentKey: firstAssignment.assignmentKey,
+      fencingToken: firstAssignment.fencingToken,
+      projectKey,
+      repositoryKey,
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      gitHashAlgorithm: "sha1" as const,
+      baseCommit: "a".repeat(40),
+      commitSha: "b".repeat(40),
+      branchName: `forgex/${projectKey.slice(0, 8)}/${firstAssignment.assignmentKey}`,
+      summary: WORKER_REQUIREMENT_COMPLETION_SUMMARY,
+    };
+    const run = await coordinator.submitExecutionResult(
+      tenantKey,
+      {
+        workKind: "requirement_delivery",
+        assignmentKey: firstAssignment.assignmentKey,
+        fencingToken: firstAssignment.fencingToken,
+        projectKey,
+        requirementKey: created.requirementKey,
+        requirementRevision: 1,
+      },
+      completion,
+    );
+    await workers.complete(
+      connection,
+      {
+        schemaVersion: 1,
+        assignmentKey: firstAssignment.assignmentKey,
+        fencingToken: firstAssignment.fencingToken,
+      },
+      requirementCompletionDigest(completion),
+    );
+    await expect(coordinator.finalizeExecutionResult(run)).resolves.toBe(true);
+    await coordinator.terminateDelivery(principal, created.requirementKey);
+
+    await expect(
+      coordinator.requestDelivery(principal, created.requirementKey, {
+        schemaVersion: 1,
+        requiredCapabilities: [],
+      }),
+    ).resolves.toMatchObject({ status: "等待空闲设备" });
+    await expect(
+      requirementRepository.listDeliveryRunsAwaitingVerification(
+        tenantKey,
+        projectKey,
+        repositoryKey,
+        10,
+      ),
+    ).resolves.toEqual([]);
+    const retriedAssignment = (await workers.poll(connection)).assignment;
+    expect(retriedAssignment).toMatchObject({
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+    });
+    expect(retriedAssignment?.assignmentKey).not.toBe(
+      firstAssignment.assignmentKey,
+    );
+  });
 });
