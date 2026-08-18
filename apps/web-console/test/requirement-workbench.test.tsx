@@ -633,6 +633,17 @@ describe("RequirementWorkbench", () => {
     ).toBeInTheDocument();
     expect(within(dialog).queryByRole("log")).not.toBeInTheDocument();
 
+    await user.click(
+      within(actions).getByRole("button", { name: "重新安排 AI 实现" }),
+    );
+    const skillDialog = await screen.findByRole("dialog", {
+      name: "选择团队能力",
+    });
+    const skillBackdrop = skillDialog.closest(".dialog-backdrop");
+    expect(skillBackdrop).toHaveClass("skill-selection-backdrop");
+    expect(skillBackdrop?.parentElement).toBe(document.body);
+    await user.click(within(skillDialog).getByRole("button", { name: "返回" }));
+
     await user.click(within(dialog).getByRole("tab", { name: "执行记录" }));
     expect(
       within(dialog).getByRole("log", { name: "Codex 实时执行记录" }),
