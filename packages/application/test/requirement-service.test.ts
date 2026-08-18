@@ -6,6 +6,7 @@ import { RequirementWorkflow } from "@forgex/domain";
 import {
   InMemoryRequirementRepository,
   RequirementApplicationService,
+  type DeliveryRunResult,
   type RequirementRecord,
   type AuthenticatedPrincipal,
 } from "../src/index.js";
@@ -278,6 +279,73 @@ describe("RequirementApplicationService", () => {
     );
 
     expect(stored).toMatchObject({ projectKey, repositoryKey });
+  });
+
+  it("独立验证长时间没有结果时明确提示检查验收计划并保留终止入口", async () => {
+    let clockValue = new Date("2026-08-13T02:09:59.000Z");
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+      clock: () => new Date(clockValue.getTime()),
+    });
+    const created = await service.create(principal, spec);
+    await service.submitForConfirmation(principal, created.requirementKey);
+    await service.confirm(principal, created.requirementKey);
+    await service.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+    const completedRun: DeliveryRunResult = {
+      tenantKey,
+      projectKey,
+      repositoryKey,
+      requirementKey: created.requirementKey,
+      requirementRevision: 1,
+      assignmentKey: "77777777-7777-4777-8777-777777777777",
+      fencingToken: 1,
+      gitHashAlgorithm: "sha1",
+      baseCommit: "a".repeat(40),
+      commitSha: "b".repeat(40),
+      branchName: `forgex/${projectKey.slice(0, 8)}/77777777-7777-4777-8777-777777777777`,
+      summary: "已生成本地提交，等待独立验证",
+      status: "completed",
+      submittedAt: "2026-08-13T01:59:00.000Z",
+      completedAt: "2026-08-13T02:00:00.000Z",
+    };
+    await repository.transaction(tenantKey, projectKey, (transaction) => {
+      transaction.saveDeliveryRunResult(completedRun);
+    });
+
+    await expect(
+      service.get(principal, created.requirementKey),
+    ).resolves.toMatchObject({
+      allowedActions: ["terminateDelivery"],
+      progress: {
+        percent: 75,
+        currentStage: "独立验证中",
+      },
+    });
+
+    clockValue = new Date("2026-08-13T02:10:00.000Z");
+    await expect(
+      service.get(principal, created.requirementKey),
+    ).resolves.toMatchObject({
+      allowedActions: ["terminateDelivery"],
+      progress: {
+        percent: 75,
+        currentStage: "独立验证等待处理",
+        stages: expect.arrayContaining([
+          expect.objectContaining({
+            key: "verification",
+            status: "active",
+            detail:
+              "长时间未收到可信验证结果，请检查验收计划；可强制终止后调整并重新发起",
+          }),
+        ]),
+      },
+    });
   });
 
   it("强制终止交付会关闭待派发记录、留下审计并返回细粒度进度", async () => {
