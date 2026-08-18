@@ -1920,7 +1920,7 @@ describe("需求 API", () => {
           nextStep: "请体验 Preview 并确认结果",
           acceptanceProgress: "1 / 1 项已通过",
         },
-        allowedActions: ["accept"],
+        allowedActions: ["revise", "accept"],
         spec: { ...validRequirement, schemaVersion: 1 as const },
         acceptance: {
           verifiedBy: "独立测试 Runner",
@@ -1960,7 +1960,10 @@ describe("需求 API", () => {
       history: `${self}/revisions`,
       preview: `${self}/preview`,
       executionLog: `${self}/execution-log`,
-      actions: { accept: `${self}/accept` },
+      actions: {
+        revise: `${self}/revisions`,
+        accept: `${self}/accept`,
+      },
     });
     get.mockRestore();
     await app.close();

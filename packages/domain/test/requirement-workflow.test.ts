@@ -508,6 +508,53 @@ describe("RequirementWorkflow", () => {
     });
   });
 
+  it("产品验收发现问题后生成修复版本并重新走确认与交付", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(createVerifiedEvidence(requirement));
+
+    expect(requirement.listAllowedActions()).toEqual([
+      "revise",
+      "accept",
+      "delete",
+    ]);
+
+    requirement.revise({
+      changedBy: "产品负责人",
+      spec: revisedSpec(requirement, {
+        goal: "修复 Preview 中移动端按钮遮挡问题",
+      }),
+    });
+
+    expect(requirement.toPeopleView()).toMatchObject({
+      version: "第 2 版",
+      status: "内容已更新，等待重新确认",
+      nextStep: "请负责人确认最新版本",
+      acceptanceProgress: "尚未开始验证",
+    });
+    expect(requirement.toAcceptanceView()).toBeNull();
+    expect(requirement.toPreviewArtifactReference()).toBeNull();
+    expect(requirement.toSnapshot()).toMatchObject({
+      confirmedVersion: null,
+      deliveryCandidate: null,
+      deliveryCandidateRecordedAtMs: null,
+      evidence: null,
+    });
+    expect(requirement.listRevisionsForPeople()).toMatchObject([
+      { revision: 1, current: false, confirmed: true },
+      { revision: 2, current: true, confirmed: false, changes: ["业务目标"] },
+    ]);
+    expect(requirement.listAllowedActions()).toEqual([
+      "revise",
+      "submitForConfirmation",
+      "delete",
+    ]);
+    expect(() => requirement.accept({ actor })).toThrow(
+      "请先完成独立验证并提交产品验收",
+    );
+  });
+
   it("拒绝无效确认和验收信息", () => {
     const requirement = createRequirement();
     expect(() => requirement.confirm({ actor })).toThrow("请先提交需求确认");

@@ -1382,7 +1382,10 @@ describe("RequirementWorkbench", () => {
       links: {
         ...items[0]!.links,
         preview: `${items[0]!.links.self}/preview`,
-        actions: { accept: `${items[0]!.links.self}/accept` },
+        actions: {
+          revise: `${items[0]!.links.self}/revisions`,
+          accept: `${items[0]!.links.self}/accept`,
+        },
       },
     };
     vi.mocked(client.listRequirements).mockResolvedValue({
@@ -1455,6 +1458,19 @@ describe("RequirementWorkbench", () => {
       "rel",
       "noreferrer noopener",
     );
+
+    await user.click(
+      screen.getByRole("button", { name: "反馈问题并继续修复" }),
+    );
+    expect(
+      screen.getByText(
+        "保存后会生成新版本，并重新经过需求确认、AI 实现和独立验证。",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "保存修复版本" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "取消修订" }));
 
     await user.click(screen.getByRole("button", { name: "确认验收通过" }));
     expect(client.runRequirementAction).toHaveBeenCalledWith(
