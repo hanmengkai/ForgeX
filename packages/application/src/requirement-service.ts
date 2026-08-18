@@ -691,8 +691,11 @@ export class RequirementApplicationService {
             "没有找到这个需求",
           );
         }
-        if (record.workflow.toSnapshot().status === "terminated") {
-          const previousDispatch = await transaction.findDeliveryDispatch(
+        const retryingTerminatedDelivery =
+          record.workflow.toSnapshot().status === "terminated";
+        let previousDispatch: DeliveryDispatchRecord | null = null;
+        if (retryingTerminatedDelivery) {
+          previousDispatch = await transaction.findDeliveryDispatch(
             record.requirementKey,
             record.workflow.currentRevision,
           );
@@ -706,6 +709,10 @@ export class RequirementApplicationService {
               "正在撤销上一次设备任务，完成后即可重新发起",
             );
           }
+          await transaction.clearTerminatedDeliveryResult(
+            record.requirementKey,
+            record.workflow.currentRevision,
+          );
         }
         try {
           record.workflow.startDelivery();
@@ -733,6 +740,7 @@ export class RequirementApplicationService {
           dispatchedAt: null,
           cancelledAt: null,
           cancellationCompletedAt: null,
+          retryOfDispatchKey: previousDispatch?.dispatchKey ?? null,
         };
         transaction.save(record);
         transaction.appendDeliveryDispatch(dispatch);

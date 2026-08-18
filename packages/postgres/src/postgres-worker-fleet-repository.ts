@@ -175,6 +175,43 @@ export class PostgresWorkerFleetRepository implements WorkerFleetRepository {
             ],
           );
         },
+        prepareRetry: async (
+          dispatchKey,
+          projectKey,
+          workKey,
+          requirementRevision,
+        ) => {
+          const normalizedDispatchKey = assertInternalKey(
+            dispatchKey,
+            "派发标识",
+          );
+          const normalizedProjectKey = assertInternalKey(
+            projectKey,
+            "项目标识",
+          );
+          const normalizedWorkKey = assertInternalKey(workKey, "需求标识");
+          const inserted = await client.query(
+            "INSERT INTO forgex_delivery_retry_preparations (dispatch_key, tenant_key, project_key, requirement_key, requirement_revision) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (dispatch_key) DO NOTHING RETURNING dispatch_key",
+            [
+              normalizedDispatchKey,
+              normalizedTenantKey,
+              normalizedProjectKey,
+              normalizedWorkKey,
+              requirementRevision,
+            ],
+          );
+          if (inserted.rows.length === 0) return false;
+          await client.query(
+            "DELETE FROM forgex_completed_delivery_work WHERE tenant_key = $1 AND project_key = $2 AND work_key = $3 AND requirement_revision = $4 AND work_kind = 'requirement_delivery'",
+            [
+              normalizedTenantKey,
+              normalizedProjectKey,
+              normalizedWorkKey,
+              requirementRevision,
+            ],
+          );
+          return true;
+        },
       };
 
       const result = await operation(transaction);

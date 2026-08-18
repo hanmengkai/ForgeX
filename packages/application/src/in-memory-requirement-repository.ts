@@ -74,6 +74,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
     const pendingAuditEvents: RequirementAuditEvent[] = [];
     const pendingDeliveryDispatches = new Map<string, DeliveryDispatchRecord>();
     const pendingDeliveryRunResults = new Map<string, DeliveryRunResult>();
+    const clearedTerminatedDeliveryResults = new Set<string>();
     const pendingDeliveryExecutionEvents = new Map<
       string,
       DeliveryExecutionEventRecord
@@ -324,10 +325,25 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           requirementKey.toLowerCase(),
           requirementRevision,
         );
+        if (clearedTerminatedDeliveryResults.has(key)) return null;
         const result =
           pendingDeliveryRunResults.get(key) ??
           this.#deliveryRunResults.get(key);
         return result ? structuredClone(result) : null;
+      },
+      clearTerminatedDeliveryResult: async (
+        requirementKey,
+        requirementRevision,
+      ) => {
+        const key = deliveryRunKey(
+          normalizedTenantKey,
+          normalizedProjectKey,
+          requirementKey.toLowerCase(),
+          requirementRevision,
+        );
+        clearedTerminatedDeliveryResults.add(key);
+        pendingDeliveryRunResults.delete(key);
+        pendingVerificationFailures.delete(key);
       },
       saveDeliveryRunResult: (run) => {
         const parsed = DeliveryRunResultSchema.parse(run);
@@ -447,6 +463,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
           requirementKey.toLowerCase(),
           requirementRevision,
         );
+        if (clearedTerminatedDeliveryResults.has(key)) return null;
         const record =
           pendingVerificationFailures.get(key) ??
           this.#verificationFailures.get(key);
@@ -497,6 +514,24 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       }
       for (const [key, run] of pendingDeliveryRunResults) {
         this.#deliveryRunResults.set(key, structuredClone(run));
+      }
+      for (const key of clearedTerminatedDeliveryResults) {
+        this.#deliveryRunResults.delete(key);
+        this.#verificationFailures.delete(key);
+        for (const [evidenceKey, evidence] of this.#verificationEvidence) {
+          if (
+            evidence.tenantKey === normalizedTenantKey &&
+            evidence.projectKey === normalizedProjectKey &&
+            deliveryRunKey(
+              evidence.tenantKey,
+              evidence.projectKey,
+              evidence.requirementKey,
+              evidence.requirementRevision,
+            ) === key
+          ) {
+            this.#verificationEvidence.delete(evidenceKey);
+          }
+        }
       }
       for (const [key, event] of pendingDeliveryExecutionEvents) {
         this.#deliveryExecutionEvents.set(key, structuredClone(event));
@@ -719,6 +754,7 @@ export class InMemoryRequirementRepository implements RequirementRepository {
       ...record,
       cancelledAt: record.cancelledAt ?? null,
       cancellationCompletedAt: record.cancellationCompletedAt ?? null,
+      retryOfDispatchKey: record.retryOfDispatchKey ?? null,
       requiredCapabilities: [...record.requiredCapabilities],
       skills: record.skills.map((skill) => ({ ...skill })),
     };

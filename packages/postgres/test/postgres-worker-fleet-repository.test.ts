@@ -53,6 +53,7 @@ const fakeDatabase = (options?: {
 }) => {
   const queries: RecordedQuery[] = [];
   let released = false;
+  let retryPrepared = false;
   const client: PostgresClient = {
     query: async (text, values) => {
       queries.push(values ? { text, values } : { text });
@@ -78,6 +79,11 @@ const fakeDatabase = (options?: {
               ]
             : [],
         };
+      }
+      if (text.includes("INSERT INTO forgex_delivery_retry_preparations")) {
+        if (retryPrepared) return { rows: [] };
+        retryPrepared = true;
+        return { rows: [{ dispatch_key: values?.[0] }] };
       }
       return { rows: [] };
     },
@@ -246,6 +252,37 @@ describe("PostgresWorkerFleetRepository", () => {
       proof.fencingToken,
       proof.completionDigest,
     ]);
+  });
+
+  it("同一重试派发只清理一次旧完成标记", async () => {
+    const database = fakeDatabase();
+    const repository = new PostgresWorkerFleetRepository(database.pool);
+    const retryDispatchKey = "55555555-5555-4555-8555-555555555555";
+
+    await repository.transaction(tenantKey, async (transaction) => {
+      await expect(
+        transaction.prepareRetry(
+          retryDispatchKey,
+          projectKey,
+          workKey,
+          2,
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        transaction.prepareRetry(
+          retryDispatchKey,
+          projectKey,
+          workKey,
+          2,
+        ),
+      ).resolves.toBe(false);
+    });
+
+    expect(
+      database.queries.filter((query) =>
+        query.text.startsWith("DELETE FROM forgex_completed_delivery_work"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("工作类型迁移兼容旧交付记录并把类型纳入唯一键", () => {

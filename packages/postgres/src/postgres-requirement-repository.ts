@@ -303,7 +303,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
           );
           if (pending) return this.#copyDispatch(pending);
           const result = await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4 ORDER BY requested_at DESC, dispatch_key DESC LIMIT 1",
+            "SELECT dispatch_key, retry_of_dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4 ORDER BY requested_at DESC, dispatch_key DESC LIMIT 1",
             [tenant, project, requirement, requirementRevision],
           );
           const row = result.rows[0];
@@ -320,6 +320,30 @@ export class PostgresRequirementRepository implements RequirementRepository {
           );
           const row = result.rows[0];
           return row ? this.#deliveryRunFromRow(row, tenant, project) : null;
+        },
+        clearTerminatedDeliveryResult: async (
+          requirementKey,
+          requirementRevision,
+        ) => {
+          const requirement = parseInternalKey(requirementKey, "需求标识");
+          const parameters = [
+            tenant,
+            project,
+            requirement,
+            requirementRevision,
+          ];
+          await client.query(
+            "DELETE FROM forgex_requirement_evidence WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            parameters,
+          );
+          await client.query(
+            "DELETE FROM forgex_verification_failures WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            parameters,
+          );
+          await client.query(
+            "DELETE FROM forgex_delivery_runs WHERE tenant_key = $1 AND project_key = $2 AND requirement_key = $3 AND requirement_revision = $4",
+            parameters,
+          );
         },
         saveDeliveryRunResult: (run) => {
           const parsed = DeliveryRunResultSchema.parse(run);
@@ -493,9 +517,10 @@ export class PostgresRequirementRepository implements RequirementRepository {
       }
       for (const dispatch of pendingDispatches.values()) {
         await client.query(
-          "INSERT INTO forgex_delivery_outbox (dispatch_key, tenant_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)",
+          "INSERT INTO forgex_delivery_outbox (dispatch_key, retry_of_dispatch_key, tenant_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)",
           [
             dispatch.dispatchKey,
+            dispatch.retryOfDispatchKey ?? null,
             tenant,
             project,
             dispatch.repositoryKey,
@@ -745,11 +770,11 @@ export class PostgresRequirementRepository implements RequirementRepository {
     return this.#withClient(async (client) => {
       const result = project
         ? await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND dispatched_at IS NULL AND cancelled_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $3",
+            "SELECT dispatch_key, retry_of_dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND project_key = $2 AND dispatched_at IS NULL AND cancelled_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $3",
             [tenant, project, limit],
           )
         : await client.query(
-            "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND dispatched_at IS NULL AND cancelled_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $2",
+            "SELECT dispatch_key, retry_of_dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND dispatched_at IS NULL AND cancelled_at IS NULL ORDER BY requested_at ASC, dispatch_key ASC LIMIT $2",
             [tenant, limit],
           );
       return result.rows.map((row) => this.#dispatchFromRow(row, tenant));
@@ -766,7 +791,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
     }
     return this.#withClient(async (client) => {
       const result = await client.query(
-        "SELECT dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND cancelled_at IS NOT NULL AND cancellation_completed_at IS NULL ORDER BY cancelled_at ASC, dispatch_key ASC LIMIT $2",
+        "SELECT dispatch_key, retry_of_dispatch_key, project_key, repository_key, requirement_key, requirement_revision, title, required_capabilities, skills, requested_at, dispatched_at, cancelled_at, cancellation_completed_at FROM forgex_delivery_outbox WHERE tenant_key = $1 AND cancelled_at IS NOT NULL AND cancellation_completed_at IS NULL ORDER BY cancelled_at ASC, dispatch_key ASC LIMIT $2",
         [tenant, limit],
       );
       return result.rows.map((row) => this.#dispatchFromRow(row, tenant));
@@ -916,6 +941,7 @@ export class PostgresRequirementRepository implements RequirementRepository {
       ...dispatch,
       cancelledAt: dispatch.cancelledAt ?? null,
       cancellationCompletedAt: dispatch.cancellationCompletedAt ?? null,
+      retryOfDispatchKey: dispatch.retryOfDispatchKey ?? null,
       requiredCapabilities: [...dispatch.requiredCapabilities],
       skills: dispatch.skills.map((skill) => ({ ...skill })),
     };
@@ -1010,6 +1036,12 @@ export class PostgresRequirementRepository implements RequirementRepository {
       throw new Error("需求事务不能写入无效的交付派发记录");
     }
     parseInternalKey(dispatch.dispatchKey, "派发标识");
+    if (dispatch.retryOfDispatchKey) {
+      parseInternalKey(dispatch.retryOfDispatchKey, "重试来源派发标识");
+      if (dispatch.retryOfDispatchKey === dispatch.dispatchKey) {
+        throw new Error("交付重试不能引用自身派发记录");
+      }
+    }
     parseInternalKey(dispatch.repositoryKey, "仓库标识");
     parseInternalKey(dispatch.requirementKey, "需求标识");
     const requestedAt = parseIsoDate(dispatch.requestedAt, "交付请求时间");
@@ -1108,6 +1140,14 @@ export class PostgresRequirementRepository implements RequirementRepository {
     }
     return {
       dispatchKey: parseInternalKey(String(row.dispatch_key), "派发标识"),
+      retryOfDispatchKey:
+        row.retry_of_dispatch_key === null ||
+        row.retry_of_dispatch_key === undefined
+          ? null
+          : parseInternalKey(
+              String(row.retry_of_dispatch_key),
+              "重试来源派发标识",
+            ),
       tenantKey,
       projectKey: parseInternalKey(String(row.project_key), "项目标识"),
       repositoryKey: parseInternalKey(String(row.repository_key), "仓库标识"),

@@ -33,6 +33,12 @@ export interface WorkerFleetTransaction {
     workKind?: DeliveryWorkKind,
     proof?: WorkerCompletionProof,
   ): Promise<void>;
+  prepareRetry(
+    dispatchKey: string,
+    projectKey: string,
+    workKey: string,
+    requirementRevision: number,
+  ): Promise<boolean>;
 }
 
 export interface WorkerFleetRepository {
@@ -59,6 +65,7 @@ export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
     string,
     Map<string, WorkerCompletionProof | null>
   >();
+  readonly #preparedRetryDispatchKeys = new Map<string, Set<string>>();
   readonly #tenantTails = new Map<string, Promise<void>>();
 
   async transaction<T>(
@@ -80,8 +87,12 @@ export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
     const pendingCompletedWorkKeys = new Map(
       this.#completedWorkKeys.get(normalizedTenantKey) ?? [],
     );
+    const pendingPreparedRetryDispatchKeys = new Set(
+      this.#preparedRetryDispatchKeys.get(normalizedTenantKey) ?? [],
+    );
     let changed = false;
     let completedWorkChanged = false;
+    let preparedRetryChanged = false;
     const transaction: WorkerFleetTransaction = {
       load: () => (pending ? copySnapshot(pending) : null),
       save: (snapshot) => {
@@ -127,6 +138,24 @@ export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
           completedWorkChanged = true;
         }
       },
+      prepareRetry: async (
+        dispatchKey,
+        projectKey,
+        workKey,
+        requirementRevision,
+      ) => {
+        const normalizedDispatchKey = dispatchKey.toLowerCase();
+        if (pendingPreparedRetryDispatchKeys.has(normalizedDispatchKey)) {
+          return false;
+        }
+        pendingPreparedRetryDispatchKeys.add(normalizedDispatchKey);
+        pendingCompletedWorkKeys.delete(
+          completedWorkKey(projectKey, workKey, requirementRevision),
+        );
+        completedWorkChanged = true;
+        preparedRetryChanged = true;
+        return true;
+      },
     };
 
     try {
@@ -138,6 +167,12 @@ export class InMemoryWorkerFleetRepository implements WorkerFleetRepository {
         this.#completedWorkKeys.set(
           normalizedTenantKey,
           new Map(pendingCompletedWorkKeys),
+        );
+      }
+      if (preparedRetryChanged) {
+        this.#preparedRetryDispatchKeys.set(
+          normalizedTenantKey,
+          new Set(pendingPreparedRetryDispatchKeys),
         );
       }
       return result;

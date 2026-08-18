@@ -46,6 +46,7 @@ export interface DeliveryDispatchRecord {
   dispatchedAt: string | null;
   cancelledAt?: string | null;
   cancellationCompletedAt?: string | null;
+  retryOfDispatchKey?: string | null;
 }
 
 export const DeliverySkillBindingSchema = z
@@ -295,6 +296,10 @@ export interface RequirementTransaction {
     requirementKey: string,
     requirementRevision: number,
   ): Promise<DeliveryRunResult | null>;
+  clearTerminatedDeliveryResult(
+    requirementKey: string,
+    requirementRevision: number,
+  ): Promise<void>;
   saveDeliveryRunResult(result: DeliveryRunResult): void;
   markDeliveryRunCompleted(
     requirementKey: string,

@@ -271,7 +271,24 @@ export class WorkerFleetService {
       dispatch.tenantKey,
       async (transaction) => {
         const fleet = this.#loadFleet(transaction, dispatch.tenantKey);
+        const retryPrepared = dispatch.retryOfDispatchKey
+          ? await transaction.prepareRetry(
+              dispatch.dispatchKey,
+              dispatch.projectKey,
+              dispatch.requirementKey,
+              dispatch.requirementRevision,
+            )
+          : false;
+        if (retryPrepared) {
+          fleet.queue.resetCompletedWork({
+            workKind: "requirement_delivery",
+            projectKey: dispatch.projectKey,
+            workKey: dispatch.requirementKey,
+            workRevision: dispatch.requirementRevision,
+          });
+        }
         if (
+          !retryPrepared &&
           await transaction.hasCompletedWork(
             dispatch.projectKey,
             dispatch.requirementKey,

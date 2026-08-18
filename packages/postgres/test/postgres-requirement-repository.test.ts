@@ -817,6 +817,36 @@ describe("PostgresRequirementRepository", () => {
     expect(migration).toContain("WHERE cancelled_at IS NULL");
   });
 
+  it("同版本重试迁移记录来源派发，并幂等登记旧完成标记清理", () => {
+    const migration = readFileSync(
+      new URL("../migrations/0025_delivery_retry_attempts.sql", import.meta.url),
+      "utf8",
+    );
+
+    expect(migration).toContain("retry_of_dispatch_key uuid");
+    expect(migration).toContain("forgex_delivery_retry_preparations");
+    expect(migration).toContain("dispatch_key uuid PRIMARY KEY");
+  });
+
+  it("重新发起前按外键顺序清理已终止版本的验证与运行结果", async () => {
+    const database = fakeDatabase();
+    const repository = new PostgresRequirementRepository(database.pool);
+
+    await repository.transaction(tenantKey, projectKey, (transaction) =>
+      transaction.clearTerminatedDeliveryResult(requirementKey, 1),
+    );
+
+    expect(
+      database.queries
+        .filter((query) => query.text.startsWith("DELETE FROM forgex_"))
+        .map((query) => query.text),
+    ).toEqual([
+      expect.stringContaining("forgex_requirement_evidence"),
+      expect.stringContaining("forgex_verification_failures"),
+      expect.stringContaining("forgex_delivery_runs"),
+    ]);
+  });
+
   it("过程事件以结构化 JSON 幂等写入，并按设备序号返回最近记录", async () => {
     const assignmentKey = "77777777-7777-4777-8777-777777777777";
     const firstEventKey = "88888888-8888-4888-8888-888888888888";

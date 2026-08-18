@@ -693,6 +693,27 @@ export class DeliveryQueue {
     return true;
   }
 
+  resetCompletedWork(input: {
+    workKind: DeliveryWorkKind;
+    projectKey: string;
+    workKey: string;
+    workRevision: number;
+  }): boolean {
+    let removed = false;
+    for (const [assignmentKey, completed] of this.#completed) {
+      if (
+        (completed.workKind ?? "requirement_delivery") === input.workKind &&
+        completed.projectKey === input.projectKey &&
+        completed.workKey === input.workKey &&
+        completed.requirementRevision === input.workRevision
+      ) {
+        this.#removeCompleted(assignmentKey);
+        removed = true;
+      }
+    }
+    return removed;
+  }
+
   dispatchForWorker(
     session: WorkerSession,
     now: Date,
