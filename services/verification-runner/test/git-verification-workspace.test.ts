@@ -117,6 +117,21 @@ describe("GitVerificationWorkspaceProvider", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   }, 15_000);
 
+  it("权威仓库尚未同步目标提交时返回可上报的明确阻塞", async () => {
+    const fixture = await repositoryFixture();
+    const provider = providerFor(fixture);
+
+    await expect(
+      provider.prepare({
+        repositoryKey: "30000000-0000-4000-8000-000000000003",
+        gitHashAlgorithm: "sha1",
+        commitSha: "f".repeat(40),
+      }),
+    ).rejects.toMatchObject({
+      reason: "delivery_commit_missing",
+    });
+  });
+
   it("忽略仓库内的 Git replace 引用并读取原始权威提交", async () => {
     const fixture = await repositoryFixture();
     await git(fixture.repositoryRoot, [

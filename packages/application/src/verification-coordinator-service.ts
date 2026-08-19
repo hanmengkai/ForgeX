@@ -79,7 +79,7 @@ export const RunnerVerificationBlockerCommandSchema = z
     schemaVersion: z.literal(1),
     requirementKey: internalKey,
     requirementRevision: z.number().int().positive().max(10_000),
-    reason: z.literal("trusted_plan_missing"),
+    reason: z.enum(["trusted_plan_missing", "delivery_commit_missing"]),
     reportedAt: z.iso.datetime(),
   })
   .strict();

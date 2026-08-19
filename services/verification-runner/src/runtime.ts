@@ -18,10 +18,12 @@ import {
 } from "./journal.js";
 import { RunnerControlPlaneClientError } from "./control-plane-client.js";
 import {
+  VerificationPreparationBlockedError,
   VerificationResultSchema,
   VerificationRunnerScopeSchema,
   VerificationRunnerTargetSchema,
   type VerificationEngine,
+  type VerificationPreparationBlockerReason,
   type VerificationRunnerScope,
   type VerificationRunnerTarget,
 } from "./model.js";
@@ -45,7 +47,7 @@ export interface VerificationRunnerControlPlane {
   ): Promise<void>;
   reportBlocker?(
     target: VerificationRunnerTarget,
-    reason: "trusted_plan_missing",
+    reason: VerificationPreparationBlockerReason,
     reportedAt: string,
   ): Promise<void>;
 }
@@ -73,7 +75,7 @@ export class VerificationRunnerRuntime {
   readonly #journalIntegrityKey: Uint8Array;
   readonly #maxArtifactRecoveryAgeMs: number;
   #running = false;
-  readonly #reportedMissingPlanTargets = new Set<string>();
+  readonly #reportedBlockedTargets = new Set<string>();
 
   constructor(options: VerificationRunnerRuntimeOptions) {
     this.#scope = VerificationRunnerScopeSchema.parse(options.scope);
@@ -104,7 +106,11 @@ export class VerificationRunnerRuntime {
 
   async runOnce(): Promise<
     | { kind: "idle" }
-    | { kind: "blocked"; title: string }
+    | {
+        kind: "blocked";
+        title: string;
+        reason: VerificationPreparationBlockerReason;
+      }
     | { kind: "verification_failed"; title: string }
     | { kind: "submitted"; title: string }
   > {
@@ -121,7 +127,11 @@ export class VerificationRunnerRuntime {
 
   async #runOnce(): Promise<
     | { kind: "idle" }
-    | { kind: "blocked"; title: string }
+    | {
+        kind: "blocked";
+        title: string;
+        reason: VerificationPreparationBlockerReason;
+      }
     | { kind: "verification_failed"; title: string }
     | { kind: "submitted"; title: string }
   > {
@@ -152,21 +162,40 @@ export class VerificationRunnerRuntime {
     }
     for (const blockedTarget of blockedTargets) {
       const identity = `${blockedTarget.requirementKey}:${blockedTarget.requirementRevision}:${blockedTarget.commitSha}`;
-      if (!this.#reportedMissingPlanTargets.has(identity)) {
+      if (!this.#reportedBlockedTargets.has(identity)) {
         await this.#controlPlane.reportBlocker?.(
           blockedTarget,
           "trusted_plan_missing",
           this.#now().toISOString(),
         );
-        this.#reportedMissingPlanTargets.add(identity);
+        this.#reportedBlockedTargets.add(identity);
       }
     }
     if (!target) {
-      return { kind: "blocked", title: blockedTargets[0]!.title };
+      return {
+        kind: "blocked",
+        title: blockedTargets[0]!.title,
+        reason: "trusted_plan_missing",
+      };
     }
-    const verification = VerificationResultSchema.parse(
-      await this.#verifier.verify(target),
-    );
+    let verification: ReturnType<typeof VerificationResultSchema.parse>;
+    try {
+      verification = VerificationResultSchema.parse(
+        await this.#verifier.verify(target),
+      );
+    } catch (error) {
+      if (!(error instanceof VerificationPreparationBlockedError)) throw error;
+      const identity = `${target.requirementKey}:${target.requirementRevision}:${target.commitSha}:${error.reason}`;
+      if (!this.#reportedBlockedTargets.has(identity)) {
+        await this.#controlPlane.reportBlocker?.(
+          target,
+          error.reason,
+          this.#now().toISOString(),
+        );
+        this.#reportedBlockedTargets.add(identity);
+      }
+      return { kind: "blocked", title: target.title, reason: error.reason };
+    }
     this.#assertChecks(
       target,
       verification.checks,

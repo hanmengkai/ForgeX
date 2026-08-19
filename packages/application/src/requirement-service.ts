@@ -355,10 +355,15 @@ const requirementProgress = (input: {
   }
 
   if (input.status === "inDelivery" && input.verificationBlocker) {
-    currentStage = "等待可信验证计划";
+    currentStage =
+      input.verificationBlocker.code === "trusted_plan_missing"
+        ? "等待可信验证计划"
+        : "等待交付提交同步";
     updatedAt = input.verificationBlocker.reportedAt;
     details.verification =
-      "当前交付提交没有匹配的可信验证计划，请配置后等待 Runner 自动继续";
+      input.verificationBlocker.code === "trusted_plan_missing"
+        ? "当前交付提交没有匹配的可信验证计划，请配置后等待 Runner 自动继续"
+        : "独立 Runner 尚未读取到当前交付提交，请完成可信提交同步后等待自动继续";
   }
 
   if (input.verificationFailed) {

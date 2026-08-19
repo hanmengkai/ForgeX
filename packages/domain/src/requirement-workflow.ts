@@ -119,7 +119,7 @@ export interface RequirementEvidenceSnapshot {
 }
 
 export interface RequirementVerificationBlocker {
-  code: "trusted_plan_missing";
+  code: "trusted_plan_missing" | "delivery_commit_missing";
   runnerKey: string;
   keyId: string;
   reportedAt: string;
@@ -366,7 +366,9 @@ export class RequirementWorkflow {
       );
     }
     if (
-      input.code !== "trusted_plan_missing" ||
+      !["trusted_plan_missing", "delivery_commit_missing"].includes(
+        input.code,
+      ) ||
       !internalKeyPattern.test(input.runnerKey) ||
       !internalKeyPattern.test(input.keyId) ||
       !Number.isFinite(Date.parse(input.reportedAt))
@@ -1469,7 +1471,9 @@ export class RequirementWorkflow {
     const blocker = snapshot.verificationBlocker ?? null;
     if (
       blocker !== null &&
-      (blocker.code !== "trusted_plan_missing" ||
+      (!["trusted_plan_missing", "delivery_commit_missing"].includes(
+        blocker.code,
+      ) ||
         !internalKeyPattern.test(blocker.runnerKey) ||
         !internalKeyPattern.test(blocker.keyId) ||
         !Number.isFinite(Date.parse(blocker.reportedAt)) ||

@@ -9,6 +9,7 @@ import {
 
 import {
   VerificationRunnerTargetSchema,
+  type VerificationPreparationBlockerReason,
   type VerificationRunnerTarget,
 } from "./model.js";
 
@@ -279,7 +280,7 @@ export class RunnerControlPlaneClient {
 
   async reportBlocker(
     targetInput: VerificationRunnerTarget,
-    reason: "trusted_plan_missing",
+    reason: VerificationPreparationBlockerReason,
     reportedAt: string,
   ): Promise<void> {
     const target = VerificationRunnerTargetSchema.parse(targetInput);

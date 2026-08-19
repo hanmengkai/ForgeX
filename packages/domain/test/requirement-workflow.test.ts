@@ -560,6 +560,24 @@ describe("RequirementWorkflow", () => {
     ).toEqual(requirement.toSnapshot().verificationBlocker);
   });
 
+  it("交付提交缺失时把同步阻塞持久化在当前交付版本", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+
+    requirement.recordVerificationBlocker({
+      code: "delivery_commit_missing",
+      runnerKey,
+      keyId: runnerKeyId,
+      reportedAt: fixedNow.toISOString(),
+    });
+
+    expect(requirement.toSnapshot().verificationBlocker).toMatchObject({
+      code: "delivery_commit_missing",
+      reportedAt: fixedNow.toISOString(),
+    });
+  });
+
   it("验收完成后给出清晰结果", () => {
     const requirement = createRequirement();
     confirmRequirement(requirement);

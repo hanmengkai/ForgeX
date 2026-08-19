@@ -334,6 +334,40 @@ describe("独立验证 Runner API", () => {
     await app.close();
   });
 
+  it("接收 Runner 的交付提交缺失报告并展示同步阻塞", async () => {
+    const { app, run } = await arrange();
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/runner/verification-targets/${run.requirementKey}/blocker`,
+      headers: { authorization: "Runner runner-session" },
+      payload: {
+        schemaVersion: 1,
+        requirementKey: run.requirementKey,
+        requirementRevision: run.requirementRevision,
+        reason: "delivery_commit_missing",
+        reportedAt: "2026-08-11T03:00:00.000Z",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/v1/requirements/${run.requirementKey}`,
+      headers: { authorization: "Bearer owner-session" },
+    });
+    expect(detail.json().data.progress).toMatchObject({
+      currentStage: "等待交付提交同步",
+      stages: expect.arrayContaining([
+        expect.objectContaining({
+          key: "verification",
+          detail:
+            "独立 Runner 尚未读取到当前交付提交，请完成可信提交同步后等待自动继续",
+        }),
+      ]),
+    });
+    await app.close();
+  });
+
   it("通过 Runner 专用路由持久上报失败并移出待验证队列", async () => {
     const { app, workflow, run } = await arrange();
     const criterionKey =

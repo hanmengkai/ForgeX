@@ -94,6 +94,23 @@ export interface VerificationEngine {
   verify(target: VerificationRunnerTarget): Promise<VerificationResult>;
 }
 
+export type VerificationPreparationBlockerReason =
+  "trusted_plan_missing" | "delivery_commit_missing";
+
+export class VerificationPreparationBlockedError extends Error {
+  readonly reason: VerificationPreparationBlockerReason;
+
+  constructor(reason: VerificationPreparationBlockerReason) {
+    super(
+      reason === "trusted_plan_missing"
+        ? "当前权威提交没有配置可信验证计划"
+        : "Runner 尚未读取到当前交付提交",
+    );
+    this.name = "VerificationPreparationBlockedError";
+    this.reason = reason;
+  }
+}
+
 export interface VerificationRunnerScope {
   tenantKey: string;
   projectKey: string;

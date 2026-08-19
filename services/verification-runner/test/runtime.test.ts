@@ -8,6 +8,7 @@ import {
   Ed25519RunnerEvidenceSigner,
   InMemoryVerificationJournal,
   RunnerControlPlaneClientError,
+  VerificationPreparationBlockedError,
   VerificationRunnerRuntime,
   verificationArtifactEntry,
   type VerificationRunnerTarget,
@@ -155,10 +156,49 @@ describe("VerificationRunnerRuntime", () => {
     await expect(runtime.runOnce()).resolves.toEqual({
       kind: "blocked",
       title: target.title,
+      reason: "trusted_plan_missing",
     });
     expect(controlPlane.reportBlocker).toHaveBeenCalledWith(
       target,
       "trusted_plan_missing",
+      "2026-08-11T03:01:00.000Z",
+    );
+  });
+
+  it("交付提交尚未同步时向控制面报告明确阻塞，而不是无限重试", async () => {
+    const { signer } = signerFixture();
+    const controlPlane = {
+      listPending: vi.fn(async () => [target]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
+      reportBlocker: vi.fn(async () => Promise.resolve()),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: runnerScope,
+      controlPlane,
+      verifier: {
+        canVerify: vi.fn(async () => true),
+        verify: vi.fn(async () => {
+          throw new VerificationPreparationBlockedError(
+            "delivery_commit_missing",
+          );
+        }),
+      },
+      signer,
+      journal: new InMemoryVerificationJournal(),
+      journalIntegrityKey,
+      clock: () => new Date("2026-08-11T03:01:00.000Z"),
+    });
+
+    await expect(runtime.runOnce()).resolves.toEqual({
+      kind: "blocked",
+      title: target.title,
+      reason: "delivery_commit_missing",
+    });
+    expect(controlPlane.reportBlocker).toHaveBeenCalledWith(
+      target,
+      "delivery_commit_missing",
       "2026-08-11T03:01:00.000Z",
     );
   });

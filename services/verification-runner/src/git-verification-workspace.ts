@@ -17,6 +17,7 @@ import type {
   PreparedVerificationWorkspace,
   VerificationWorkspaceProvider,
 } from "./verification-engine.js";
+import { VerificationPreparationBlockedError } from "./model.js";
 import {
   assertDefaultWindowsTrustedPath,
   assertTrustedExecutable,
@@ -286,11 +287,17 @@ export class GitVerificationWorkspaceProvider implements VerificationWorkspacePr
       if (objectFormat !== reference.gitHashAlgorithm) {
         throw new Error("Runner 权威仓库的 Git 摘要算法与任务不一致");
       }
-      await this.#git(repositoryRoot, hooksPath, [
-        "cat-file",
-        "-e",
-        `${reference.commitSha}^{commit}`,
-      ]);
+      try {
+        await this.#git(repositoryRoot, hooksPath, [
+          "cat-file",
+          "-e",
+          `${reference.commitSha}^{commit}`,
+        ]);
+      } catch {
+        throw new VerificationPreparationBlockedError(
+          "delivery_commit_missing",
+        );
+      }
     } catch (error) {
       await rm(hooksPath, { recursive: true, force: true });
       throw error;
