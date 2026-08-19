@@ -294,6 +294,46 @@ describe("独立验证 Runner API", () => {
     await app.close();
   });
 
+  it("接收 Runner 的缺计划报告并在需求进度中立即展示", async () => {
+    const { app, run } = await arrange();
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/runner/verification-targets/${run.requirementKey}/blocker`,
+      headers: { authorization: "Runner runner-session" },
+      payload: {
+        schemaVersion: 1,
+        requirementKey: run.requirementKey,
+        requirementRevision: run.requirementRevision,
+        reason: "trusted_plan_missing",
+        reportedAt: "2026-08-11T03:00:00.000Z",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: {
+        status: "verification_blocked_recorded",
+        requirementRevision: 1,
+      },
+    });
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/v1/requirements/${run.requirementKey}`,
+      headers: { authorization: "Bearer owner-session" },
+    });
+    expect(detail.json().data.progress).toMatchObject({
+      currentStage: "等待可信验证计划",
+      stages: expect.arrayContaining([
+        expect.objectContaining({
+          key: "verification",
+          detail:
+            "当前交付提交没有匹配的可信验证计划，请配置后等待 Runner 自动继续",
+        }),
+      ]),
+    });
+    await app.close();
+  });
+
   it("通过 Runner 专用路由持久上报失败并移出待验证队列", async () => {
     const { app, workflow, run } = await arrange();
     const criterionKey =

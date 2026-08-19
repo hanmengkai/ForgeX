@@ -41,6 +41,12 @@ export interface VerificationRunnerControlPlane {
     target: VerificationRunnerTarget,
     checks: EvidenceCheck[],
     verificationCompletedAt: string,
+    manualCriterionKeys?: string[],
+  ): Promise<void>;
+  reportBlocker?(
+    target: VerificationRunnerTarget,
+    reason: "trusted_plan_missing",
+    reportedAt: string,
   ): Promise<void>;
 }
 
@@ -67,6 +73,7 @@ export class VerificationRunnerRuntime {
   readonly #journalIntegrityKey: Uint8Array;
   readonly #maxArtifactRecoveryAgeMs: number;
   #running = false;
+  readonly #reportedMissingPlanTargets = new Set<string>();
 
   constructor(options: VerificationRunnerRuntimeOptions) {
     this.#scope = VerificationRunnerScopeSchema.parse(options.scope);
@@ -97,6 +104,7 @@ export class VerificationRunnerRuntime {
 
   async runOnce(): Promise<
     | { kind: "idle" }
+    | { kind: "blocked"; title: string }
     | { kind: "verification_failed"; title: string }
     | { kind: "submitted"; title: string }
   > {
@@ -113,6 +121,7 @@ export class VerificationRunnerRuntime {
 
   async #runOnce(): Promise<
     | { kind: "idle" }
+    | { kind: "blocked"; title: string }
     | { kind: "verification_failed"; title: string }
     | { kind: "submitted"; title: string }
   > {
@@ -130,6 +139,7 @@ export class VerificationRunnerRuntime {
     );
     parsedTargets.forEach((candidate) => this.#assertTargetScope(candidate));
     let target: VerificationRunnerTarget | undefined;
+    const blockedTargets: VerificationRunnerTarget[] = [];
     for (const candidate of parsedTargets) {
       if (
         !this.#verifier.canVerify ||
@@ -138,27 +148,57 @@ export class VerificationRunnerRuntime {
         target = candidate;
         break;
       }
+      blockedTargets.push(candidate);
     }
-    if (!target) return { kind: "idle" };
+    for (const blockedTarget of blockedTargets) {
+      const identity = `${blockedTarget.requirementKey}:${blockedTarget.requirementRevision}:${blockedTarget.commitSha}`;
+      if (!this.#reportedMissingPlanTargets.has(identity)) {
+        await this.#controlPlane.reportBlocker?.(
+          blockedTarget,
+          "trusted_plan_missing",
+          this.#now().toISOString(),
+        );
+        this.#reportedMissingPlanTargets.add(identity);
+      }
+    }
+    if (!target) {
+      return { kind: "blocked", title: blockedTargets[0]!.title };
+    }
     const verification = VerificationResultSchema.parse(
       await this.#verifier.verify(target),
     );
-    this.#assertChecks(target, verification.checks);
+    this.#assertChecks(
+      target,
+      verification.checks,
+      verification.manualCriterionKeys,
+    );
     if (verification.checks.some((check) => check.status !== "passed")) {
       const failedEntry = verificationFailureEntry({
         scope: this.#scope,
         target,
         checks: verification.checks,
+        ...(verification.manualCriterionKeys
+          ? { manualCriterionKeys: verification.manualCriterionKeys }
+          : {}),
         verificationCompletedAt: this.#now().toISOString(),
         integrityKey: this.#journalIntegrityKey,
       });
       await this.#journal.saveFailure(failedEntry);
       try {
-        await this.#controlPlane.reportFailure(
-          target,
-          verification.checks,
-          failedEntry.verificationCompletedAt,
-        );
+        if (verification.manualCriterionKeys) {
+          await this.#controlPlane.reportFailure(
+            target,
+            verification.checks,
+            failedEntry.verificationCompletedAt,
+            verification.manualCriterionKeys,
+          );
+        } else {
+          await this.#controlPlane.reportFailure(
+            target,
+            verification.checks,
+            failedEntry.verificationCompletedAt,
+          );
+        }
       } catch (error) {
         if (!this.#isTerminalJournalConflict(error)) throw error;
       }
@@ -177,6 +217,9 @@ export class VerificationRunnerRuntime {
       artifact: verification.artifact,
       artifactHash,
       checks: verification.checks,
+      ...(verification.manualCriterionKeys
+        ? { manualCriterionKeys: verification.manualCriterionKeys }
+        : {}),
       verificationCompletedAt,
       integrityKey: this.#journalIntegrityKey,
     });
@@ -187,7 +230,7 @@ export class VerificationRunnerRuntime {
   async #resume(entry: VerificationJournalEntry) {
     this.#assertTargetScope(entry.target);
     if (entry.stage === "verification_failed") {
-      this.#assertChecks(entry.target, entry.checks);
+      this.#assertChecks(entry.target, entry.checks, entry.manualCriterionKeys);
       if (entry.checks.every((check) => check.status === "passed")) {
         throw new Error("Runner 失败恢复日志没有包含未通过结果");
       }
@@ -201,11 +244,20 @@ export class VerificationRunnerRuntime {
         return { kind: "idle" as const };
       }
       try {
-        await this.#controlPlane.reportFailure(
-          entry.target,
-          entry.checks,
-          entry.verificationCompletedAt,
-        );
+        if (entry.manualCriterionKeys) {
+          await this.#controlPlane.reportFailure(
+            entry.target,
+            entry.checks,
+            entry.verificationCompletedAt,
+            entry.manualCriterionKeys,
+          );
+        } else {
+          await this.#controlPlane.reportFailure(
+            entry.target,
+            entry.checks,
+            entry.verificationCompletedAt,
+          );
+        }
       } catch (error) {
         if (!this.#isTerminalJournalConflict(error)) throw error;
       }
@@ -292,6 +344,9 @@ export class VerificationRunnerRuntime {
       artifactHashAlgorithm: "sha256",
       artifactHash: entry.artifactHash,
       checks: entry.checks,
+      ...(entry.manualCriterionKeys
+        ? { manualCriterionKeys: entry.manualCriterionKeys }
+        : {}),
     });
     const signedEvidence = await this.#signer.sign(payload);
     const signedEntry = verificationSignedEntry({
@@ -365,7 +420,9 @@ export class VerificationRunnerRuntime {
       payload.keyId !== this.#scope.keyId ||
       payload.artifactHashAlgorithm !== "sha256" ||
       payload.artifactHash !== entry.artifactHash ||
-      JSON.stringify(payload.checks) !== JSON.stringify(entry.checks)
+      JSON.stringify(payload.checks) !== JSON.stringify(entry.checks) ||
+      JSON.stringify(payload.manualCriterionKeys ?? []) !==
+        JSON.stringify(entry.manualCriterionKeys ?? [])
     ) {
       throw new Error("Runner 已签名恢复日志与权威任务或 Preview 制品不一致");
     }
@@ -374,15 +431,22 @@ export class VerificationRunnerRuntime {
   #assertChecks(
     target: VerificationRunnerTarget,
     checks: EvidenceCheck[],
+    manualCriterionKeys: string[] = [],
   ): void {
     const expected = new Set(
       target.acceptanceCriteria.map((criterion) => criterion.criterionKey),
     );
     const actual = new Set(checks.map((check) => check.criterionKey));
+    const manual = new Set(manualCriterionKeys);
     if (
-      expected.size !== checks.length ||
+      expected.size !== checks.length + manualCriterionKeys.length ||
       actual.size !== checks.length ||
-      [...expected].some((criterionKey) => !actual.has(criterionKey))
+      manual.size !== manualCriterionKeys.length ||
+      [...actual].some((criterionKey) => manual.has(criterionKey)) ||
+      [...expected].some(
+        (criterionKey) =>
+          !actual.has(criterionKey) && !manual.has(criterionKey),
+      )
     ) {
       throw new Error("Runner 验证结果没有逐项覆盖当前验收条件");
     }

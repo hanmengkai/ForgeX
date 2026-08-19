@@ -258,6 +258,9 @@ const requirementProgress = (input: {
   dispatch: DeliveryDispatchRecord | null;
   run: import("./requirement-repository.js").DeliveryRunResult | null;
   verificationFailed: boolean;
+  verificationBlocker: ReturnType<
+    RequirementWorkflow["toSnapshot"]
+  >["verificationBlocker"];
   acceptance: RequirementAcceptanceView | null;
 }): RequirementProgressView => {
   const details: Record<RequirementProgressStageKey, string> = {
@@ -349,6 +352,13 @@ const requirementProgress = (input: {
     currentStage = "独立验证等待处理";
     details.verification =
       "长时间未收到可信验证结果，请检查验收计划；可强制终止后调整并重新发起";
+  }
+
+  if (input.status === "inDelivery" && input.verificationBlocker) {
+    currentStage = "等待可信验证计划";
+    updatedAt = input.verificationBlocker.reportedAt;
+    details.verification =
+      "当前交付提交没有匹配的可信验证计划，请配置后等待 Runner 自动继续";
   }
 
   if (input.verificationFailed) {
@@ -927,6 +937,7 @@ export class RequirementApplicationService {
             ),
           ]);
         const acceptance = record.workflow.toAcceptanceView();
+        const workflowSnapshot = record.workflow.toSnapshot();
         return {
           requirementKey: record.requirementKey,
           repositoryKey: record.repositoryKey ?? null,
@@ -936,12 +947,13 @@ export class RequirementApplicationService {
           acceptance,
           revisions: record.workflow.listRevisionsForPeople(),
           progress: requirementProgress({
-            status: record.workflow.toSnapshot().status,
+            status: workflowSnapshot.status,
             createdAt: record.createdAt,
             now: this.#clock(),
             dispatch,
             run,
             verificationFailed: verificationFailure !== null,
+            verificationBlocker: workflowSnapshot.verificationBlocker ?? null,
             acceptance,
           }),
           executionEvents:

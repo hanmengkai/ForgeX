@@ -69,7 +69,10 @@ export interface RequirementDetail extends RequirementListItem {
   acceptance: {
     verifiedBy: string;
     verifiedAt: string;
-    checks: Array<{ title: string; status: "已通过" }>;
+    checks: Array<{
+      title: string;
+      status: "已通过" | "待产品验收" | "产品已验收";
+    }>;
   } | null;
   revisions: RequirementRevision[];
   progress?: RequirementProgress | undefined;
@@ -989,7 +992,7 @@ const requirementDetailResponseSchema = z
                 z
                   .object({
                     title: z.string().trim().min(2).max(150),
-                    status: z.literal("已通过"),
+                    status: z.enum(["已通过", "待产品验收", "产品已验收"]),
                   })
                   .strict(),
               )

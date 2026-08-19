@@ -73,6 +73,8 @@ try {
         process.stdout.write(`独立验证已提交：${result.title}\n`);
       } else if (result.kind === "verification_failed") {
         process.stdout.write(`独立验证未通过：${result.title}\n`);
+      } else if (result.kind === "blocked") {
+        process.stdout.write(`等待可信验证计划：${result.title}\n`);
       }
     },
     onError: () => {

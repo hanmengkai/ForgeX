@@ -131,6 +131,45 @@ describe("RunnerControlPlaneClient", () => {
     await expect(client.submitEvidence(evidence)).resolves.toBeUndefined();
   });
 
+  it("把缺少可信计划作为显式阻塞上报控制面", async () => {
+    const fetch = vi.fn(async (_input, init) => {
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        schemaVersion: 1,
+        requirementKey: target.requirementKey,
+        requirementRevision: target.requirementRevision,
+        reason: "trusted_plan_missing",
+        reportedAt: "2026-08-19T02:00:00.000Z",
+      });
+      return new Response(
+        JSON.stringify({
+          data: {
+            status: "verification_blocked_recorded",
+            requirementRevision: target.requirementRevision,
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const client = new RunnerControlPlaneClient({
+      baseUrl: "https://control.example.test",
+      sessionKey: "runner-session-secret",
+      fetch,
+    });
+
+    await expect(
+      client.reportBlocker(
+        target,
+        "trusted_plan_missing",
+        "2026-08-19T02:00:00.000Z",
+      ),
+    ).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith(
+      `https://control.example.test/api/v1/runner/verification-targets/${target.requirementKey}/blocker`,
+      expect.any(Object),
+    );
+  });
+
   it("响应结构漂移时使用固定本地错误，不透传远端敏感文本", async () => {
     const client = new RunnerControlPlaneClient({
       baseUrl: "https://control.example.test",

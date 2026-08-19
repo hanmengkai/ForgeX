@@ -85,7 +85,10 @@ const createVerifiedEvidence = (
     producedAt: fixedNow.toISOString(),
     artifactHashAlgorithm: target.artifactHashAlgorithm,
     artifactHash: target.artifactHash,
-    checks: (options.onlyFirstCriterion ? allChecks.slice(0, 1) : allChecks).filter(
+    checks: (options.onlyFirstCriterion
+      ? allChecks.slice(0, 1)
+      : allChecks
+    ).filter(
       (_check, index) => !options.manualCriterionIndexes?.includes(index),
     ),
     ...(options.manualCriterionIndexes
@@ -519,12 +522,14 @@ describe("RequirementWorkflow", () => {
       "1 / 2 项独立验证通过，1 项待产品验收",
     );
     expect(requirement.toAcceptanceView()?.checks).toEqual([
-      { title: "访客可以提交预约", status: "独立验证通过" },
+      { title: "访客可以提交预约", status: "已通过" },
       { title: "业主可以确认预约", status: "待产品验收" },
     ]);
 
     requirement.accept({ actor });
-    expect(requirement.toPeopleView().acceptanceProgress).toBe("2 / 2 项已验收");
+    expect(requirement.toPeopleView().acceptanceProgress).toBe(
+      "2 / 2 项已验收",
+    );
     expect(requirement.toAcceptanceView()?.checks.at(-1)).toEqual({
       title: "业主可以确认预约",
       status: "产品已验收",
@@ -550,8 +555,7 @@ describe("RequirementWorkflow", () => {
       reportedAt: fixedNow.toISOString(),
     });
     expect(
-      RequirementWorkflow.fromSnapshot(requirement.toSnapshot())
-        .toSnapshot()
+      RequirementWorkflow.fromSnapshot(requirement.toSnapshot()).toSnapshot()
         .verificationBlocker,
     ).toEqual(requirement.toSnapshot().verificationBlocker);
   });

@@ -183,10 +183,12 @@ export {
 export {
   AuthenticatedRunnerSchema,
   RunnerPreviewArtifactCommandSchema,
+  RunnerVerificationBlockerCommandSchema,
   RunnerVerificationFailureCommandSchema,
   VerificationCoordinatorService,
   type AuthenticatedRunner,
   type RunnerPreviewArtifactCommand,
+  type RunnerVerificationBlockerCommand,
   type RunnerVerificationFailureCommand,
   type RunnerSessionAuthenticator,
   type VerificationCoordinatorServiceOptions,

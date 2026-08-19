@@ -24,6 +24,7 @@ import {
   RequirementApplicationService,
   InMemoryExecutionLogStore,
   AuthenticatedRunnerSchema,
+  RunnerVerificationBlockerCommandSchema,
   RunnerVerificationFailureCommandSchema,
   VerificationCoordinatorService,
   SkillRegistryApplicationService,
@@ -1909,6 +1910,30 @@ export const buildControlPlaneApi = (
         artifactHash: body.data.artifactHash,
         content,
       });
+      return reply.send({ data: result });
+    },
+  );
+
+  app.post(
+    "/api/v1/runner/verification-targets/:requirementKey/blocker",
+    async (request, reply) => {
+      const runner = runnerConnectionFrom(request);
+      const params = requirementParamsSchema.safeParse(request.params);
+      const body = RunnerVerificationBlockerCommandSchema.safeParse(
+        request.body,
+      );
+      if (
+        !params.success ||
+        !body.success ||
+        params.data.requirementKey !== body.data.requirementKey
+      ) {
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "验证计划阻塞结果需要调整",
+        );
+      }
+      const result = await verifications.reportBlocker(runner, body.data);
       return reply.send({ data: result });
     },
   );

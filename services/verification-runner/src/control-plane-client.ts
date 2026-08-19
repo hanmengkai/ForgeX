@@ -89,6 +89,17 @@ const failureResponseSchema = z
   })
   .strict();
 
+const blockerResponseSchema = z
+  .object({
+    data: z
+      .object({
+        status: z.literal("verification_blocked_recorded"),
+        requirementRevision: z.number().int().positive().max(10_000),
+      })
+      .strict(),
+  })
+  .strict();
+
 const errorResponseSchema = z
   .object({
     error: z.object({ code: z.string().trim().min(1).max(100) }).passthrough(),
@@ -226,6 +237,7 @@ export class RunnerControlPlaneClient {
     targetInput: VerificationRunnerTarget,
     checksInput: EvidenceCheck[],
     verificationCompletedAt: string,
+    manualCriterionKeys?: string[],
   ): Promise<void> {
     const target = VerificationRunnerTargetSchema.parse(targetInput);
     const checks = z
@@ -244,9 +256,46 @@ export class RunnerControlPlaneClient {
           requirementRevision: target.requirementRevision,
           verificationCompletedAt: completedAt,
           checks,
+          ...(manualCriterionKeys
+            ? {
+                manualCriterionKeys: z
+                  .array(z.string().uuid())
+                  .max(80)
+                  .parse(manualCriterionKeys),
+              }
+            : {}),
         }),
       },
       failureResponseSchema,
+    );
+    if (response.data.requirementRevision !== target.requirementRevision) {
+      throw new RunnerControlPlaneClientError(
+        502,
+        "invalid_response",
+        "控制面返回了不一致的需求版本",
+      );
+    }
+  }
+
+  async reportBlocker(
+    targetInput: VerificationRunnerTarget,
+    reason: "trusted_plan_missing",
+    reportedAt: string,
+  ): Promise<void> {
+    const target = VerificationRunnerTargetSchema.parse(targetInput);
+    const response = await this.#request(
+      `/api/v1/runner/verification-targets/${target.requirementKey}/blocker`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          schemaVersion: 1,
+          requirementKey: target.requirementKey,
+          requirementRevision: target.requirementRevision,
+          reason,
+          reportedAt: z.iso.datetime().parse(reportedAt),
+        }),
+      },
+      blockerResponseSchema,
     );
     if (response.data.requirementRevision !== target.requirementRevision) {
       throw new RunnerControlPlaneClientError(

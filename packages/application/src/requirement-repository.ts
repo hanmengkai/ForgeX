@@ -24,6 +24,7 @@ export type RequirementAuditAction =
   | "delivery.terminated"
   | "delivery.completed"
   | "verification.preview_recorded"
+  | "verification.blocked"
   | "verification.failed"
   | "verification.completed";
 
@@ -197,6 +198,7 @@ export const VerificationFailureRecordSchema = z
     keyId: deliveryInternalKey,
     verificationCompletedAt: z.iso.datetime(),
     checks: z.array(EvidenceCheckSchema).min(1).max(80),
+    manualCriterionKeys: z.array(deliveryInternalKey).max(80).optional(),
     recordedAt: z.iso.datetime(),
   })
   .strict()
@@ -216,6 +218,18 @@ export const VerificationFailureRecordSchema = z
         code: "custom",
         path: ["checks"],
         message: "失败验证记录不能重复验收条件",
+      });
+    }
+    const automatic = new Set(record.checks.map((check) => check.criterionKey));
+    if (
+      new Set(record.manualCriterionKeys ?? []).size !==
+        (record.manualCriterionKeys?.length ?? 0) ||
+      record.manualCriterionKeys?.some((key) => automatic.has(key))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["manualCriterionKeys"],
+        message: "人工验收条件不能与失败验证结果重复",
       });
     }
   });

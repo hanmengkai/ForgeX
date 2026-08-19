@@ -163,6 +163,7 @@ export const VerificationSuitePlanSchema = z
     commitSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u),
     preview: z.object({ entryPath: previewEntryPath }).strict(),
     suites: z.array(suitePlanSchema).min(1).max(50),
+    manualCriterionKeys: z.array(z.string().uuid()).max(80).optional(),
   })
   .strict()
   .superRefine((plan, context) => {
@@ -177,6 +178,16 @@ export const VerificationSuitePlanSchema = z
       }
       suiteKeys.add(suite.suiteKey);
     });
+    if (
+      plan.manualCriterionKeys &&
+      new Set(plan.manualCriterionKeys).size !== plan.manualCriterionKeys.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["manualCriterionKeys"],
+        message: "验证计划不能重复声明人工验收条件",
+      });
+    }
   });
 
 export type VerificationSuitePlan = z.infer<typeof VerificationSuitePlanSchema>;
@@ -398,9 +409,11 @@ export const assertVerificationSuitePlanTarget = (
     target.acceptanceCriteria.map((criterion) => criterion.criterionKey),
   );
   const covered = new Set(plan.suites.flatMap((suite) => suite.criterionKeys));
+  const manual = new Set(plan.manualCriterionKeys ?? []);
   if (
-    covered.size !== expected.size ||
-    [...covered].some((criterionKey) => !expected.has(criterionKey))
+    [...covered].some((criterionKey) => manual.has(criterionKey)) ||
+    covered.size + manual.size !== expected.size ||
+    [...covered, ...manual].some((criterionKey) => !expected.has(criterionKey))
   ) {
     throw new Error("验证套件计划没有逐项绑定全部验收条件");
   }
@@ -542,32 +555,40 @@ export class FixedSuiteVerificationEngine implements VerificationEngine {
               entryPath: plan.preview.entryPath,
             })
           : renderPreview(target, renderedSuites),
-        checks: target.acceptanceCriteria.map((criterion) => {
-          const covering = plan.suites.filter((suite) =>
-            suite.criterionKeys.includes(criterion.criterionKey),
-          );
-          const status = covering.every(
-            (suite) => results.get(suite.suiteKey) === "passed",
+        checks: target.acceptanceCriteria
+          .filter(
+            (criterion) =>
+              !plan.manualCriterionKeys?.includes(criterion.criterionKey),
           )
-            ? "passed"
-            : "failed";
-          const resultHash = createHash("sha256")
-            .update(
-              JSON.stringify(
-                covering.map((suite) => ({
-                  suiteKey: suite.suiteKey,
-                  status: results.get(suite.suiteKey),
-                })),
-              ),
-              "utf8",
+          .map((criterion) => {
+            const covering = plan.suites.filter((suite) =>
+              suite.criterionKeys.includes(criterion.criterionKey),
+            );
+            const status = covering.every(
+              (suite) => results.get(suite.suiteKey) === "passed",
             )
-            .digest("hex");
-          return {
-            criterionKey: criterion.criterionKey,
-            status,
-            testRunKey: `plan-${plan.planKey}-v${plan.planVersion}-${planHash}-result-${resultHash}`,
-          };
-        }),
+              ? "passed"
+              : "failed";
+            const resultHash = createHash("sha256")
+              .update(
+                JSON.stringify(
+                  covering.map((suite) => ({
+                    suiteKey: suite.suiteKey,
+                    status: results.get(suite.suiteKey),
+                  })),
+                ),
+                "utf8",
+              )
+              .digest("hex");
+            return {
+              criterionKey: criterion.criterionKey,
+              status,
+              testRunKey: `plan-${plan.planKey}-v${plan.planVersion}-${planHash}-result-${resultHash}`,
+            };
+          }),
+        ...(plan.manualCriterionKeys
+          ? { manualCriterionKeys: [...plan.manualCriterionKeys] }
+          : {}),
       };
     } finally {
       await workspace.dispose();

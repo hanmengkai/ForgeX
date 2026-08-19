@@ -37,6 +37,7 @@ const artifactEntryBase = {
       })
       .strict(),
   ),
+  manualCriterionKeys: z.array(z.string().uuid()).max(80).optional(),
   integrityTag: z.string().regex(/^[a-f0-9]{64}$/u),
 } as const;
 
@@ -71,6 +72,7 @@ export const VerificationFailureJournalEntrySchema = z
         })
         .strict(),
     ),
+    manualCriterionKeys: z.array(z.string().uuid()).max(80).optional(),
     integrityTag: z.string().regex(/^[a-f0-9]{64}$/u),
   })
   .strict();
@@ -467,6 +469,7 @@ export const verificationArtifactEntry = (input: {
   artifact: Uint8Array;
   artifactHash: string;
   checks: EvidenceCheck[];
+  manualCriterionKeys?: string[];
   verificationCompletedAt: string;
   integrityKey: Uint8Array;
 }): VerificationArtifactJournalEntry => {
@@ -481,6 +484,9 @@ export const verificationArtifactEntry = (input: {
     artifactContentBase64: Buffer.from(input.artifact).toString("base64"),
     verificationCompletedAt: input.verificationCompletedAt,
     checks: input.checks,
+    ...(input.manualCriterionKeys
+      ? { manualCriterionKeys: input.manualCriterionKeys }
+      : {}),
     integrityTag: "0".repeat(64),
   });
   return VerificationArtifactJournalEntrySchema.parse({
@@ -493,6 +499,7 @@ export const verificationFailureEntry = (input: {
   scope: VerificationRunnerScope;
   target: VerificationRunnerTarget;
   checks: EvidenceCheck[];
+  manualCriterionKeys?: string[];
   verificationCompletedAt: string;
   integrityKey: Uint8Array;
 }): VerificationFailureJournalEntry => {
@@ -503,6 +510,9 @@ export const verificationFailureEntry = (input: {
     target: input.target,
     verificationCompletedAt: input.verificationCompletedAt,
     checks: input.checks,
+    ...(input.manualCriterionKeys
+      ? { manualCriterionKeys: input.manualCriterionKeys }
+      : {}),
     integrityTag: "0".repeat(64),
   });
   return VerificationFailureJournalEntrySchema.parse({

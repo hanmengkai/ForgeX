@@ -71,8 +71,21 @@ export const VerificationResultSchema = z
   .object({
     artifact: z.instanceof(Uint8Array),
     checks: z.array(EvidenceCheckSchema).min(1).max(80),
+    manualCriterionKeys: z.array(internalKey).max(80).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((result, context) => {
+    const automatic = new Set(result.checks.map((check) => check.criterionKey));
+    result.manualCriterionKeys?.forEach((criterionKey, index) => {
+      if (automatic.has(criterionKey)) {
+        context.addIssue({
+          code: "custom",
+          path: ["manualCriterionKeys", index],
+          message: "人工验收条件不能与自动验证结果重复",
+        });
+      }
+    });
+  });
 
 export type VerificationResult = z.infer<typeof VerificationResultSchema>;
 

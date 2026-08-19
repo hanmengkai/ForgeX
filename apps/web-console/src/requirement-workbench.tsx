@@ -1359,7 +1359,12 @@ function RequirementCard({
                       <div className="acceptance-evidence">
                         <div className="acceptance-heading">
                           <span>
-                            <CheckIcon /> 独立验证已通过
+                            <CheckIcon />{" "}
+                            {detail.acceptance.checks.some(
+                              (check) => check.status === "待产品验收",
+                            )
+                              ? "自动验证已通过，等待产品验收"
+                              : "独立验证已通过"}
                           </span>
                           <small>
                             {detail.acceptance.verifiedBy} ·{" "}

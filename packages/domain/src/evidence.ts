@@ -74,6 +74,7 @@ export class VerifiedEvidenceReceipt {
   readonly artifactHashAlgorithm: "sha256";
   readonly artifactHash: string;
   readonly checks: readonly Readonly<EvidenceCheck>[];
+  readonly manualCriterionKeys: readonly string[];
   readonly signature: string;
 
   constructor(
@@ -103,6 +104,9 @@ export class VerifiedEvidenceReceipt {
     this.checks = Object.freeze(
       payload.checks.map((check) => Object.freeze({ ...check })),
     );
+    this.manualCriterionKeys = Object.freeze([
+      ...(payload.manualCriterionKeys ?? []),
+    ]);
     this.signature = signature;
     this.#validUntilMs = validity.validUntilMs;
     this.#maxFutureSkewMs = validity.maxFutureSkewMs;
@@ -193,6 +197,11 @@ export class EvidenceAuthority {
           status: check.status,
           testRunKey: check.testRunKey,
         })),
+      ...(parsed.manualCriterionKeys
+        ? {
+            manualCriterionKeys: [...parsed.manualCriterionKeys].sort(),
+          }
+        : {}),
     });
   }
 

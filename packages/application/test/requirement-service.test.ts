@@ -374,14 +374,17 @@ describe("RequirementApplicationService", () => {
       transaction.save(record!);
     });
 
-    await expect(service.get(principal, created.requirementKey)).resolves.toMatchObject({
+    await expect(
+      service.get(principal, created.requirementKey),
+    ).resolves.toMatchObject({
       progress: {
         currentStage: "等待可信验证计划",
         updatedAt: "2026-08-13T02:00:30.000Z",
         stages: expect.arrayContaining([
           expect.objectContaining({
             key: "verification",
-            detail: "当前交付提交没有匹配的可信验证计划，请配置后等待 Runner 自动继续",
+            detail:
+              "当前交付提交没有匹配的可信验证计划，请配置后等待 Runner 自动继续",
           }),
         ]),
       },

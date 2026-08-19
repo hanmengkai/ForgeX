@@ -114,7 +114,15 @@ export interface RequirementEvidenceSnapshot {
   artifactHashAlgorithm: "sha256";
   artifactHash: string;
   checks: EvidenceCheck[];
+  manualCriterionKeys?: string[];
   signature: string;
+}
+
+export interface RequirementVerificationBlocker {
+  code: "trusted_plan_missing";
+  runnerKey: string;
+  keyId: string;
+  reportedAt: string;
 }
 
 export interface RequirementWorkflowSnapshot {
@@ -129,6 +137,7 @@ export interface RequirementWorkflowSnapshot {
   deliveryCandidate: DeliveryReference | null;
   deliveryCandidateRecordedAtMs: number | null;
   evidence: RequirementEvidenceSnapshot | null;
+  verificationBlocker?: RequirementVerificationBlocker | null;
 }
 
 export interface RequirementWorkflowOptions {
@@ -174,7 +183,7 @@ export interface RequirementAcceptanceView {
   verifiedAt: string;
   checks: Array<{
     title: string;
-    status: "已通过";
+    status: "已通过" | "待产品验收" | "产品已验收";
   }>;
 }
 
@@ -206,6 +215,7 @@ export class RequirementWorkflow {
   #deliveryCandidateRecordedAtMs: number | null = null;
   #evidence: Readonly<RequirementEvidenceSnapshot> | null = null;
   #verifiedEvidenceReceipt: VerifiedEvidenceReceipt | null = null;
+  #verificationBlocker: Readonly<RequirementVerificationBlocker> | null = null;
 
   private constructor(
     initialRevision: RequirementRevision,
@@ -332,6 +342,7 @@ export class RequirementWorkflow {
     this.#deliveryCandidateRecordedAtMs = null;
     this.#evidence = null;
     this.#verifiedEvidenceReceipt = null;
+    this.#verificationBlocker = null;
     this.#status = "needsReconfirmation";
   }
 
@@ -345,6 +356,29 @@ export class RequirementWorkflow {
       );
     }
     this.#status = "inDelivery";
+    this.#verificationBlocker = null;
+  }
+
+  recordVerificationBlocker(input: RequirementVerificationBlocker): void {
+    if (this.#status !== "inDelivery") {
+      throw new RequirementStateConflictError(
+        "当前需求版本已经不能记录验证计划阻塞",
+      );
+    }
+    if (
+      input.code !== "trusted_plan_missing" ||
+      !internalKeyPattern.test(input.runnerKey) ||
+      !internalKeyPattern.test(input.keyId) ||
+      !Number.isFinite(Date.parse(input.reportedAt))
+    ) {
+      throw new Error("验证计划阻塞记录格式不正确");
+    }
+    this.#verificationBlocker = Object.freeze({
+      code: input.code,
+      runnerKey: input.runnerKey.toLowerCase(),
+      keyId: input.keyId.toLowerCase(),
+      reportedAt: input.reportedAt,
+    });
   }
 
   terminateDelivery(): void {
@@ -355,6 +389,7 @@ export class RequirementWorkflow {
     this.#deliveryCandidateRecordedAtMs = null;
     this.#evidence = null;
     this.#verifiedEvidenceReceipt = null;
+    this.#verificationBlocker = null;
     this.#status = "terminated";
   }
 
@@ -438,10 +473,16 @@ export class RequirementWorkflow {
       this.#current.acceptanceCriteria.map((item) => item.criterionKey),
     );
     const actual = new Set(evidence.checks.map((item) => item.criterionKey));
+    const manual = new Set(evidence.manualCriterionKeys);
     if (
       actual.size !== evidence.checks.length ||
-      actual.size !== expected.size ||
-      [...expected].some((criterionKey) => !actual.has(criterionKey))
+      manual.size !== evidence.manualCriterionKeys.length ||
+      [...actual].some((criterionKey) => manual.has(criterionKey)) ||
+      actual.size + manual.size !== expected.size ||
+      [...expected].some(
+        (criterionKey) =>
+          !actual.has(criterionKey) && !manual.has(criterionKey),
+      )
     ) {
       throw new Error("验证证据没有覆盖全部验收条件");
     }
@@ -462,9 +503,13 @@ export class RequirementWorkflow {
       artifactHashAlgorithm: evidence.artifactHashAlgorithm,
       artifactHash: evidence.artifactHash,
       checks: evidence.checks.map((check) => ({ ...check })),
+      ...(evidence.manualCriterionKeys.length > 0
+        ? { manualCriterionKeys: [...evidence.manualCriterionKeys] }
+        : {}),
       signature: evidence.signature,
     });
     this.#verifiedEvidenceReceipt = evidence;
+    this.#verificationBlocker = null;
     this.#status = "awaitingAcceptance";
   }
 
@@ -503,6 +548,7 @@ export class RequirementWorkflow {
     this.#deliveryCandidateRecordedAtMs = null;
     this.#evidence = null;
     this.#verifiedEvidenceReceipt = null;
+    this.#verificationBlocker = null;
     this.#status = reachedRevisionLimit
       ? "verificationFailedAtLimit"
       : "needsReconfirmation";
@@ -551,7 +597,12 @@ export class RequirementWorkflow {
         this.#status === "verificationFailedAtLimit"
           ? "独立验证未通过，当前版本已封存"
           : this.#evidence
-            ? `${this.#evidence.checks.length} / ${this.#current.acceptanceCriteria.length} 项已通过`
+            ? this.#status === "completed" &&
+              (this.#evidence.manualCriterionKeys?.length ?? 0) > 0
+              ? `${this.#current.acceptanceCriteria.length} / ${this.#current.acceptanceCriteria.length} 项已验收`
+              : (this.#evidence.manualCriterionKeys?.length ?? 0) > 0
+                ? `${this.#evidence.checks.length} / ${this.#current.acceptanceCriteria.length} 项独立验证通过，${this.#evidence.manualCriterionKeys!.length} 项待产品验收`
+                : `${this.#evidence.checks.length} / ${this.#current.acceptanceCriteria.length} 项已通过`
             : "尚未开始验证",
     };
   }
@@ -561,15 +612,32 @@ export class RequirementWorkflow {
     const checksByCriterion = new Map(
       this.#evidence.checks.map((check) => [check.criterionKey, check]),
     );
+    const manualCriterionKeys = new Set(
+      this.#evidence.manualCriterionKeys ?? [],
+    );
     return {
       verifiedBy: this.#evidence.runnerName,
       verifiedAt: this.#evidence.producedAt,
       checks: this.#current.acceptanceCriteria.map((criterion) => {
         const check = checksByCriterion.get(criterion.criterionKey);
-        if (!check || check.status !== "passed") {
+        if (check?.status === "passed") {
+          return {
+            title: criterion.title,
+            status: "已通过" as const,
+          };
+        }
+        if (manualCriterionKeys.has(criterion.criterionKey)) {
+          return {
+            title: criterion.title,
+            status:
+              this.#status === "completed"
+                ? ("产品已验收" as const)
+                : ("待产品验收" as const),
+          };
+        }
+        {
           throw new Error("需求验收视图与可信证据不一致");
         }
-        return { title: criterion.title, status: "已通过" as const };
       }),
     };
   }
@@ -750,6 +818,9 @@ export class RequirementWorkflow {
       evidence: this.#evidence
         ? RequirementWorkflow.#copyEvidence(this.#evidence)
         : null,
+      verificationBlocker: this.#verificationBlocker
+        ? { ...this.#verificationBlocker }
+        : null,
     };
   }
 
@@ -798,6 +869,9 @@ export class RequirementWorkflow {
           signature: restored.evidence.signature,
         })
       : null;
+    workflow.#verificationBlocker = restored.verificationBlocker
+      ? Object.freeze({ ...restored.verificationBlocker })
+      : null;
     return workflow;
   }
 
@@ -833,6 +907,9 @@ export class RequirementWorkflow {
       ? Object.freeze(RequirementWorkflow.#copyEvidence(this.#evidence))
       : null;
     copy.#verifiedEvidenceReceipt = this.#verifiedEvidenceReceipt;
+    copy.#verificationBlocker = this.#verificationBlocker
+      ? Object.freeze({ ...this.#verificationBlocker })
+      : null;
     return copy;
   }
 
@@ -1019,6 +1096,9 @@ export class RequirementWorkflow {
     return {
       ...evidence,
       checks: evidence.checks.map((check) => ({ ...check })),
+      ...(evidence.manualCriterionKeys
+        ? { manualCriterionKeys: [...evidence.manualCriterionKeys] }
+        : {}),
     };
   }
 
@@ -1041,6 +1121,9 @@ export class RequirementWorkflow {
       artifactHashAlgorithm: evidence.artifactHashAlgorithm,
       artifactHash: evidence.artifactHash,
       checks: evidence.checks.map((check) => ({ ...check })),
+      ...(evidence.manualCriterionKeys
+        ? { manualCriterionKeys: [...evidence.manualCriterionKeys] }
+        : {}),
     };
   }
 
@@ -1081,6 +1164,9 @@ export class RequirementWorkflow {
       artifactHashAlgorithm: receipt.artifactHashAlgorithm,
       artifactHash: receipt.artifactHash,
       checks: receipt.checks.map((check) => ({ ...check })),
+      ...(receipt.manualCriterionKeys.length > 0
+        ? { manualCriterionKeys: [...receipt.manualCriterionKeys] }
+        : {}),
       signature: receipt.signature,
     };
     if (
@@ -1286,6 +1372,9 @@ export class RequirementWorkflow {
     const evidenceCriteria = evidence
       ? new Set(evidence.checks.map((check) => check.criterionKey))
       : null;
+    const manualEvidenceCriteria = evidence
+      ? new Set(evidence.manualCriterionKeys ?? [])
+      : null;
     const evidenceMatchesCandidate =
       evidence === null ||
       (deliveryCandidate !== null &&
@@ -1300,8 +1389,16 @@ export class RequirementWorkflow {
           snapshot.deliveryCandidateRecordedAtMs &&
         evidence.checks.every((check) => check.status === "passed") &&
         evidenceCriteria?.size === evidence.checks.length &&
-        evidenceCriteria.size === currentCriteria.size &&
-        [...currentCriteria].every((key) => evidenceCriteria.has(key)));
+        manualEvidenceCriteria?.size ===
+          (evidence.manualCriterionKeys?.length ?? 0) &&
+        [...evidenceCriteria].every(
+          (key) => !manualEvidenceCriteria.has(key),
+        ) &&
+        evidenceCriteria.size + manualEvidenceCriteria.size ===
+          currentCriteria.size &&
+        [...currentCriteria].every(
+          (key) => evidenceCriteria.has(key) || manualEvidenceCriteria.has(key),
+        ));
     const acceptanceApprovals = approvalRecords.filter(
       (record): record is Extract<ApprovalRecord, { action: "验收结果" }> =>
         record.action === "验收结果",
@@ -1328,6 +1425,9 @@ export class RequirementWorkflow {
       const checkedCriteria = new Set(
         historicalEvidence.checks.map((check) => check.criterionKey),
       );
+      const manualCriteria = new Set(
+        historicalEvidence.manualCriterionKeys ?? [],
+      );
       if (
         historicalEvidence.tenantKey !== snapshot.tenantKey ||
         historicalEvidence.projectKey !== snapshot.projectKey ||
@@ -1337,8 +1437,13 @@ export class RequirementWorkflow {
           Date.parse(historicalEvidence.producedAt) ||
         historicalEvidence.checks.some((check) => check.status !== "passed") ||
         checkedCriteria.size !== historicalEvidence.checks.length ||
-        checkedCriteria.size !== revisionCriteria.size ||
-        [...revisionCriteria].some((key) => !checkedCriteria.has(key))
+        manualCriteria.size !==
+          (historicalEvidence.manualCriterionKeys?.length ?? 0) ||
+        [...checkedCriteria].some((key) => manualCriteria.has(key)) ||
+        checkedCriteria.size + manualCriteria.size !== revisionCriteria.size ||
+        [...revisionCriteria].some(
+          (key) => !checkedCriteria.has(key) && !manualCriteria.has(key),
+        )
       ) {
         throw new Error("需求工作流快照的验收证据与版本不一致");
       }
@@ -1361,6 +1466,17 @@ export class RequirementWorkflow {
               RequirementWorkflow.#evidencePayload(evidence),
             ),
       );
+    const blocker = snapshot.verificationBlocker ?? null;
+    if (
+      blocker !== null &&
+      (blocker.code !== "trusted_plan_missing" ||
+        !internalKeyPattern.test(blocker.runnerKey) ||
+        !internalKeyPattern.test(blocker.keyId) ||
+        !Number.isFinite(Date.parse(blocker.reportedAt)) ||
+        snapshot.status !== "inDelivery")
+    ) {
+      throw new Error("需求工作流快照包含无效验证计划阻塞");
+    }
     if (
       ((snapshot.status === "awaitingAcceptance" ||
         snapshot.status === "completed") &&
@@ -1397,6 +1513,7 @@ export class RequirementWorkflow {
       deliveryCandidate,
       deliveryCandidateRecordedAtMs: snapshot.deliveryCandidateRecordedAtMs,
       evidence,
+      verificationBlocker: blocker ? { ...blocker } : null,
     };
   }
 

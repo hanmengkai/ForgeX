@@ -66,11 +66,26 @@ export const RunnerVerificationFailureCommandSchema = z
     requirementRevision: z.number().int().positive().max(10_000),
     verificationCompletedAt: z.iso.datetime(),
     checks: z.array(EvidenceCheckSchema).min(1).max(80),
+    manualCriterionKeys: z.array(internalKey).max(80).optional(),
   })
   .strict();
 
 export type RunnerVerificationFailureCommand = z.infer<
   typeof RunnerVerificationFailureCommandSchema
+>;
+
+export const RunnerVerificationBlockerCommandSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    requirementKey: internalKey,
+    requirementRevision: z.number().int().positive().max(10_000),
+    reason: z.literal("trusted_plan_missing"),
+    reportedAt: z.iso.datetime(),
+  })
+  .strict();
+
+export type RunnerVerificationBlockerCommand = z.infer<
+  typeof RunnerVerificationBlockerCommandSchema
 >;
 
 export interface VerificationTargetForRunner {
@@ -154,6 +169,9 @@ const sameSignedEvidence = (
       artifactHashAlgorithm: existing.artifactHashAlgorithm,
       artifactHash: existing.artifactHash,
       checks: existing.checks,
+      ...(existing.manualCriterionKeys
+        ? { manualCriterionKeys: existing.manualCriterionKeys }
+        : {}),
     }) === EvidenceAuthority.canonicalPayload(signed.payload)
   );
 };
@@ -170,6 +188,7 @@ const verificationFailureDigest = (input: {
   keyId: string;
   verificationCompletedAt: string;
   checks: EvidenceCheck[];
+  manualCriterionKeys?: string[];
 }): string =>
   createHash("sha256")
     .update(JSON.stringify({ schemaVersion: 1, ...input }), "utf8")
@@ -507,6 +526,67 @@ export class VerificationCoordinatorService {
     );
   }
 
+  async reportBlocker(
+    runnerInput: AuthenticatedRunner,
+    commandInput: RunnerVerificationBlockerCommand,
+  ): Promise<{
+    status: "verification_blocked_recorded";
+    requirementRevision: number;
+  }> {
+    const connection = this.#parseRunner(runnerInput);
+    const runner = this.#authorize(connection);
+    const command =
+      RunnerVerificationBlockerCommandSchema.safeParse(commandInput);
+    if (!command.success) {
+      throw new ApplicationError(
+        422,
+        "invalid_verification_blocker",
+        "验证计划阻塞结果格式不正确",
+      );
+    }
+    return this.#requirementRepository.transaction(
+      connection.tenantKey,
+      this.#projectKey,
+      async (transaction) => {
+        const run = await transaction.findDeliveryRunResult(
+          command.data.requirementKey,
+          command.data.requirementRevision,
+        );
+        const target = await this.#loadTarget(transaction, run);
+        const record = await transaction.find(target.requirementKey);
+        if (!record) {
+          throw new ApplicationError(
+            404,
+            "requirement_not_found",
+            "没有找到这项待验证需求",
+          );
+        }
+        const recordedAt = this.#nowIso();
+        record.workflow.recordVerificationBlocker({
+          code: command.data.reason,
+          runnerKey: runner.runnerKey,
+          keyId: runner.keyId,
+          reportedAt: recordedAt,
+        });
+        transaction.save(record);
+        transaction.appendAudit({
+          eventKey: randomUUID(),
+          tenantKey: connection.tenantKey,
+          projectKey: this.#projectKey,
+          requirementKey: target.requirementKey,
+          action: "verification.blocked",
+          actorKey: runner.runnerKey,
+          actorName: runner.runnerName,
+          recordedAt,
+        });
+        return {
+          status: "verification_blocked_recorded" as const,
+          requirementRevision: target.requirementRevision,
+        };
+      },
+    );
+  }
+
   async reportFailure(
     runnerInput: AuthenticatedRunner,
     commandInput: RunnerVerificationFailureCommand,
@@ -538,6 +618,9 @@ export class VerificationCoordinatorService {
           .sort((left, right) =>
             left.criterionKey < right.criterionKey ? -1 : 1,
           );
+        const manualCriterionKeys = [
+          ...(command.data.manualCriterionKeys ?? []),
+        ].sort();
         const existing = await transaction.findVerificationFailure(
           command.data.requirementKey,
           command.data.requirementRevision,
@@ -568,6 +651,7 @@ export class VerificationCoordinatorService {
             keyId: connection.keyId,
             verificationCompletedAt: command.data.verificationCompletedAt,
             checks,
+            ...(manualCriterionKeys.length > 0 ? { manualCriterionKeys } : {}),
           });
           if (
             existing.failureDigest !== failureDigest ||
@@ -590,7 +674,7 @@ export class VerificationCoordinatorService {
           allowAwaitingAcceptance: true,
           allowCompleted: true,
         });
-        this.#assertFailureChecks(target, checks);
+        this.#assertFailureChecks(target, checks, manualCriterionKeys);
         const now = this.#clock();
         const nowMs = now.getTime();
         const completedAtMs = Date.parse(command.data.verificationCompletedAt);
@@ -617,6 +701,7 @@ export class VerificationCoordinatorService {
           keyId: connection.keyId,
           verificationCompletedAt: command.data.verificationCompletedAt,
           checks,
+          ...(manualCriterionKeys.length > 0 ? { manualCriterionKeys } : {}),
         });
         const runner = this.#authorize(connection);
         const recordedAt = new Date(nowMs).toISOString();
@@ -631,6 +716,7 @@ export class VerificationCoordinatorService {
           keyId: runner.keyId,
           verificationCompletedAt: command.data.verificationCompletedAt,
           checks,
+          ...(manualCriterionKeys.length > 0 ? { manualCriterionKeys } : {}),
           recordedAt,
         });
         const record = await transaction.find(target.requirementKey);
@@ -839,15 +925,22 @@ export class VerificationCoordinatorService {
   #assertFailureChecks(
     target: VerificationTargetForRunner,
     checks: EvidenceCheck[],
+    manualCriterionKeys: string[],
   ): void {
     const expected = new Set(
       target.acceptanceCriteria.map((criterion) => criterion.criterionKey),
     );
     const actual = new Set(checks.map((check) => check.criterionKey));
+    const manual = new Set(manualCriterionKeys);
     if (
-      expected.size !== checks.length ||
+      expected.size !== checks.length + manualCriterionKeys.length ||
       actual.size !== checks.length ||
-      [...expected].some((criterionKey) => !actual.has(criterionKey)) ||
+      manual.size !== manualCriterionKeys.length ||
+      [...actual].some((criterionKey) => manual.has(criterionKey)) ||
+      [...expected].some(
+        (criterionKey) =>
+          !actual.has(criterionKey) && !manual.has(criterionKey),
+      ) ||
       checks.every((check) => check.status === "passed")
     ) {
       throw new ApplicationError(

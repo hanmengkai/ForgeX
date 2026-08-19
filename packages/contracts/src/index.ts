@@ -106,6 +106,7 @@ export const EvidencePayloadSchema = z
     artifactHashAlgorithm: z.literal("sha256"),
     artifactHash: z.string().regex(sha256Pattern),
     checks: z.array(EvidenceCheckSchema).min(1).max(500),
+    manualCriterionKeys: z.array(internalKey).max(500).optional(),
   })
   .strict()
   .superRefine((payload, context) => {
@@ -128,6 +129,20 @@ export const EvidencePayloadSchema = z
         });
       }
       criterionKeys.add(check.criterionKey);
+    });
+    const manualCriterionKeys = new Set<string>();
+    payload.manualCriterionKeys?.forEach((criterionKey, index) => {
+      if (
+        criterionKeys.has(criterionKey) ||
+        manualCriterionKeys.has(criterionKey)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["manualCriterionKeys", index],
+          message: "人工验收条件不能与自动验证结果重复",
+        });
+      }
+      manualCriterionKeys.add(criterionKey);
     });
   });
 
