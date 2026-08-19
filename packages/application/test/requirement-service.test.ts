@@ -348,6 +348,46 @@ describe("RequirementApplicationService", () => {
     });
   });
 
+  it("Runner 已确认缺少可信计划时立即展示精确阻塞原因", async () => {
+    const repository = new InMemoryRequirementRepository();
+    const service = new RequirementApplicationService({
+      repository,
+      projectKey,
+      repositoryKey,
+      clock: () => new Date("2026-08-13T02:01:00.000Z"),
+    });
+    const created = await service.create(principal, spec);
+    await service.submitForConfirmation(principal, created.requirementKey);
+    await service.confirm(principal, created.requirementKey);
+    await service.requestDelivery(principal, created.requirementKey, {
+      schemaVersion: 1,
+      requiredCapabilities: [],
+    });
+    await repository.transaction(tenantKey, projectKey, async (transaction) => {
+      const record = await transaction.find(created.requirementKey);
+      record!.workflow.recordVerificationBlocker({
+        code: "trusted_plan_missing",
+        runnerKey: "55555555-5555-4555-8555-555555555555",
+        keyId: "66666666-6666-4666-8666-666666666666",
+        reportedAt: "2026-08-13T02:00:30.000Z",
+      });
+      transaction.save(record!);
+    });
+
+    await expect(service.get(principal, created.requirementKey)).resolves.toMatchObject({
+      progress: {
+        currentStage: "等待可信验证计划",
+        updatedAt: "2026-08-13T02:00:30.000Z",
+        stages: expect.arrayContaining([
+          expect.objectContaining({
+            key: "verification",
+            detail: "当前交付提交没有匹配的可信验证计划，请配置后等待 Runner 自动继续",
+          }),
+        ]),
+      },
+    });
+  });
+
   it("强制终止交付会关闭待派发记录、留下审计并返回细粒度进度", async () => {
     const repository = new InMemoryRequirementRepository();
     const service = new RequirementApplicationService({

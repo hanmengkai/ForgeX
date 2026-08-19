@@ -98,6 +98,7 @@ describe("VerificationRunnerRuntime", () => {
       publishPreview: vi.fn(async () => Promise.resolve()),
       submitEvidence: vi.fn(async () => Promise.resolve()),
       reportFailure: vi.fn(async () => Promise.resolve()),
+      reportBlocker: vi.fn(async () => Promise.resolve()),
     };
     const verifier = {
       canVerify: vi.fn(
@@ -126,6 +127,40 @@ describe("VerificationRunnerRuntime", () => {
     expect(verifier.canVerify).toHaveBeenNthCalledWith(100, target);
     expect(verifier.verify).toHaveBeenCalledOnce();
     expect(verifier.verify).toHaveBeenCalledWith(target);
+    expect(controlPlane.reportBlocker).toHaveBeenCalledTimes(99);
+  });
+
+  it("没有匹配可信计划时向控制面报告明确阻塞，而不是静默空闲", async () => {
+    const { signer } = signerFixture();
+    const controlPlane = {
+      listPending: vi.fn(async () => [target]),
+      publishPreview: vi.fn(async () => Promise.resolve()),
+      submitEvidence: vi.fn(async () => Promise.resolve()),
+      reportFailure: vi.fn(async () => Promise.resolve()),
+      reportBlocker: vi.fn(async () => Promise.resolve()),
+    };
+    const runtime = new VerificationRunnerRuntime({
+      scope: runnerScope,
+      controlPlane,
+      verifier: {
+        canVerify: vi.fn(async () => false),
+        verify: vi.fn(async () => passedVerification),
+      },
+      signer,
+      journal: new InMemoryVerificationJournal(),
+      journalIntegrityKey,
+      clock: () => new Date("2026-08-11T03:01:00.000Z"),
+    });
+
+    await expect(runtime.runOnce()).resolves.toEqual({
+      kind: "blocked",
+      title: target.title,
+    });
+    expect(controlPlane.reportBlocker).toHaveBeenCalledWith(
+      target,
+      "trusted_plan_missing",
+      "2026-08-11T03:01:00.000Z",
+    );
   });
 
   it("先持久化并上传不可变 Preview，再签名并提交证据", async () => {

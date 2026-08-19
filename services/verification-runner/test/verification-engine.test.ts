@@ -229,6 +229,47 @@ describe("FixedSuiteVerificationEngine", () => {
     expect(html).not.toContain("ForgeX 独立验证通过");
   });
 
+  it("允许可信计划明确拆分自动验证条件与产品人工验收条件", async () => {
+    const trustedPlan = {
+      ...plan([
+        {
+          suiteKey: "unit",
+          name: "自动化页面验收",
+          criterionKeys: [target.acceptanceCriteria[0]!.criterionKey],
+        },
+      ]),
+      manualCriterionKeys: [target.acceptanceCriteria[1]!.criterionKey],
+    };
+    const engine = new FixedSuiteVerificationEngine({
+      workspace: {
+        prepare: vi.fn(async () => ({
+          path: path.resolve("verification-workspaces", "run-manual"),
+          dispose: vi.fn(async () => Promise.resolve()),
+        })),
+      },
+      sandbox: {
+        run: vi.fn(async () => ({
+          suites: [{ suiteKey: "unit", status: "passed" as const }],
+        })),
+      },
+      planProvider: { planFor: vi.fn(async () => trustedPlan) },
+      previewArtifactReader: vi.fn(async () =>
+        new TextEncoder().encode("<!doctype html><p>可交互预览</p>"),
+      ),
+      trustedPlanAnchors: [anchorFor(trustedPlan)],
+    });
+
+    await expect(engine.verify(target)).resolves.toMatchObject({
+      checks: [
+        expect.objectContaining({
+          criterionKey: target.acceptanceCriteria[0]!.criterionKey,
+          status: "passed",
+        }),
+      ],
+      manualCriterionKeys: [target.acceptanceCriteria[1]!.criterionKey],
+    });
+  });
+
   it("固定套件失败时逐项给出失败结果，且始终清理隔离工作区", async () => {
     const dispose = vi.fn(async () => Promise.resolve());
     const trustedPlan = plan([

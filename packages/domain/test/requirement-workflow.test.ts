@@ -54,7 +54,11 @@ const revisedSpec = (
 
 const createVerifiedEvidence = (
   requirement: RequirementWorkflow,
-  options: { failedCriterion?: number; onlyFirstCriterion?: boolean } = {},
+  options: {
+    failedCriterion?: number;
+    onlyFirstCriterion?: boolean;
+    manualCriterionIndexes?: number[];
+  } = {},
 ): VerifiedEvidenceReceipt => {
   requirement.recordDeliveryCandidate(deliveryCandidate);
   const target = requirement.getVerificationTarget();
@@ -81,7 +85,16 @@ const createVerifiedEvidence = (
     producedAt: fixedNow.toISOString(),
     artifactHashAlgorithm: target.artifactHashAlgorithm,
     artifactHash: target.artifactHash,
-    checks: options.onlyFirstCriterion ? allChecks.slice(0, 1) : allChecks,
+    checks: (options.onlyFirstCriterion ? allChecks.slice(0, 1) : allChecks).filter(
+      (_check, index) => !options.manualCriterionIndexes?.includes(index),
+    ),
+    ...(options.manualCriterionIndexes
+      ? {
+          manualCriterionKeys: options.manualCriterionIndexes.map(
+            (index) => target.acceptanceCriteria[index]!.criterionKey,
+          ),
+        }
+      : {}),
   };
   const signature = signEvidence(payload);
 
@@ -492,6 +505,55 @@ describe("RequirementWorkflow", () => {
       nextStep: "请体验 Preview 并确认结果",
       acceptanceProgress: "2 / 2 项已通过",
     });
+  });
+
+  it("自动验证通过后把显式人工条件留给产品验收，不伪造成 Runner 已通过", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+    requirement.submitForAcceptance(
+      createVerifiedEvidence(requirement, { manualCriterionIndexes: [1] }),
+    );
+
+    expect(requirement.toPeopleView().acceptanceProgress).toBe(
+      "1 / 2 项独立验证通过，1 项待产品验收",
+    );
+    expect(requirement.toAcceptanceView()?.checks).toEqual([
+      { title: "访客可以提交预约", status: "独立验证通过" },
+      { title: "业主可以确认预约", status: "待产品验收" },
+    ]);
+
+    requirement.accept({ actor });
+    expect(requirement.toPeopleView().acceptanceProgress).toBe("2 / 2 项已验收");
+    expect(requirement.toAcceptanceView()?.checks.at(-1)).toEqual({
+      title: "业主可以确认预约",
+      status: "产品已验收",
+    });
+  });
+
+  it("可信计划缺失时把阻塞原因持久化在当前交付版本", () => {
+    const requirement = createRequirement();
+    confirmRequirement(requirement);
+    requirement.startDelivery();
+
+    requirement.recordVerificationBlocker({
+      code: "trusted_plan_missing",
+      runnerKey,
+      keyId: runnerKeyId,
+      reportedAt: fixedNow.toISOString(),
+    });
+
+    expect(requirement.toSnapshot().verificationBlocker).toEqual({
+      code: "trusted_plan_missing",
+      runnerKey,
+      keyId: runnerKeyId,
+      reportedAt: fixedNow.toISOString(),
+    });
+    expect(
+      RequirementWorkflow.fromSnapshot(requirement.toSnapshot())
+        .toSnapshot()
+        .verificationBlocker,
+    ).toEqual(requirement.toSnapshot().verificationBlocker);
   });
 
   it("验收完成后给出清晰结果", () => {
