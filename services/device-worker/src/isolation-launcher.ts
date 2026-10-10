@@ -245,7 +245,7 @@ const failureReason = (
   return "execution";
 };
 
-const processEventFromThreadEvent = (
+export const processEventFromThreadEvent = (
   event: ThreadEvent,
   workspacePath: string,
 ): CodexProcessEventPayload | null => {
@@ -576,7 +576,7 @@ const codexCliPath = fileURLToPath(
   import.meta.resolve("@openai/codex/bin/codex.js"),
 );
 
-const disabledToolFeatures = [
+export const disabledToolFeatures = [
   "apps",
   "auth_elicitation",
   "browser_use",
@@ -641,7 +641,7 @@ const workspaceMcpConfiguration = (workspacePath: string) => ({
   tool_timeout_sec: 30,
 });
 
-const workspaceMcpOverrides = (workspacePath: string): string[] => {
+export const workspaceMcpOverrides = (workspacePath: string): string[] => {
   const configuration = workspaceMcpConfiguration(workspacePath);
   return Object.entries(configuration).flatMap(([key, value]) => [
     "-c",
@@ -677,8 +677,22 @@ const CodexMcpDetailSchema = z
   .passthrough();
 
 export const assertCodexToolSurface = async (
-  request: IsolatedCodexRunRequest,
+  request: Pick<IsolatedCodexRunRequest, "codexHomePath" | "workspacePath">,
+  invocation?: {
+    commandPath: string;
+    arguments: string[];
+    expectedVersion: string;
+    extraDisabledFeatures: string[];
+    nativeToolGuard?: readonly string[];
+  },
 ): Promise<void> => {
+  const commandPath = invocation?.commandPath ?? process.execPath;
+  const commandArguments = invocation?.arguments ?? [codexCliPath];
+  // 新版保留内部 PTY 引擎；命令工具仍由 shell_tool 控制，旧隔离协议保持双重关闭。
+  const retainedExecEngine =
+    invocation?.expectedVersion === "codex-cli 0.162.0-alpha.17.2";
+  const nativeToolGuard =
+    retainedExecEngine && Boolean(invocation?.nativeToolGuard?.length);
   const safeEnvironment = {
     ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
     ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
@@ -686,8 +700,8 @@ export const assertCodexToolSurface = async (
     ...workspaceGitEnvironment(request.workspacePath),
   };
   const version = await execFileAsync(
-    process.execPath,
-    [codexCliPath, "--version"],
+    commandPath,
+    [...commandArguments, "--version"],
     {
       cwd: request.workspacePath,
       encoding: "utf8",
@@ -696,24 +710,28 @@ export const assertCodexToolSurface = async (
       timeout: 10_000,
     },
   );
-  if (version.stdout.trim() !== "codex-cli 0.147.0") {
+  if (
+    version.stdout.trim() !==
+    (invocation?.expectedVersion ?? "codex-cli 0.147.0")
+  ) {
     throw new Error("ForgeX 设备只允许经过验证的 Codex CLI 0.147.0");
   }
   const featureOverrides = [
-    ...disabledToolFeatures.flatMap((feature) => [
-      "-c",
-      `features.${feature}=false`,
-    ]),
+    ...[
+      ...disabledToolFeatures,
+      ...(invocation?.extraDisabledFeatures ?? []),
+    ].flatMap((feature) => ["-c", `features.${feature}=false`]),
     ...requiredEnabledToolFeatures.flatMap((feature) => [
       "-c",
       `features.${feature}=true`,
     ]),
+    ...(invocation?.nativeToolGuard ?? []),
   ];
   const projectTrustOverride = projectTrustOverrideKey(request.workspacePath);
   const inventory = await execFileAsync(
-    process.execPath,
+    commandPath,
     [
-      codexCliPath,
+      ...commandArguments,
       "-c",
       `${projectTrustOverride}="untrusted"`,
       ...featureOverrides,
@@ -739,11 +757,18 @@ export const assertCodexToolSurface = async (
       });
     }
   }
-  for (const feature of disabledToolFeatures) {
+  for (const feature of [
+    ...disabledToolFeatures,
+    ...(invocation?.extraDisabledFeatures ?? []),
+  ]) {
+    if (retainedExecEngine && feature === "unified_exec") continue;
+    if (nativeToolGuard && feature === "hooks") continue;
     if (states.get(feature)?.enabled !== false) {
       throw new Error(`Codex 工具特性 ${feature} 没有被可靠关闭`);
     }
   }
+  if (nativeToolGuard && states.get("hooks")?.enabled !== true)
+    throw new Error("原生工具拦截器没有被可靠启用");
   for (const feature of requiredEnabledToolFeatures) {
     if (states.get(feature)?.enabled !== true) {
       throw new Error(`Codex 受控 MCP 所需特性 ${feature} 没有可靠启用`);
@@ -754,6 +779,8 @@ export const assertCodexToolSurface = async (
       ([feature, state]) =>
         state.enabled &&
         state.stage !== "removed" &&
+        !(retainedExecEngine && feature === "unified_exec") &&
+        !(nativeToolGuard && feature === "hooks") &&
         !allowedEnabledRuntimeFeatures.has(feature),
     )
     .map(([feature]) => feature);
@@ -769,8 +796,8 @@ export const assertCodexToolSurface = async (
     ...workspaceMcpOverrides(request.workspacePath),
   ];
   const mcpInventory = await execFileAsync(
-    process.execPath,
-    [codexCliPath, ...mcpOverrides, "mcp", "list", "--json"],
+    commandPath,
+    [...commandArguments, ...mcpOverrides, "mcp", "list", "--json"],
     {
       cwd: request.workspacePath,
       encoding: "utf8",
@@ -791,8 +818,15 @@ export const assertCodexToolSurface = async (
   }
 
   const mcpDetail = await execFileAsync(
-    process.execPath,
-    [codexCliPath, ...mcpOverrides, "mcp", "get", "forgex_workspace", "--json"],
+    commandPath,
+    [
+      ...commandArguments,
+      ...mcpOverrides,
+      "mcp",
+      "get",
+      "forgex_workspace",
+      "--json",
+    ],
     {
       cwd: request.workspacePath,
       encoding: "utf8",

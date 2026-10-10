@@ -11,6 +11,7 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { sanitizeExecutionLogText } from "@forgex/contracts";
 import {
   canonicalLifecycleJson,
   LifecycleJobSchema,
@@ -176,6 +177,7 @@ export class LifecycleExecutorRuntime {
       adapter: LifecycleExecutionAdapter;
       journal: LifecycleJournal;
       privateKey: KeyObject;
+      onExecutionError?: (message: string) => void;
     },
   ) {
     if (
@@ -235,7 +237,14 @@ export class LifecycleExecutorRuntime {
         result = await this.options.adapter.execute(job, controller.signal);
       }
       result = LifecycleTaskResultSchema.parse(result);
-    } catch {
+    } catch (error) {
+      try {
+        this.options.onExecutionError?.(
+          sanitizeExecutionLogText(
+            error instanceof Error ? error.message : "执行异常",
+          ).slice(0, 2000),
+        );
+      } catch {}
       result = {
         status: "failed",
         reason: "受控执行器未完成任务，请核对本地执行日志和适配配置后恢复",

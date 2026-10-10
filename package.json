@@ -16,12 +16,15 @@
     "test": "vitest run",
     "test:p0": "vitest run lifecycle",
     "p0:sample": "npm run build && node scripts/verify-p0.mjs",
-    "p0:console": "npm run build:all && node examples/p0-sample/control-plane.mjs",
+    "p0:console": "npm run p0:ai:console",
     "test:e2e": "playwright test",
     "test:e2e:postgres": "npm run build:all && playwright test --config playwright.postgres.config.ts",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "p0:ai:sample": "npm run build && node scripts/verify-p0-ai.mjs",
+    "p0:ai:console": "npm run build:all && FORGEX_SAMPLE_MODE=ai node examples/p0-sample/control-plane.mjs",
+    "p0:fixture:console": "npm run build:all && node examples/p0-sample/control-plane.mjs"
   },
   "engines": {
     "node": ">=22.13.0"

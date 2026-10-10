@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
@@ -10,6 +10,10 @@ import {
 } from "@forgex/contracts/lifecycle";
 import { LocalGitCommandRunner } from "./workspace.js";
 import type { LifecycleExecutionAdapter } from "./lifecycle-runtime.js";
+import {
+  LifecycleTestPlanSchema,
+  type LifecycleTestPlan,
+} from "./lifecycle-codex-adapter.js";
 
 const sha = (bytes: string | Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -42,15 +46,153 @@ const environmentSchema = z
 export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
   readonly root: string;
   readonly sourcePath: string;
+  readonly businessRuntimePath: string | undefined;
   readonly git = new LocalGitCommandRunner();
   readonly children = new Set<ChildProcess>();
   readonly environments = new Map<
     string,
     { child: ChildProcess; state: Environment }
   >();
-  constructor(options: { root: string; sourcePath: string }) {
+  constructor(options: {
+    root: string;
+    sourcePath: string;
+    businessRuntimePath?: string;
+  }) {
     this.root = path.resolve(options.root);
     this.sourcePath = path.resolve(options.sourcePath);
+    this.businessRuntimePath = options.businessRuntimePath;
+  }
+  async run(
+    job: LifecycleJob,
+    signal: AbortSignal,
+    recoverOnly: boolean,
+    candidate?: { workspacePath: string; commitSha: string },
+  ): Promise<LifecycleTaskResult> {
+    if (recoverOnly)
+      return (
+        (await this.recover(job, signal)) ?? {
+          status: "blocked",
+          reason: "没有已核对的样板执行记录",
+        }
+      );
+    if (job.stage !== "development" || !candidate)
+      return this.execute(job, signal);
+    if (!this.businessRuntimePath || process.platform !== "darwin")
+      throw new Error("AI 样板代码必须使用已支持的 macOS 系统沙箱");
+    const head = (
+      await this.git.run(["-C", candidate.workspacePath, "rev-parse", "HEAD"])
+    ).stdout.trim();
+    if (head !== candidate.commitSha)
+      throw new Error("AI 样板提交与可信候选不匹配");
+    const cached = await this.recover(job, signal);
+    if (cached) return cached;
+    const businessSource = (
+      await this.git.run([
+        "-C",
+        candidate.workspacePath,
+        "show",
+        `${candidate.commitSha}:appointment.js`,
+      ])
+    ).stdout;
+    if (Buffer.byteLength(businessSource) > 64 * 1024)
+      throw new Error("AI 业务代码超过样板协议限制");
+    const bytes = JSON.stringify({
+      schemaVersion: 1,
+      runtimeDigest: sha(await readFile(this.businessRuntimePath)),
+      businessSource,
+    });
+    const artifactDigest = sha(bytes);
+    await this.#saveBytes(
+      path.join(this.root, "artifacts", `${artifactDigest}.mjs`),
+      bytes,
+    );
+    const target = await this.#start(
+      artifactDigest,
+      path.join(this.root, "self-tests", job.jobKey),
+      signal,
+    );
+    try {
+      const selfTests = await this.#checks(
+        target.url,
+        job.input.title.startsWith("修复："),
+      );
+      const result: LifecycleTaskResult = selfTests.some((c) => !c.passed)
+        ? {
+            status: "failed",
+            reason: `AI 代码真实自测失败：${selfTests
+              .filter((c) => !c.passed)
+              .map((c) => c.name)
+              .join("、")}`,
+          }
+        : {
+            status: "succeeded",
+            output: {
+              kind: "code",
+              summary: "真实 Agent 业务代码已提交，隔离运行与 HTTP 自测通过",
+              commitSha: head,
+              artifactDigest,
+              selfTests,
+            },
+          };
+      await this.#save(
+        path.join(this.root, "results", `${job.jobKey}.json`),
+        result,
+      );
+      return result;
+    } finally {
+      await this.#stop(target.child);
+    }
+  }
+  async testWithPlan(
+    job: LifecycleJob,
+    signal: AbortSignal,
+    raw: LifecycleTestPlan,
+  ): Promise<LifecycleTaskResult> {
+    if (job.stage !== "testing")
+      throw new Error("独立测试计划只能用于测试任务");
+    const plan = LifecycleTestPlanSchema.parse(raw);
+    const requirement = job.input.artifacts.find(
+      (a) => a.output.kind === "requirements",
+    )?.output;
+    const repair = job.input.title.startsWith("修复：");
+    const titles = [
+      "有效预约返回编号",
+      "无效预约被拒绝",
+      "重复请求保持幂等",
+      "预约可以查询",
+      ...(repair ? ["预约返回确认说明"] : []),
+    ];
+    const probes = [
+      "create",
+      "invalid",
+      "idempotency",
+      "query",
+      ...(repair ? ["display"] : []),
+    ];
+    if (
+      requirement?.kind !== "requirements" ||
+      requirement.spec.acceptanceCriteria.length !== titles.length ||
+      requirement.spec.acceptanceCriteria.some(
+        (c, i) => c.title !== titles[i],
+      ) ||
+      plan.probes.length !== titles.length ||
+      probes.some(
+        (probe, i) =>
+          !plan.probes.some((p) => p.criterionIndex === i && p.probe === probe),
+      )
+    )
+      return {
+        status: "blocked",
+        reason: "真实需求或 AI 测试计划超出样板探针协议，不能宣称全部覆盖",
+      };
+    const cached = await this.recover(job, signal);
+    if (cached) return cached;
+    const result = await this.#test(job, signal, plan);
+    await this.#save(
+      path.join(this.root, "results", `${job.jobKey}.json`),
+      result,
+    );
+    return result;
   }
   async execute(
     job: LifecycleJob,
@@ -279,6 +421,7 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
   async #test(
     job: LifecycleJob,
     signal: AbortSignal,
+    plan?: LifecycleTestPlan,
   ): Promise<LifecycleTaskResult> {
     const code = job.input.artifacts.find(
       (a) => a.output.kind === "code",
@@ -316,6 +459,7 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
           planDigest: sha(
             JSON.stringify({
               version: 1,
+              ...(plan ? { agentPlan: plan } : {}),
               criteria: requirement.spec.acceptanceCriteria,
               tests: [
                 "create",
@@ -454,8 +598,30 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
     const artifact = path.join(this.root, "artifacts", `${artifactDigest}.mjs`);
     const bytes = await readFile(artifact);
     if (sha(bytes) !== artifactDigest) throw new Error("样板制品摘要不匹配");
+    let businessArtifact: {
+      schemaVersion: 1;
+      runtimeDigest: string;
+      businessSource: string;
+    } | null = null;
+    if (this.businessRuntimePath) {
+      businessArtifact = z
+        .object({
+          schemaVersion: z.literal(1),
+          runtimeDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+          businessSource: z.string().max(64 * 1024),
+        })
+        .strict()
+        .parse(JSON.parse(bytes.toString("utf8")));
+      if (
+        process.platform !== "darwin" ||
+        businessArtifact.runtimeDigest !==
+          sha(await readFile(this.businessRuntimePath))
+      )
+        throw new Error("AI 样板运行时或系统沙箱不符合已批准版本");
+    }
     const trusted = await readFile(this.sourcePath, "utf8");
     if (
+      !businessArtifact &&
       bytes.toString("utf8") !== trusted &&
       bytes.toString("utf8") !==
         trusted.replace(
@@ -466,21 +632,38 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
       throw new Error("样板执行器拒绝运行未经审核的任意代码");
     await mkdir(root, { recursive: true, mode: 0o700 });
     const environmentKey = randomUUID();
+    const nodePath = await realpath(process.execPath);
+    const runtime = businessArtifact
+      ? await realpath(this.businessRuntimePath!)
+      : artifact;
+    const nodeArguments = [
+      "--permission",
+      `--allow-fs-read=${artifact}`,
+      `--allow-fs-read=${runtime}`,
+      `--allow-fs-read=${root}`,
+      `--allow-fs-write=${root}`,
+      runtime,
+      ...(businessArtifact ? [artifact] : []),
+    ];
+    // 系统限制覆盖 VM 与 Node 权限之外的能力；不允许任意业务代码连接本机其他服务。
+    const quoted = (value: string) => JSON.stringify(value);
+    const profile = `(version 1)(allow default)(deny file-read* file-write*)(allow file-read-metadata)(allow file-read* (literal "/") (subpath "/System") (subpath "/usr") (subpath "/private/preboot") (subpath "/private/var/db/dyld") (subpath "/opt/homebrew") (subpath "/Library/Apple") (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal ${quoted(nodePath)}) (literal ${quoted(runtime)}) (literal ${quoted(artifact)}) (subpath ${quoted(root)}))(allow file-write* (subpath ${quoted(root)}) (literal "/dev/null"))(deny network-outbound)(deny process-fork)(deny process-exec)(allow process-exec (literal ${quoted(nodePath)}))`;
     const child = spawn(
-      process.execPath,
-      [
-        "--permission",
-        `--allow-fs-read=${artifact}`,
-        `--allow-fs-read=${root}`,
-        `--allow-fs-write=${root}`,
-        artifact,
-      ],
+      businessArtifact ? "/usr/bin/sandbox-exec" : nodePath,
+      businessArtifact
+        ? ["-p", profile, nodePath, ...nodeArguments]
+        : nodeArguments,
       {
         env: {
           FORGEX_SAMPLE_DATA_FILE: path.join(root, "appointments.json"),
           FORGEX_SAMPLE_ARTIFACT_DIGEST: artifactDigest,
           FORGEX_SAMPLE_ENVIRONMENT_KEY: environmentKey,
           FORGEX_SAMPLE_PORT: String(port),
+          FORGEX_SAMPLE_VERIFY: ["self-tests", "independent-tests"].some(
+            (name) => root.startsWith(path.join(this.root, name) + path.sep),
+          )
+            ? "1"
+            : "0",
         },
         stdio: ["ignore", "pipe", "pipe"],
         signal,
@@ -492,6 +675,10 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
     try {
       const actualPort = await new Promise<number>((resolve, reject) => {
         let stdout = "";
+        let stderr = "";
+        child.stderr!.on("data", (chunk) => {
+          if (stderr.length < 1000) stderr += String(chunk);
+        });
         const timer = setTimeout(
           () => reject(new Error("样板环境启动超时")),
           10_000,
@@ -501,9 +688,13 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
           cleanup();
           reject(error);
         });
-        child.once("exit", () => {
+        child.once("exit", (code, exitSignal) => {
           cleanup();
-          reject(new Error("样板进程启动失败"));
+          reject(
+            new Error(
+              `样板进程启动失败（${code ?? exitSignal}）：${stderr.slice(0, 500)}`,
+            ),
+          );
         });
         child.stdout!.on("data", (chunk) => {
           stdout += String(chunk);
@@ -580,7 +771,7 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
       signal: AbortSignal.timeout(5_000),
     });
     const record = (await found.json()) as { id?: string; name?: string };
-    return [
+    const checks = [
       {
         name: "有效预约返回编号",
         passed:
@@ -606,6 +797,32 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
         ? [{ name: "预约确认说明", passed: created.display === "预约已确认" }]
         : []),
     ];
+    if (this.businessRuntimePath) {
+      const response = await fetch(`${url}/__forgex_contract_probes`, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      const result = z
+        .object({
+          create: z.boolean(),
+          invalid: z.boolean(),
+          idempotency: z.boolean(),
+          query: z.boolean(),
+          display: z.boolean(),
+        })
+        .strict()
+        .parse(await response.json());
+      for (const [index, probe] of (
+        [
+          "create",
+          "invalid",
+          "idempotency",
+          "query",
+          ...(repair ? ["display"] : []),
+        ] as (keyof typeof result)[]
+      ).entries())
+        checks[index]!.passed &&= response.ok && result[probe];
+    }
+    return checks;
   }
   async #stop(child: ChildProcess): Promise<void> {
     if (child.exitCode !== null || child.signalCode !== null) return;

@@ -10,6 +10,7 @@ import {
   MemoryLifecycleJournal,
 } from "../../services/device-worker/dist/lifecycle-runtime.js";
 import { SampleLifecycleAdapter } from "../../services/device-worker/dist/lifecycle-sample-adapter.js";
+import { createAiSampleAdapter } from "./ai-adapter.mjs";
 
 export async function createSampleAutomation({
   tenantKey,
@@ -58,11 +59,28 @@ export async function createSampleAutomation({
       },
     };
   });
-  const root = await mkdtemp(path.join(tmpdir(), "forgex-p0-console-"));
-  const adapter = new SampleLifecycleAdapter({
-    root,
-    sourcePath: fileURLToPath(new URL("./app.mjs", import.meta.url)),
-  });
+  const root = await mkdtemp(
+    path.join(
+      await (await import("node:fs/promises")).realpath(tmpdir()),
+      "forgex-p0-console-",
+    ),
+  );
+  const ai =
+    process.env.FORGEX_SAMPLE_MODE === "ai"
+      ? await createAiSampleAdapter({
+          root,
+          projectKey,
+          repositoryKey,
+          onAgentResult: async (record) =>
+            console.log(`真实 Agent 已完成：${record.stage}`),
+        })
+      : null;
+  const adapter =
+    ai?.pipeline ??
+    new SampleLifecycleAdapter({
+      root,
+      sourcePath: fileURLToPath(new URL("./app.mjs", import.meta.url)),
+    });
   let stopped = false,
     running = null,
     timer;
@@ -79,9 +97,11 @@ export async function createSampleAutomation({
         (item) =>
           new LifecycleExecutorRuntime({
             client: new HttpLifecycleClient({ origin, token: item.token }),
-            adapter,
+            adapter: ai?.adapter ?? adapter,
             journal: new MemoryLifecycleJournal(),
             privateKey: item.privateKey,
+            onExecutionError: (message) =>
+              console.error(`本地样板执行诊断：${message}`),
           }),
       );
       const poll = async () => {

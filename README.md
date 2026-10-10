@@ -8,7 +8,7 @@ ForgeX 是一个开源的 AI 软件交付控制面。它把需求澄清、方案
 
 `2.0` 开发分支新增完整交付入口 `/delivery`：需求方案审核与确认、独立设计审核、开发自测及人审、独立测试、测试部署和验收、三方生产放行、线上验收、关闭及关联 Bug 修复。使用独立 `/api/v2` 契约，不将旧版 Preview 验收视为生产上线。
 
-运行 `npm run p0:sample` 可复跑隔离预约样板的完整闭环、Bug 修复和回滚测试，并在结束后关闭测试进程。样板方案使用固定模板，实际执行 Git 提交、HTTP 业务测试和两个隔离环境部署；真实模型与客户环境需配置受控执行器。详见 [P0 方案](docs/product/2.0-P0.md)和 [2.0 接入与验收](docs/deployment/2.0-P0.md)。
+运行 `npm run p0:ai:sample` 使用当前 macOS 用户的 Codex 登录，真实生成需求、设计、业务代码和独立测试计划，并验收完整审批、隔离部署、Bug 修复及恢复闭环。`npm run p0:console` 默认使用真实 AI，人工审批仍需对应角色操作。`npm run p0:sample` 保留固定样板离线回归；不接真实生产环境。详见 [真实 Agent 接入](docs/deployment/2.0-AI-Agent.md)、[P0 方案](docs/product/2.0-P0.md)和 [2.0 接入与验收](docs/deployment/2.0-P0.md)。
 
 ## 为谁设计
 

@@ -1,0 +1,12 @@
+function handleAppointment({method,url,body,appointments,newId}) {
+ const result=(status,body,records=appointments)=>({status,body,appointments:records});
+ if(method==='POST'&&url==='/appointments') {
+ if(!body||typeof body.name!=='string'||body.name.trim().length<2||body.name.trim().length>100||typeof body.visitAt!=='string'||!Number.isFinite(Date.parse(body.visitAt))||typeof body.requestKey!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(body.requestKey))return result(400,{error:'输入无效'});
+ const previous=appointments.find(a=>a.requestKey===body.requestKey);
+ if(previous)return previous.name===body.name.trim()&&previous.visitAt===body.visitAt?result(200,previous):result(409,{error:'内容冲突'});
+ if(appointments.length>=2000)return result(400,{error:'容量已满'});
+ const record={...body,name:body.name.trim(),id:newId};return result(201,record,[...appointments,record]);
+ }
+ if(method==='GET'&&url.startsWith('/appointments/')){const record=appointments.find(a=>a.id===url.slice(14));return record?result(200,record):result(404,{error:'不存在'});}
+ return result(404,{error:'不存在'});
+ }

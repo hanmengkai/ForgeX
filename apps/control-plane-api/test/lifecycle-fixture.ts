@@ -41,6 +41,10 @@ import { HashedLifecycleExecutorAuthenticator } from "../src/lifecycle-api.js";
 
 export const createLifecycleFixture = async (
   repository: LifecycleRepository = new InMemoryLifecycleRepository(),
+  options: {
+    realAI?: boolean;
+    onAgentResult?: (record: unknown) => Promise<void>;
+  } = {},
 ) => {
   const tenantKey = randomUUID(),
     projectKey = randomUUID(),
@@ -172,20 +176,41 @@ export const createLifecycleFixture = async (
   });
   const origin = await app.listen({ host: "127.0.0.1", port: 0 });
   const root = await mkdtemp(path.join(os.tmpdir(), "forgex-p0-"));
-  const adapter = new SampleLifecycleAdapter({
-    root,
-    sourcePath: fileURLToPath(
-      new URL("../../../examples/p0-sample/app.mjs", import.meta.url),
-    ),
-  });
+  const ai = options.realAI
+    ? await (
+        await import(
+          new URL("../../../examples/p0-sample/ai-adapter.mjs", import.meta.url)
+            .href
+        )
+      ).createAiSampleAdapter({
+        root,
+        projectKey,
+        repositoryKey,
+        onAgentResult: options.onAgentResult,
+      })
+    : null;
+  const adapter: SampleLifecycleAdapter =
+    ai?.pipeline ??
+    new SampleLifecycleAdapter({
+      root,
+      sourcePath: fileURLToPath(
+        new URL("../../../examples/p0-sample/app.mjs", import.meta.url),
+      ),
+    });
   const runtimes = Object.fromEntries(
     executors.map((e) => [
       e.name,
       new LifecycleExecutorRuntime({
         client: new HttpLifecycleClient({ origin, token: e.token }),
-        adapter,
+        adapter: ai?.adapter ?? adapter,
         journal: new MemoryLifecycleJournal(),
         privateKey: e.privateKey,
+        ...(options.realAI
+          ? {
+              onExecutionError: (message: string) =>
+                console.error(`本地真实 Agent 诊断：${message}`),
+            }
+          : {}),
       }),
     ]),
   );
@@ -291,6 +316,7 @@ export const createLifecycleFixture = async (
     executors,
     runtimes,
     adapter,
+    aiRecords: ai?.records ?? [],
     repository,
     root,
     origin,

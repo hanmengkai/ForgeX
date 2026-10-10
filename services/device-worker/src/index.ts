@@ -12,3 +12,4 @@ export * from "./workspace.js";
 export * from "./lifecycle-runtime.js";
 export * from "./lifecycle-codex-adapter.js";
 export * from "./lifecycle-sample-adapter.js";
+export * from "./current-user-codex.js";
