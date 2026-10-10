@@ -1,5 +1,12 @@
 export type PlatformRole =
-  "product_owner" | "requirement_analyst" | "developer" | "administrator";
+  | "product_owner"
+  | "requirement_analyst"
+  | "developer"
+  | "administrator"
+  | "requester"
+  | "tester"
+  | "test_ops"
+  | "production_ops";
 
 export interface AuthenticatedPrincipal {
   actorKey: string;

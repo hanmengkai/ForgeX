@@ -10,6 +10,10 @@ const platformRoleSchema = z.enum([
   "requirement_analyst",
   "developer",
   "administrator",
+  "requester",
+  "tester",
+  "test_ops",
+  "production_ops",
 ]);
 const usernameSchema = z
   .string()
@@ -91,7 +95,7 @@ const accountSchema = z
     tenantKey: tenantKeySchema,
     username: usernameSchema,
     actorName: z.string().trim().min(2).max(100),
-    roles: z.array(platformRoleSchema).min(1).max(4),
+    roles: z.array(platformRoleSchema).min(1).max(8),
     enabled: z.boolean(),
     revision: z.number().int().positive(),
   })
@@ -105,7 +109,7 @@ const createInputSchema = z
   .object({
     username: usernameSchema,
     actorName: z.string().trim().min(2).max(100),
-    roles: z.array(platformRoleSchema).min(1).max(4),
+    roles: z.array(platformRoleSchema).min(1).max(8),
     password: passwordSchema,
   })
   .strict()
@@ -118,7 +122,7 @@ const updateInputSchema = z
   .object({
     expectedRevision: z.number().int().positive(),
     actorName: z.string().trim().min(2).max(100),
-    roles: z.array(platformRoleSchema).min(1).max(4),
+    roles: z.array(platformRoleSchema).min(1).max(8),
     enabled: z.boolean(),
     password: passwordSchema.optional(),
   })

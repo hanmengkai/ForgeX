@@ -1,4 +1,14 @@
 import { createHash } from "node:crypto";
+import {
+  registerLifecycleApi,
+  type LifecycleExecutorAuthenticator,
+} from "./lifecycle-api.js";
+import {
+  LifecycleService,
+  InMemoryLifecycleRepository,
+  type LifecycleRepository,
+} from "@forgex/application";
+import type { LifecycleExecutorPrincipal } from "@forgex/contracts/lifecycle";
 
 import Fastify, {
   type FastifyInstance,
@@ -104,10 +114,13 @@ declare module "fastify" {
     principal: AuthenticatedPrincipal | null;
     workerConnection: WorkerConnectionCredentialPayload | null;
     runnerConnection: AuthenticatedRunner | null;
+    lifecycleExecutor: LifecycleExecutorPrincipal | null;
   }
 }
 
 export interface ControlPlaneApiOptions {
+  lifecycleRepository?: LifecycleRepository;
+  lifecycleExecutorAuthenticator?: LifecycleExecutorAuthenticator;
   accountService?: AccountAdministrationService;
   authenticator: SessionAuthenticator;
   runnerAuthenticator: RunnerSessionAuthenticator;
@@ -362,6 +375,10 @@ const platformRoleSchema = z.enum([
   "requirement_analyst",
   "developer",
   "administrator",
+  "requester",
+  "tester",
+  "test_ops",
+  "production_ops",
 ]);
 const authenticatedPrincipalSchema = z
   .object({
@@ -382,7 +399,7 @@ const authenticatedPrincipalSchema = z
       .string()
       .uuid()
       .transform((value) => value.toLowerCase()),
-    roles: z.array(platformRoleSchema).min(1).max(4),
+    roles: z.array(platformRoleSchema).min(1).max(8),
   })
   .strict()
   .transform((principal) => ({
@@ -410,7 +427,7 @@ const accountCreateSchema = z
     schemaVersion: z.literal(1),
     username: usernameSchema,
     actorName: z.string().trim().min(2).max(100),
-    roles: z.array(platformRoleSchema).min(1).max(4),
+    roles: z.array(platformRoleSchema).min(1).max(8),
     password: passwordSchema,
   })
   .strict();
@@ -419,7 +436,7 @@ const accountUpdateSchema = z
     schemaVersion: z.literal(1),
     expectedRevision: z.number().int().positive(),
     actorName: z.string().trim().min(2).max(100),
-    roles: z.array(platformRoleSchema).min(1).max(4),
+    roles: z.array(platformRoleSchema).min(1).max(8),
     enabled: z.boolean(),
     password: passwordSchema.optional(),
   })
@@ -1211,6 +1228,19 @@ export const buildControlPlaneApi = (
 
   app.addHook("onRequest", async (request) => {
     const path = request.url.split("?")[0] ?? "";
+    if (path.startsWith("/api/v2/executor/")) {
+      request.lifecycleExecutor =
+        (await options.lifecycleExecutorAuthenticator?.authenticate(
+          request.headers.authorization,
+        )) ?? null;
+      if (!request.lifecycleExecutor)
+        throw new ApplicationError(
+          401,
+          "lifecycle_executor_required",
+          "请使用受信生命周期执行器连接",
+        );
+      return;
+    }
     if (path.startsWith("/api/v1/worker-connection/")) {
       request.workerConnection = authenticateWorkerHeaders(request);
       return;
@@ -1225,6 +1255,7 @@ export const buildControlPlaneApi = (
       return;
     }
     if (
+      path.startsWith("/api/v2/") ||
       path === "/api/v1/requirements" ||
       path.startsWith("/api/v1/requirements/") ||
       path === "/api/v1/requirement-contexts" ||
@@ -1247,6 +1278,15 @@ export const buildControlPlaneApi = (
     ) {
       const credential = requestSessionCredential(request);
       request.principal = await authenticateRequest(request);
+      if (
+        request.principal.roles.every((role) => role === "requester") &&
+        !path.startsWith("/api/v2/")
+      )
+        throw new ApplicationError(
+          403,
+          "requester_portal_only",
+          "请在完整交付入口访问自己的需求",
+        );
       if (
         credential.cookieAuthenticated &&
         !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
@@ -1271,6 +1311,41 @@ export const buildControlPlaneApi = (
     }
     return request.principal;
   };
+
+  registerLifecycleApi(app, {
+    service: new LifecycleService(
+      options.lifecycleRepository ?? new InMemoryLifecycleRepository(),
+      {
+        projectKey: options.projectKey,
+        repositoryKey: options.repositoryKey,
+        ...(options.clock ? { clock: options.clock } : {}),
+        assertScope: async (principal, projectKey, repositoryKey) => {
+          if (
+            projectKey === options.projectKey &&
+            repositoryKey === options.repositoryKey
+          )
+            return;
+          await platformConfiguration.getRequirementRepository(
+            principal,
+            projectKey,
+            repositoryKey,
+          );
+        },
+      },
+    ),
+    principal: principalFrom,
+    executor: (request) => {
+      if (!request.lifecycleExecutor)
+        throw new ApplicationError(
+          401,
+          "lifecycle_executor_required",
+          "生命周期执行器连接已失效",
+        );
+      return request.lifecycleExecutor;
+    },
+    projectKey: options.projectKey,
+    repositoryKey: options.repositoryKey,
+  });
 
   const accountService = (): AccountAdministrationService => {
     if (!options.accountService) {

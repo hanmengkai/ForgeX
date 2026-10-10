@@ -38,3 +38,4 @@ export {
   PostgresProjectInitializationRepository,
   type PostgresProjectInitializationPool,
 } from "./postgres-project-initialization-repository.js";
+export { PostgresLifecycleRepository } from "./postgres-lifecycle-repository.js";

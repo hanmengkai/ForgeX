@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  createLifecycleClient,
+  type LifecycleClient,
+} from "./lifecycle-client.js";
+import {
   ExtensionCatalogResponseSchema,
   McpInvocationToolFormSchema,
   McpToolCatalogSchema,
@@ -232,7 +236,14 @@ export interface KnowledgeSourcePublishInput {
 export type ExtensionCatalogItem = ExtensionItemForPeople;
 export type ExtensionCatalogOverview = ExtensionCatalogOverviewForPeople;
 export type PlatformRole =
-  "product_owner" | "requirement_analyst" | "developer" | "administrator";
+  | "product_owner"
+  | "requirement_analyst"
+  | "developer"
+  | "administrator"
+  | "requester"
+  | "tester"
+  | "test_ops"
+  | "production_ops";
 export interface SessionProfile {
   actorName: string;
   username: string;
@@ -386,6 +397,7 @@ export class ForgeXHttpError extends Error {
 }
 
 export interface ForgeXClient {
+  lifecycle?: LifecycleClient;
   startSession(input: {
     username: string;
     password: string;
@@ -527,10 +539,14 @@ const sessionResponseSchema = z
               "requirement_analyst",
               "developer",
               "administrator",
+              "requester",
+              "tester",
+              "test_ops",
+              "production_ops",
             ]),
           )
           .min(1)
-          .max(4),
+          .max(8),
       })
       .strict(),
   })
@@ -549,10 +565,14 @@ const platformAccountSchema = z
           "requirement_analyst",
           "developer",
           "administrator",
+          "requester",
+          "tester",
+          "test_ops",
+          "production_ops",
         ]),
       )
       .min(1)
-      .max(4),
+      .max(8),
     enabled: z.boolean(),
     revision: z.number().int().positive(),
     links: z.object({ self: z.string().regex(accountSelfPattern) }).strict(),
@@ -1639,6 +1659,7 @@ export const createHttpForgeXClient = (
   };
 
   return {
+    lifecycle: createLifecycleClient(request),
     watchRequirementEvents: (requirementsUrl, onRefresh, onStatus) => {
       if (!projectRequirementsPattern.test(requirementsUrl)) {
         throw new Error("需求实时进度入口已经失效，请刷新页面后重试");

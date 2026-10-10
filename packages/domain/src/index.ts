@@ -2,6 +2,11 @@ export {
   RequirementStateConflictError,
   RequirementWorkflow,
 } from "./requirement-workflow.js";
+export {
+  LifecycleWorkflow,
+  lifecycleDigest,
+  lifecycleRequiredRoles,
+} from "./lifecycle-workflow.js";
 export type {
   ApprovalActor,
   ApprovalRecord,

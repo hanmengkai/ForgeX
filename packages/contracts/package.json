@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./lifecycle": {
+      "types": "./dist/lifecycle.d.ts",
+      "development": "./src/lifecycle.ts",
+      "default": "./dist/lifecycle.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "development": "./src/index.ts",

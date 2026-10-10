@@ -11,6 +11,10 @@ import type { ForgeXClient, PlatformAccountItem, PlatformRole } from "./api.js";
 import { PlusIcon, UserIcon } from "./icons.js";
 
 const roleOptions: Array<{ value: PlatformRole; label: string }> = [
+  { value: "requester", label: "需求方" },
+  { value: "tester", label: "测试负责人" },
+  { value: "test_ops", label: "测试运维" },
+  { value: "production_ops", label: "生产运维" },
   { value: "administrator", label: "超级管理员" },
   { value: "product_owner", label: "产品负责人" },
   { value: "requirement_analyst", label: "需求分析师" },

@@ -1,4 +1,6 @@
 import path from "node:path";
+import { HashedLifecycleExecutorAuthenticator } from "./lifecycle-api.js";
+import { PostgresLifecycleRepository } from "@forgex/postgres";
 
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
 
@@ -70,6 +72,10 @@ export const createProductionControlPlane = (
   });
 
   return buildControlPlaneApi({
+    lifecycleRepository: new PostgresLifecycleRepository(options.pool),
+    lifecycleExecutorAuthenticator: new HashedLifecycleExecutorAuthenticator(
+      options.config.lifecycleExecutors,
+    ),
     accountService: new AccountAdministrationService(
       options.accountRepository ?? new PostgresAccountRepository(options.pool),
     ),

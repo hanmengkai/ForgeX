@@ -22,6 +22,7 @@ import type {
   RequirementSpecInput,
 } from "./api.js";
 import { AccountManagement } from "./account-management.js";
+import { LifecycleWorkbench } from "./lifecycle-workbench.js";
 import { CreateRequirementDialog } from "./create-requirement-dialog.js";
 import { DashboardOverview } from "./dashboard-overview.js";
 import { ExtensionCenter } from "./extension-center.js";
@@ -55,6 +56,7 @@ interface RequirementWorkbenchProps {
 }
 
 type ConsoleView =
+  | "lifecycle"
   | "dashboard"
   | "requirements"
   | "workers"
@@ -65,6 +67,7 @@ type ConsoleView =
   | "integrations";
 
 const pathByView: Record<ConsoleView, string> = {
+  lifecycle: "/delivery",
   dashboard: "/dashboard",
   requirements: "/requirements",
   workers: "/agents",
@@ -132,6 +135,10 @@ const roleLabel = (roles: readonly PlatformRole[]): string => {
   if (roles.includes("administrator")) return "超级管理员";
   if (roles.includes("product_owner")) return "产品负责人";
   if (roles.includes("requirement_analyst")) return "需求分析师";
+  if (roles.includes("requester")) return "需求方";
+  if (roles.includes("tester")) return "测试负责人";
+  if (roles.includes("test_ops")) return "测试运维";
+  if (roles.includes("production_ops")) return "生产运维";
   return "研发成员";
 };
 
@@ -1509,6 +1516,8 @@ export function RequirementWorkbench({
   signingOut = false,
 }: RequirementWorkbenchProps) {
   const isAdministrator = roles.includes("administrator");
+  const isRequesterOnly =
+    roles.length > 0 && roles.every((role) => role === "requester");
   const requirementContextStorageKey = actorUsername
     ? `${REQUIREMENT_CONTEXT_STORAGE_KEY}:${actorUsername}`
     : REQUIREMENT_CONTEXT_STORAGE_KEY;
@@ -1710,10 +1719,19 @@ export function RequirementWorkbench({
       navigate(pathByView.dashboard, true);
     }
     const onPopState = () => {
-      setActiveView(viewFromPath(window.location.pathname));
+      if (isRequesterOnly) navigate(pathByView.lifecycle, true);
+      else setActiveView(viewFromPath(window.location.pathname));
       selectContextFromLocation(contextCustomersRef.current);
     };
     window.addEventListener("popstate", onPopState);
+    if (isRequesterOnly) {
+      navigate(pathByView.lifecycle, true);
+      setLoading(false);
+      return () => {
+        mountedRef.current = false;
+        window.removeEventListener("popstate", onPopState);
+      };
+    }
     void client
       .listRequirementContexts()
       .then((overview) => {
@@ -1752,7 +1770,7 @@ export function RequirementWorkbench({
       expandedDetailRef.current = null;
       window.removeEventListener("popstate", onPopState);
     };
-  }, [client, navigate, selectContextFromLocation]);
+  }, [client, navigate, selectContextFromLocation, isRequesterOnly]);
 
   useEffect(() => {
     if (!selectedProject) return;
@@ -2040,117 +2058,137 @@ export function RequirementWorkbench({
         <nav aria-label="主导航">
           <span className="nav-group-label">业务工作</span>
           <a
-            className={`nav-item ${activeView === "dashboard" ? "active" : ""}`}
-            href={pathByView.dashboard}
-            aria-label="工作台"
-            aria-current={activeView === "dashboard" ? "page" : undefined}
+            className={`nav-item ${activeView === "lifecycle" ? "active" : ""}`}
+            href={pathByView.lifecycle}
+            aria-current={activeView === "lifecycle" ? "page" : undefined}
             onClick={(event) => {
               event.preventDefault();
-              navigate(pathByView.dashboard);
-            }}
-          >
-            <DashboardIcon />
-            工作台
-          </a>
-          <a
-            className={`nav-item ${activeView === "requirements" ? "active" : ""}`}
-            href={pathByView.requirements}
-            aria-label="需求管理"
-            aria-current={activeView === "requirements" ? "page" : undefined}
-            onClick={(event) => {
-              event.preventDefault();
-              navigate(pathByView.requirements);
+              navigate(pathByView.lifecycle);
             }}
           >
             <RequirementIcon />
-            需求管理
+            完整交付
           </a>
-          <a
-            className={`nav-item ${activeView === "approvals" ? "active" : ""}`}
-            href={pathByView.approvals}
-            aria-label="操作确认"
-            aria-current={activeView === "approvals" ? "page" : undefined}
-            onClick={(event) => {
-              event.preventDefault();
-              navigate(pathByView.approvals);
-            }}
-          >
-            <ApprovalIcon />
-            操作确认
-          </a>
-          <span className="nav-group-label">平台管理</span>
-          <a
-            className={`nav-item ${activeView === "workers" ? "active" : ""}`}
-            href={pathByView.workers}
-            aria-label="设备与 Agent"
-            aria-current={activeView === "workers" ? "page" : undefined}
-            onClick={(event) => {
-              event.preventDefault();
-              navigate(pathByView.workers);
-            }}
-          >
-            <AgentIcon />
-            设备与 Agent
-          </a>
-          <a
-            className={`nav-item ${activeView === "extensions" ? "active" : ""}`}
-            href={pathByView.extensions}
-            aria-label="扩展中心"
-            aria-current={activeView === "extensions" ? "page" : undefined}
-            onClick={(event) => {
-              event.preventDefault();
-              navigate(pathByView.extensions);
-            }}
-          >
-            <ExtensionIcon />
-            扩展中心
-          </a>
-          {isAdministrator ? (
-            <a
-              className={`nav-item ${activeView === "platformProjects" ? "active" : ""}`}
-              href={pathByView.platformProjects}
-              aria-label="客户与项目"
-              aria-current={
-                activeView === "platformProjects" ? "page" : undefined
-              }
-              onClick={(event) => {
-                event.preventDefault();
-                navigate(pathByView.platformProjects);
-              }}
-            >
-              <RequirementIcon />
-              客户与项目
-            </a>
-          ) : null}
-          {isAdministrator ? (
-            <a
-              className={`nav-item ${activeView === "integrations" ? "active" : ""}`}
-              href={pathByView.integrations}
-              aria-label="MCP 与外部工具"
-              aria-current={activeView === "integrations" ? "page" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                navigate(pathByView.integrations);
-              }}
-            >
-              <ExtensionIcon />
-              MCP 与外部工具
-            </a>
-          ) : null}
-          {isAdministrator ? (
-            <a
-              className={`nav-item ${activeView === "accounts" ? "active" : ""}`}
-              href={pathByView.accounts}
-              aria-label="账号管理"
-              aria-current={activeView === "accounts" ? "page" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                navigate(pathByView.accounts);
-              }}
-            >
-              <UserIcon />
-              账号管理
-            </a>
+          {!isRequesterOnly ? (
+            <>
+              <a
+                className={`nav-item ${activeView === "dashboard" ? "active" : ""}`}
+                href={pathByView.dashboard}
+                aria-label="工作台"
+                aria-current={activeView === "dashboard" ? "page" : undefined}
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate(pathByView.dashboard);
+                }}
+              >
+                <DashboardIcon />
+                工作台
+              </a>
+              <a
+                className={`nav-item ${activeView === "requirements" ? "active" : ""}`}
+                href={pathByView.requirements}
+                aria-label="需求管理"
+                aria-current={
+                  activeView === "requirements" ? "page" : undefined
+                }
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate(pathByView.requirements);
+                }}
+              >
+                <RequirementIcon />
+                需求管理
+              </a>
+              <a
+                className={`nav-item ${activeView === "approvals" ? "active" : ""}`}
+                href={pathByView.approvals}
+                aria-label="操作确认"
+                aria-current={activeView === "approvals" ? "page" : undefined}
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate(pathByView.approvals);
+                }}
+              >
+                <ApprovalIcon />
+                操作确认
+              </a>
+              <span className="nav-group-label">平台管理</span>
+              <a
+                className={`nav-item ${activeView === "workers" ? "active" : ""}`}
+                href={pathByView.workers}
+                aria-label="设备与 Agent"
+                aria-current={activeView === "workers" ? "page" : undefined}
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate(pathByView.workers);
+                }}
+              >
+                <AgentIcon />
+                设备与 Agent
+              </a>
+              <a
+                className={`nav-item ${activeView === "extensions" ? "active" : ""}`}
+                href={pathByView.extensions}
+                aria-label="扩展中心"
+                aria-current={activeView === "extensions" ? "page" : undefined}
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate(pathByView.extensions);
+                }}
+              >
+                <ExtensionIcon />
+                扩展中心
+              </a>
+              {isAdministrator ? (
+                <a
+                  className={`nav-item ${activeView === "platformProjects" ? "active" : ""}`}
+                  href={pathByView.platformProjects}
+                  aria-label="客户与项目"
+                  aria-current={
+                    activeView === "platformProjects" ? "page" : undefined
+                  }
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate(pathByView.platformProjects);
+                  }}
+                >
+                  <RequirementIcon />
+                  客户与项目
+                </a>
+              ) : null}
+              {isAdministrator ? (
+                <a
+                  className={`nav-item ${activeView === "integrations" ? "active" : ""}`}
+                  href={pathByView.integrations}
+                  aria-label="MCP 与外部工具"
+                  aria-current={
+                    activeView === "integrations" ? "page" : undefined
+                  }
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate(pathByView.integrations);
+                  }}
+                >
+                  <ExtensionIcon />
+                  MCP 与外部工具
+                </a>
+              ) : null}
+              {isAdministrator ? (
+                <a
+                  className={`nav-item ${activeView === "accounts" ? "active" : ""}`}
+                  href={pathByView.accounts}
+                  aria-label="账号管理"
+                  aria-current={activeView === "accounts" ? "page" : undefined}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate(pathByView.accounts);
+                  }}
+                >
+                  <UserIcon />
+                  账号管理
+                </a>
+              ) : null}
+            </>
           ) : null}
         </nav>
         <div className="sidebar-note">
@@ -2195,7 +2233,9 @@ export function RequirementWorkbench({
           </div>
         </header>
         <div className="workspace-body">
-          {activeView === "dashboard" ? (
+          {activeView === "lifecycle" ? (
+            <LifecycleWorkbench client={client} />
+          ) : activeView === "dashboard" ? (
             <DashboardOverview
               projectName={projectName}
               items={items}

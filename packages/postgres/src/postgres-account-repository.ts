@@ -30,6 +30,10 @@ const platformRoleSchema = z.enum([
   "requirement_analyst",
   "developer",
   "administrator",
+  "requester",
+  "tester",
+  "test_ops",
+  "production_ops",
 ]);
 const usernameSchema = z
   .string()
@@ -46,7 +50,7 @@ const accountRowSchema = z
     tenant_key: z.string().uuid(),
     username: usernameSchema,
     actor_name: z.string().trim().min(2).max(100),
-    roles: z.array(platformRoleSchema).min(1).max(4),
+    roles: z.array(platformRoleSchema).min(1).max(8),
     enabled: z.boolean(),
     revision: z.coerce.number().int().positive(),
   })

@@ -244,3 +244,14 @@ export {
   type ProjectInitializationTask,
   type ProjectInitializationView,
 } from "./project-initialization-service.js";
+export {
+  LifecycleService,
+  InMemoryLifecycleRepository,
+  LifecycleStoreSchema,
+  emptyLifecycleStore,
+} from "./lifecycle-service.js";
+export type {
+  LifecycleRepository,
+  LifecycleStore,
+  LifecycleView,
+} from "./lifecycle-service.js";

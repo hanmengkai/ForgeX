@@ -9,3 +9,6 @@ export * from "./isolation-launcher.js";
 export * from "./local-mcp.js";
 export * from "./runtime.js";
 export * from "./workspace.js";
+export * from "./lifecycle-runtime.js";
+export * from "./lifecycle-codex-adapter.js";
+export * from "./lifecycle-sample-adapter.js";

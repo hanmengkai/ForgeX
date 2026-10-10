@@ -10,6 +10,7 @@ import {
   type SessionAuthenticator,
 } from "@forgex/application";
 import { z } from "zod";
+import { LifecycleExecutorPrincipalSchema } from "@forgex/contracts/lifecycle";
 
 const internalKey = z
   .string()
@@ -39,6 +40,10 @@ const platformRole = z.enum([
   "requirement_analyst",
   "developer",
   "administrator",
+  "requester",
+  "tester",
+  "test_ops",
+  "production_ops",
 ]);
 export const AuthenticatedPrincipalRuntimeSchema = z
   .object({
@@ -53,7 +58,7 @@ export const AuthenticatedPrincipalRuntimeSchema = z
       .regex(/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u)
       .optional(),
     tenantKey: internalKey,
-    roles: z.array(platformRole).min(1).max(4),
+    roles: z.array(platformRole).min(1).max(8),
   })
   .strict()
   .transform((principal) => ({
@@ -112,6 +117,17 @@ export const ControlPlaneRuntimeConfigSchema = z
           .strict(),
       )
       .max(100),
+    lifecycleExecutors: z
+      .array(
+        z
+          .object({
+            tokenSha256: sha256,
+            executor: LifecycleExecutorPrincipalSchema,
+          })
+          .strict(),
+      )
+      .max(100)
+      .default([]),
     trustedRunners: z
       .array(
         z
@@ -199,6 +215,24 @@ export const ControlPlaneRuntimeConfigSchema = z
           message: "人员与 Runner 令牌摘要必须完全隔离",
         });
       }
+    }
+    const usedDigests = new Set([
+      ...peopleDigests,
+      ...config.runnerSessions.map((session) => session.tokenSha256),
+    ]);
+    const executorKeys = new Set<string>();
+    for (const [index, session] of config.lifecycleExecutors.entries()) {
+      if (
+        usedDigests.has(session.tokenSha256) ||
+        executorKeys.has(session.executor.executorKey)
+      )
+        context.addIssue({
+          code: "custom",
+          path: ["lifecycleExecutors", index],
+          message: "人员、Runner 与生命周期执行器身份必须独立且不能重复",
+        });
+      usedDigests.add(session.tokenSha256);
+      executorKeys.add(session.executor.executorKey);
     }
   });
 

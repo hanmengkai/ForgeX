@@ -71,7 +71,10 @@ export interface CompletedWorkspace extends PreparedWorkspace {
 export interface RequirementWorkspaceProvider {
   prepare(
     project: DeviceWorkerProject,
-    assignment: RequirementWorkerAssignment,
+    assignment: Pick<
+      RequirementWorkerAssignment,
+      "assignmentKey" | "projectKey"
+    >,
   ): Promise<PreparedWorkspace>;
   commitCompleted(workspace: PreparedWorkspace): Promise<CompletedWorkspace>;
   recoverCompleted(workspace: PreparedWorkspace): Promise<CompletedWorkspace>;
@@ -94,7 +97,10 @@ export class GitWorktreeWorkspaceProvider implements RequirementWorkspaceProvide
 
   async prepare(
     project: DeviceWorkerProject,
-    assignment: RequirementWorkerAssignment,
+    assignment: Pick<
+      RequirementWorkerAssignment,
+      "assignmentKey" | "projectKey"
+    >,
   ): Promise<PreparedWorkspace> {
     const repositoryRoot = await normalizedRealPath(project.repositoryRoot);
     const configuredRepositoryRoot = path.normalize(
