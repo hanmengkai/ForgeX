@@ -32,6 +32,40 @@
 
 修复缺陷和新增行为应先添加能够失败的回归测试，再提交最小实现。提交信息使用简体中文，技术标识符保持原样。
 
+### macOS 本地开发预览
+
+安装依赖后，先构建工作区并准备前端本地配置：
+
+```bash
+npm run build:all
+cp -n apps/web-console/.env.example apps/web-console/.env
+```
+
+在仓库根目录打开两个终端。第一个启动仓库自带的内存测试 API：
+
+```bash
+node e2e/support/control-plane.mjs
+```
+
+第二个启动支持热更新的前端：
+
+```bash
+npm run --workspace @forgex/web-console dev -- --host 127.0.0.1 --strictPort
+```
+
+访问 `http://127.0.0.1:4173`，使用测试账号 `e2e.admin` 和测试密码 `E2E-Password-2026!` 登录。API 监听 `127.0.0.1:3000`，由前端代理同源访问。修改 API 或共享包后，需要重新构建并重启 API；前端源码修改会自动更新。
+
+该 API 使用内存仓储，重启后数据清空，适合界面和接口开发。体验 2.0 持久化交付、当前用户 Codex 和四个独立 Worker 时，请按 [持久化隔离样板指南](docs/deployment/2.0-Durable-Codex.md) 启动，保留独立设计审核和完整审批闭环。需要验证 PostgreSQL 持久化与数据库迁移时，请按 [部署教程](docs/deployment/README.md) 装配正式控制面与执行器。
+
+macOS 默认临时目录经过 `/var` 符号链接，且路径较长，会触发工作区安全检查或超过 Unix socket 路径限制。运行测试时可以指定真实、较短的临时目录：
+
+```bash
+TMPDIR=/private/tmp npm test
+TMPDIR=/private/tmp npm run test:coverage
+```
+
+独立 Runner 已支持 Windows、Linux 和 macOS 的进程启动身份核对；平台专属测试会按运行系统选择或跳过。扩展管理员示例提供 POSIX 与 Windows 两种配置，按当前平台选用。真实 PostgreSQL 集成测试仍需独立的 `FORGEX_TEST_DATABASE_URL`；当前用户 Codex 的隔离执行只完成了 macOS 验证，其他设备接入需另行验收。
+
 ## Pull Request 要求
 
 - 一个 PR 聚焦一个清晰目标，并写明用户影响和验证证据。

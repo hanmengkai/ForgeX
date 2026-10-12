@@ -866,7 +866,9 @@ describe("RequirementWorkbench", () => {
     render(<RequirementWorkbench client={client} />);
 
     await user.click(screen.getByRole("link", { name: "执行器管理" }));
-    await user.click(await screen.findByRole("button", { name: "连接传统设备" }));
+    await user.click(
+      await screen.findByRole("button", { name: "连接传统设备" }),
+    );
     await user.type(screen.getByLabelText("设备名称"), "研发电脑 1");
     await user.type(screen.getByLabelText(/Codex 账户昵称/u), "Codex 账户 1");
     await user.click(screen.getByRole("button", { name: "生成连接配置" }));
