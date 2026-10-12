@@ -19,6 +19,7 @@ import {
   InMemoryLifecycleRepository,
   type LifecycleRepository,
   type PlatformRole,
+  type LifecycleArtifactStore,
 } from "@forgex/application";
 import { EvidenceAuthority } from "@forgex/domain";
 import {
@@ -44,6 +45,7 @@ export const createLifecycleFixture = async (
   options: {
     realAI?: boolean;
     onAgentResult?: (record: unknown) => Promise<void>;
+    artifactStore?: LifecycleArtifactStore;
   } = {},
 ) => {
   const tenantKey = randomUUID(),
@@ -150,6 +152,9 @@ export const createLifecycleFixture = async (
       },
     },
     lifecycleRepository: repository,
+    ...(options.artifactStore
+      ? { lifecycleArtifactStore: options.artifactStore }
+      : {}),
     lifecycleExecutorAuthenticator: new HashedLifecycleExecutorAuthenticator(
       executors.map((e) => ({
         tokenSha256: createHash("sha256").update(e.token).digest("hex"),

@@ -5,8 +5,14 @@ import {
   ApplicationError,
   type AuthenticatedPrincipal,
   type LifecycleService,
+  type LifecycleArtifactStore,
+  verifyLifecycleArtifact,
 } from "@forgex/application";
-import type { LifecycleExecutorPrincipal } from "@forgex/contracts/lifecycle";
+import {
+  LifecycleArtifactAccessSchema,
+  LifecycleArtifactEnvelopeSchema,
+  type LifecycleExecutorPrincipal,
+} from "@forgex/contracts/lifecycle";
 
 export interface LifecycleExecutorAuthenticator {
   authenticate(
@@ -41,6 +47,7 @@ export const registerLifecycleApi = (
     executor: (request: FastifyRequest) => LifecycleExecutorPrincipal;
     projectKey: string;
     repositoryKey: string;
+    artifactStore?: LifecycleArtifactStore;
   },
 ): void => {
   const key = (request: FastifyRequest, name: string): string => {
@@ -178,6 +185,105 @@ export const registerLifecycleApi = (
       request.body,
     ),
   }));
+  const transferSchema = z
+    .object({
+      access: LifecycleArtifactAccessSchema,
+      envelope: LifecycleArtifactEnvelopeSchema,
+    })
+    .strict();
+  app.post(
+    "/api/v2/executor/jobs/:jobKey/artifacts",
+    { bodyLimit: 256 * 1024 },
+    async (request) => {
+      if (!options.artifactStore)
+        throw new ApplicationError(
+          503,
+          "artifact_store_unavailable",
+          "制品交接服务尚未配置",
+        );
+      const parsed = transferSchema.safeParse(request.body);
+      if (!parsed.success)
+        throw new ApplicationError(
+          422,
+          "validation_error",
+          "制品交接格式不正确",
+        );
+      const executor = options.executor(request);
+      await options.service.authorizeArtifact(
+        executor,
+        key(request, "jobKey"),
+        parsed.data.access,
+        "upload",
+      );
+      try {
+        verifyLifecycleArtifact(parsed.data.envelope);
+      } catch {
+        throw new ApplicationError(
+          422,
+          "artifact_invalid",
+          "制品摘要或内容大小不正确",
+        );
+      }
+      await options.artifactStore.put(executor, parsed.data.envelope);
+      return {
+        data: {
+          schemaVersion: 1,
+          artifactDigest: parsed.data.envelope.artifactDigest,
+        },
+      };
+    },
+  );
+  app.post("/api/v2/executor/jobs/:jobKey/artifacts/read", async (request) => {
+    if (!options.artifactStore)
+      throw new ApplicationError(
+        503,
+        "artifact_store_unavailable",
+        "制品交接服务尚未配置",
+      );
+    const parsed = z
+      .object({
+        access: LifecycleArtifactAccessSchema,
+        artifactDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+        commitSha: z.string().regex(/^[a-f0-9]{40}$/u),
+      })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success)
+      throw new ApplicationError(422, "validation_error", "制品读取格式不正确");
+    const executor = options.executor(request),
+      { access, artifactDigest, commitSha } = parsed.data;
+    const input = await options.service.authorizeArtifact(
+      executor,
+      key(request, "jobKey"),
+      access,
+      "download",
+    );
+    if (
+      !input.artifacts.some(
+        (a) =>
+          a.output.kind === "code" &&
+          a.output.artifactDigest === artifactDigest &&
+          a.output.commitSha === commitSha,
+      )
+    )
+      throw new ApplicationError(
+        403,
+        "artifact_scope_denied",
+        "当前任务没有获批使用这个制品",
+      );
+    const envelope = await options.artifactStore.get(
+      executor,
+      artifactDigest,
+      commitSha,
+    );
+    if (!envelope)
+      throw new ApplicationError(
+        404,
+        "artifact_not_found",
+        "没有找到已交接制品，请联系研发负责人",
+      );
+    return { data: envelope };
+  });
   app.addHook("onSend", async (request, reply, payload) => {
     if (request.url.startsWith("/api/v2/"))
       reply.header("Cache-Control", "no-store");

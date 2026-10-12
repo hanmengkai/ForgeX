@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { sanitizeExecutionLogText } from "@forgex/contracts";
 import {
@@ -68,6 +69,7 @@ export interface LifecycleExecutionClient {
   renew(job: LifecycleJob): Promise<LifecycleJob>;
   complete(completion: LifecycleSignedCompletion): Promise<void>;
 }
+export class LifecycleDeliveryUnavailableError extends Error {}
 
 export const assertLifecyclePrivatePath = async (
   target: string,
@@ -139,25 +141,35 @@ export class FileLifecycleJournal implements LifecycleJournal {
   }
   async acquire(): Promise<() => Promise<void>> {
     await this.initialize();
-    const lock = path.join(this.root, "executor.lock");
-    const token = randomUUID();
-    let handle;
+    // 升级期间不能绕过旧实例的文件锁，否则新旧执行器会同时持有同一日志。
     try {
-      handle = await open(lock, "wx", 0o600);
-    } catch {
-      throw new Error(
-        "执行日志已有持有者；中断后请先确认旧执行器退出，再移除锁文件",
-      );
+      await lstat(path.join(this.root, "executor.lock"));
+      throw new Error("旧版执行器锁仍在，请先确认旧 Worker 已停止并归档旧锁");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    await handle.writeFile(JSON.stringify({ pid: process.pid, token }));
-    await handle.sync();
-    await handle.close();
+    const lock = path.join(this.root, "executor-lock.sqlite");
+    try {
+      const handle = await open(lock, "wx", 0o600);
+      await handle.close();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    await assertLifecyclePrivatePath(lock);
+    // 文件存在不表示进程存活；数据库锁在异常退出后由操作系统自动释放。
+    const database = new DatabaseSync(lock);
+    try {
+      database.exec("BEGIN EXCLUSIVE");
+    } catch {
+      database.close();
+      throw new Error("执行日志已有持有者，请等待旧执行器退出");
+    }
+    let released = false;
     return async () => {
-      const content = JSON.parse(await readFile(lock, "utf8")) as {
-        token: string;
-      };
-      if (content.token !== token) throw new Error("执行器日志锁身份变化");
-      await rm(lock);
+      if (released) return;
+      released = true;
+      database.exec("ROLLBACK");
+      database.close();
     };
   }
   async #syncDirectory() {
@@ -238,6 +250,7 @@ export class LifecycleExecutorRuntime {
       }
       result = LifecycleTaskResultSchema.parse(result);
     } catch (error) {
+      if (error instanceof LifecycleDeliveryUnavailableError) throw error;
       try {
         this.options.onExecutionError?.(
           sanitizeExecutionLogText(

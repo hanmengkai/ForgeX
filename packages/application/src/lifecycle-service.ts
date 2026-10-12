@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   canonicalLifecycleJson,
+  LifecycleArtifactAccessSchema,
   LifecycleActionCommandSchema,
   LifecycleBugCreateCommandSchema,
   LifecycleBugRepairCommandSchema,
@@ -29,6 +30,7 @@ import {
 
 import type { AuthenticatedPrincipal } from "./auth.js";
 import { ApplicationError } from "./errors.js";
+import type { LifecycleArtifactStore } from "./lifecycle-artifact-store.js";
 
 export const LifecycleStoreSchema = z
   .object({
@@ -140,6 +142,7 @@ export class LifecycleService {
       projectKey: string;
       repositoryKey: string;
       clock?: () => Date;
+      artifactStore?: LifecycleArtifactStore;
       assertScope?: (
         principal: AuthenticatedPrincipal,
         projectKey: string,
@@ -357,6 +360,44 @@ export class LifecycleService {
       }
     });
   }
+  async authorizeArtifact(
+    executor: LifecycleExecutorPrincipal,
+    jobKey: string,
+    input: unknown,
+    operation: "upload" | "download",
+  ) {
+    const command = this.#parse(LifecycleArtifactAccessSchema, input);
+    return this.repository.transaction(executor.tenantKey, (state) => {
+      const snapshot = state.workflows.find(
+        (s) =>
+          this.#executorScope(executor, s) &&
+          s.jobs.some((j) => j.jobKey === jobKey),
+      );
+      const job = snapshot?.jobs.find((j) => j.jobKey === jobKey);
+      if (!job) throw notFound();
+      if (
+        job.status !== "running" ||
+        job.executorKey !== executor.executorKey ||
+        job.fencingToken !== command.fencingToken ||
+        job.inputDigest !== command.inputDigest ||
+        !job.leaseUntil ||
+        Date.parse(job.leaseUntil) <= Date.parse(this.#now()) ||
+        !executor.capabilities.includes(job.stage)
+      )
+        throw new ApplicationError(
+          409,
+          "artifact_lease_expired",
+          "制品交接租约已失效，请核对任务归属",
+        );
+      if (operation === "upload" && job.stage !== "development")
+        throw new ApplicationError(
+          403,
+          "artifact_upload_denied",
+          "只有当前开发任务可以上传制品",
+        );
+      return structuredClone(job.input);
+    });
+  }
   async complete(
     executorInput: LifecycleExecutorPrincipal,
     input: unknown,
@@ -389,7 +430,7 @@ export class LifecycleService {
         "自动任务结果签名无效",
       );
     }
-    return this.repository.transaction(executor.tenantKey, (state) => {
+    return this.repository.transaction(executor.tenantKey, async (state) => {
       const index = state.workflows.findIndex(
         (s) =>
           this.#executorScope(executor, s) &&
@@ -403,6 +444,22 @@ export class LifecycleService {
       const job = flow
         .toSnapshot()
         .jobs.find((j) => j.jobKey === command.payload.jobKey)!;
+      const result = command.payload.result;
+      if (
+        this.options.artifactStore &&
+        result.status === "succeeded" &&
+        result.output.kind === "code" &&
+        !(await this.options.artifactStore.get(
+          executor,
+          result.output.artifactDigest,
+          result.output.commitSha,
+        ))
+      )
+        throw new ApplicationError(
+          409,
+          "artifact_missing",
+          "代码制品尚未完成交接，请恢复上传后重传回执",
+        );
       if (!executor.capabilities.includes(job.stage))
         throw new ApplicationError(
           403,

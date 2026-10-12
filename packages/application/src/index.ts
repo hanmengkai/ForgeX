@@ -255,3 +255,12 @@ export type {
   LifecycleStore,
   LifecycleView,
 } from "./lifecycle-service.js";
+export { SqliteLifecycleRepository } from "./sqlite-lifecycle-repository.js";
+export {
+  SqliteLifecycleArtifactStore,
+  verifyLifecycleArtifact,
+} from "./lifecycle-artifact-store.js";
+export type {
+  LifecycleArtifactStore,
+  LifecycleArtifactScope,
+} from "./lifecycle-artifact-store.js";

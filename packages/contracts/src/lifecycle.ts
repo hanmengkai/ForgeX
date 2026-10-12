@@ -1,5 +1,31 @@
 import { z } from "zod";
 
+// 传输协议版本独立于审批状态版本，制品摘要校验原始字节。
+export const LifecycleArtifactEnvelopeSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    commitSha: z.string().regex(/^[a-f0-9]{40}$/u),
+    artifactDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+    bytesBase64: z
+      .string()
+      .min(4)
+      .max(180_000)
+      .regex(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u,
+      ),
+  })
+  .strict();
+export type LifecycleArtifactEnvelope = z.infer<
+  typeof LifecycleArtifactEnvelopeSchema
+>;
+export const LifecycleArtifactAccessSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    fencingToken: z.string().uuid(),
+    inputDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+
 import { RequirementSpecSchema } from "./index.js";
 
 const key = z.string().uuid();

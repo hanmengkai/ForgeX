@@ -1,6 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile, realpath } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  realpath,
+  readdir,
+} from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
@@ -14,24 +20,34 @@ import {
   LifecycleTestPlanSchema,
   type LifecycleTestPlan,
 } from "./lifecycle-codex-adapter.js";
+import { savePrivateBytes } from "./lifecycle-transfer.js";
+import { sampleProcessIdentity, stopSampleProcess } from "./sample-process.js";
 
 const sha = (bytes: string | Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
 type Environment = {
+  schemaVersion: 1;
   jobKey: string;
   artifactDigest: string;
   commitSha: string;
   port: number;
   environmentKey: string;
   previous: { artifactDigest: string; commitSha: string } | null;
+  pid?: number | undefined;
+  processIdentity?: string | undefined;
+  receipt?: LifecycleTaskResult | undefined;
 };
 const environmentSchema = z
   .object({
+    schemaVersion: z.literal(1).default(1),
     jobKey: z.string().uuid(),
     artifactDigest: z.string().regex(/^[a-f0-9]{64}$/u),
     commitSha: z.string().regex(/^[a-f0-9]{40}$/u),
     port: z.number().int().positive().max(65535),
     environmentKey: z.string().uuid(),
+    pid: z.number().int().positive().optional(),
+    processIdentity: z.string().min(1).max(300).optional(),
+    receipt: LifecycleTaskResultSchema.optional(),
     previous: z
       .object({
         artifactDigest: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -47,6 +63,7 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
   readonly root: string;
   readonly sourcePath: string;
   readonly businessRuntimePath: string | undefined;
+  readonly durableDeployments: boolean;
   readonly git = new LocalGitCommandRunner();
   readonly children = new Set<ChildProcess>();
   readonly environments = new Map<
@@ -57,10 +74,12 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
     root: string;
     sourcePath: string;
     businessRuntimePath?: string;
+    durableDeployments?: boolean;
   }) {
     this.root = path.resolve(options.root);
     this.sourcePath = path.resolve(options.sourcePath);
     this.businessRuntimePath = options.businessRuntimePath;
+    this.durableDeployments = options.durableDeployments ?? false;
   }
   async run(
     job: LifecycleJob,
@@ -243,9 +262,33 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
     job: LifecycleJob,
     _signal: AbortSignal,
   ): Promise<LifecycleTaskResult | null> {
-    const result = await this.#readResult(
+    let result = await this.#readResult(
       path.join(this.root, "results", `${job.jobKey}.json`),
     );
+    if (
+      !result &&
+      ["staging_deploy", "production_deploy", "production_rollback"].includes(
+        job.stage,
+      )
+    ) {
+      const envKey =
+        job.stage === "staging_deploy"
+          ? `staging-${job.input.workflowKey}`
+          : `production-${job.input.projectKey}-${job.input.repositoryKey}`;
+      try {
+        const state = environmentSchema.parse(
+          JSON.parse(
+            await readFile(
+              path.join(this.root, "environments", envKey, "deployment.json"),
+              "utf8",
+            ),
+          ),
+        );
+        if (state.jobKey === job.jobKey) result = state.receipt ?? null;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
     if (
       !result ||
       result.status !== "succeeded" ||
@@ -290,6 +333,25 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
   async close(): Promise<void> {
     await Promise.all([...this.children].map((child) => this.#stop(child)));
     this.environments.clear();
+    if (this.durableDeployments) {
+      let names: string[] = [];
+      try {
+        names = await readdir(path.join(this.root, "environments"));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      for (const name of names) {
+        const state = environmentSchema.parse(
+          JSON.parse(
+            await readFile(
+              path.join(this.root, "environments", name, "deployment.json"),
+              "utf8",
+            ),
+          ),
+        );
+        if (state.pid && state.processIdentity) await stopSampleProcess(state);
+      }
+    }
   }
   #requirements(job: LifecycleJob): LifecycleTaskResult {
     if (!job.input.title.includes("预约"))
@@ -364,7 +426,11 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
     );
     await mkdir(repository, { recursive: true, mode: 0o700 });
     try {
-      await this.git.run(["-C", repository, "rev-parse", "--git-dir"]);
+      const top = (
+        await this.git.run(["-C", repository, "rev-parse", "--show-toplevel"])
+      ).stdout.trim();
+      if (top !== (await realpath(repository)))
+        throw new Error("必须初始化独立样板仓库");
     } catch {
       await this.git.run(["-C", repository, "init", "-q", "-b", "main"]);
     }
@@ -502,13 +568,17 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
     }
     const live = this.environments.get(envKey);
     if (live) await this.#stop(live.child);
+    else if (previous?.pid && previous.processIdentity)
+      await stopSampleProcess(previous);
     const started = await this.#start(
       code.artifactDigest,
       root,
       signal,
       previous?.port,
+      this.durableDeployments,
     );
     const state: Environment = {
+      schemaVersion: 1,
       jobKey: job.jobKey,
       artifactDigest: code.artifactDigest,
       commitSha: code.commitSha,
@@ -520,10 +590,14 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
             commitSha: previous.commitSha,
           }
         : null,
+      ...(this.durableDeployments
+        ? {
+            pid: started.child.pid!,
+            processIdentity: await sampleProcessIdentity(started.child.pid!),
+          }
+        : {}),
     };
-    await this.#save(path.join(root, "deployment.json"), state);
-    this.environments.set(envKey, { child: started.child, state });
-    return {
+    const result: LifecycleTaskResult = {
       status: "succeeded",
       output: {
         kind: "deployment",
@@ -533,9 +607,13 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
         artifactDigest: code.artifactDigest,
         url: started.url,
         healthy: true,
-        deploymentKey: randomUUID(),
+        deploymentKey: job.jobKey,
       },
     };
+    state.receipt = result;
+    await this.#save(path.join(root, "deployment.json"), state);
+    this.environments.set(envKey, { child: started.child, state });
+    return result;
   }
   async #rollback(
     job: LifecycleJob,
@@ -558,11 +636,14 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
       };
     const live = this.environments.get(envKey);
     if (live) await this.#stop(live.child);
+    else if (previous.pid && previous.processIdentity)
+      await stopSampleProcess(previous);
     const started = await this.#start(
       previous.previous.artifactDigest,
       root,
       signal,
       previous.port,
+      this.durableDeployments,
     );
     const state: Environment = {
       ...previous,
@@ -571,10 +652,14 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
       commitSha: previous.previous.commitSha,
       environmentKey: started.environmentKey,
       previous: null,
+      ...(this.durableDeployments
+        ? {
+            pid: started.child.pid!,
+            processIdentity: await sampleProcessIdentity(started.child.pid!),
+          }
+        : {}),
     };
-    await this.#save(path.join(root, "deployment.json"), state);
-    this.environments.set(envKey, { child: started.child, state });
-    return {
+    const result: LifecycleTaskResult = {
       status: "succeeded",
       output: {
         kind: "rollback",
@@ -583,12 +668,17 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
         healthy: true,
       },
     };
+    state.receipt = result;
+    await this.#save(path.join(root, "deployment.json"), state);
+    this.environments.set(envKey, { child: started.child, state });
+    return result;
   }
   async #start(
     artifactDigest: string,
     root: string,
     signal: AbortSignal,
     port = 0,
+    durable = false,
   ): Promise<{
     child: ChildProcess;
     url: string;
@@ -666,7 +756,7 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
             : "0",
         },
         stdio: ["ignore", "pipe", "pipe"],
-        signal,
+        ...(durable ? { detached: true } : { signal }),
       },
     );
     this.children.add(child);
@@ -734,6 +824,11 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
         report.environmentKey !== environmentKey
       )
         throw new Error("样板健康状态未绑定正确制品");
+      if (durable) {
+        child.unref();
+        child.stdout!.destroy();
+        child.stderr!.destroy();
+      }
       return { child, url, port: actualPort, environmentKey };
     } catch (error) {
       await this.#stop(child);
@@ -851,9 +946,6 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
     await this.#saveBytes(file, JSON.stringify(value));
   }
   async #saveBytes(file: string, value: string): Promise<void> {
-    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    const temporary = `${file}.${randomUUID()}.tmp`;
-    await writeFile(temporary, value, { mode: 0o600 });
-    await rename(temporary, file);
+    await savePrivateBytes(file, Buffer.from(value));
   }
 }

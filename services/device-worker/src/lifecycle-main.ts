@@ -1,60 +1,22 @@
 import { createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
-import { ExternalCodexIsolationRunner } from "./codex-isolation.js";
-import { CodexAuthenticationSchema } from "./codex-auth.js";
 import {
-  DeviceWorkerProjectSchema,
-  ControlPlaneOriginSchema,
-} from "./config.js";
-import { CodexLifecycleAdapter } from "./lifecycle-codex-adapter.js";
+  LifecycleWorkerConfigSchema,
+  createLifecycleWorkerAdapter,
+} from "./lifecycle-config.js";
+import { DurableLifecycleAdapter } from "./lifecycle-receipt.js";
 import {
   assertLifecyclePrivatePath,
   FileLifecycleJournal,
-  HttpLifecycleAdapter,
   HttpLifecycleClient,
   LifecycleExecutorRuntime,
 } from "./lifecycle-runtime.js";
 
-const absolute = z
-  .string()
-  .min(1)
-  .refine((value) => path.isAbsolute(value));
-const configSchema = z
-  .object({
-    schemaVersion: z.literal(2),
-    controlPlaneOrigin: ControlPlaneOriginSchema,
-    token: z.string().min(20).max(4_096),
-    privateKeyPath: absolute,
-    journalRoot: absolute,
-    pollIntervalMs: z.number().int().min(1_000).max(60_000).default(3_000),
-    adapter: z
-      .object({
-        endpoint: z.string().url(),
-        token: z.string().min(20).max(4_096),
-      })
-      .strict(),
-    codex: z
-      .object({
-        project: DeviceWorkerProjectSchema,
-        codexHomePath: absolute,
-        authentication: CodexAuthenticationSchema,
-        protectedPaths: z.array(absolute).min(1).max(250),
-        launcherPath: absolute,
-        launcherSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-        isolationKind: z.enum(["separate_os_identity", "container"]),
-        launcherArguments: z.array(z.string().max(1_000)).max(20).default([]),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
 const configPath = process.argv[2];
 if (!configPath) throw new Error("请提供执行器私有配置的绝对路径");
 await assertLifecyclePrivatePath(path.resolve(configPath));
-const config = configSchema.parse(
+const config = LifecycleWorkerConfigSchema.parse(
   JSON.parse(await readFile(configPath, "utf8")),
 );
 await assertLifecyclePrivatePath(config.privateKeyPath);
@@ -62,27 +24,13 @@ const privateKey = createPrivateKey(
   await readFile(config.privateKeyPath, "utf8"),
 );
 const journal = new FileLifecycleJournal(config.journalRoot);
-const codex = config.codex
-  ? {
-      ...config.codex,
-      protectedPaths: [
-        ...new Set([
-          ...config.codex.protectedPaths,
-          path.resolve(configPath),
-          config.privateKeyPath,
-          path.resolve(config.journalRoot),
-        ]),
-      ],
-    }
-  : null;
-const pipeline = new HttpLifecycleAdapter(config.adapter);
-const adapter = codex
-  ? new CodexLifecycleAdapter({
-      ...codex,
-      pipeline,
-      runner: new ExternalCodexIsolationRunner(codex),
-    })
-  : pipeline;
+const receiptRoot = path.join(config.journalRoot, "receipts");
+const { adapter: inner } = createLifecycleWorkerAdapter(config, [
+  path.resolve(configPath),
+  config.privateKeyPath,
+  path.resolve(config.journalRoot),
+]);
+const adapter = new DurableLifecycleAdapter(receiptRoot, inner);
 const runtime = new LifecycleExecutorRuntime({
   client: new HttpLifecycleClient({
     origin: config.controlPlaneOrigin,
@@ -91,8 +39,10 @@ const runtime = new LifecycleExecutorRuntime({
   adapter,
   journal,
   privateKey,
+  onExecutionError: (message) => console.error(`本地执行诊断：${message}`),
 });
 const release = await journal.acquire();
+console.log("独立交付执行器已就绪，等待已批准任务");
 let stopped = false;
 let wake: (() => void) | null = null;
 const stop = () => {

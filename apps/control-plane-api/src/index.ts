@@ -7,6 +7,7 @@ import {
   LifecycleService,
   InMemoryLifecycleRepository,
   type LifecycleRepository,
+  type LifecycleArtifactStore,
 } from "@forgex/application";
 import type { LifecycleExecutorPrincipal } from "@forgex/contracts/lifecycle";
 
@@ -120,6 +121,7 @@ declare module "fastify" {
 
 export interface ControlPlaneApiOptions {
   lifecycleRepository?: LifecycleRepository;
+  lifecycleArtifactStore?: LifecycleArtifactStore;
   lifecycleExecutorAuthenticator?: LifecycleExecutorAuthenticator;
   accountService?: AccountAdministrationService;
   authenticator: SessionAuthenticator;
@@ -1319,6 +1321,9 @@ export const buildControlPlaneApi = (
         projectKey: options.projectKey,
         repositoryKey: options.repositoryKey,
         ...(options.clock ? { clock: options.clock } : {}),
+        ...(options.lifecycleArtifactStore
+          ? { artifactStore: options.lifecycleArtifactStore }
+          : {}),
         assertScope: async (principal, projectKey, repositoryKey) => {
           if (
             projectKey === options.projectKey &&
@@ -1334,6 +1339,9 @@ export const buildControlPlaneApi = (
       },
     ),
     principal: principalFrom,
+    ...(options.lifecycleArtifactStore
+      ? { artifactStore: options.lifecycleArtifactStore }
+      : {}),
     executor: (request) => {
       if (!request.lifecycleExecutor)
         throw new ApplicationError(

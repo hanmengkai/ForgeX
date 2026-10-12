@@ -68,6 +68,7 @@ export class CodexLifecycleAdapter implements LifecycleExecutionAdapter {
       onAgentResult?: (
         stage: string,
         response: { finalResponse: string; threadId: string | null },
+        job: LifecycleJob,
       ) => void | Promise<void>;
       testingAgent?: boolean;
       allowedDevelopmentFiles?: string[];
@@ -139,7 +140,7 @@ export class CodexLifecycleAdapter implements LifecycleExecutionAdapter {
         : {}),
     });
     const output = schema.parse(JSON.parse(response.finalResponse));
-    await this.options.onAgentResult?.(job.stage, response);
+    await this.options.onAgentResult?.(job.stage, response, job);
     if ("kind" in output || "probes" in output) {
       const status = await this.git.run([
         "-C",
