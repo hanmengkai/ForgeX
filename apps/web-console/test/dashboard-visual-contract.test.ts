@@ -32,17 +32,6 @@ describe("工作台精致紧凑视觉契约", () => {
     );
   });
 
-  it("指标卡使用序号与微状态线建立可扫读的技术细节", () => {
-    expect(dashboard.match(/className="dashboard-card-index"/g)).toHaveLength(
-      4,
-    );
-    expect(dashboard.match(/className="dashboard-card-signal"/g)).toHaveLength(
-      4,
-    );
-    expect(styles).toMatch(/\.dashboard-card-index\s*\{/);
-    expect(styles).toMatch(/\.dashboard-card-signal\s*\{/);
-  });
-
   it("全局交互控件采用精确的小圆角和紧凑高度", () => {
     expect(styles).toMatch(
       /\.button\s*\{[^}]*min-height:\s*36px;[^}]*border-radius:\s*6px;/,

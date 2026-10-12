@@ -150,6 +150,12 @@ export async function initializeDurableSample({
     });
     const config = {
       schemaVersion: 2,
+      displayName: {
+        agent: "需求设计与开发执行器",
+        test: "独立测试执行器",
+        staging: "测试环境执行器",
+        production: "发布与恢复执行器",
+      }[name],
       controlPlaneOrigin: origin,
       token,
       privateKeyPath,
@@ -276,7 +282,13 @@ export async function buildDurableControlPlane(root) {
     lifecycleRepository: repository,
     lifecycleArtifactStore: artifactStore,
     lifecycleExecutorAuthenticator: new HashedLifecycleExecutorAuthenticator(
-      manifest.executors,
+      manifest.executors.map((item) => ({
+        ...item,
+        provider:
+          manifest.mode === "codex" && ["agent", "test"].includes(item.name)
+            ? "codex"
+            : "sample",
+      })),
     ),
     authenticator: {
       authenticate: async (authorization) => {

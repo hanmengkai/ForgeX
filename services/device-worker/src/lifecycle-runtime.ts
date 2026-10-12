@@ -18,6 +18,7 @@ import {
   LifecycleJobSchema,
   LifecycleSignedCompletionSchema,
   LifecycleTaskResultSchema,
+  type LifecycleWorkerHeartbeat,
   type LifecycleJob,
   type LifecycleTaskResult,
 } from "@forgex/contracts/lifecycle";
@@ -354,6 +355,22 @@ export class HttpLifecycleClient implements LifecycleExecutionClient {
   }
   async complete(completion: LifecycleSignedCompletion): Promise<void> {
     await this.#request("/api/v2/executor/complete", completion);
+  }
+  async heartbeat(input: LifecycleWorkerHeartbeat): Promise<void> {
+    const response = await (this.options.fetcher ?? fetch)(
+      new URL("/api/v2/executor/heartbeat", this.origin),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Lifecycle ${this.options.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(input),
+        redirect: "error",
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    if (response.status !== 204) throw new Error("执行器心跳暂未被控制面确认");
   }
 }
 export class HttpLifecycleAdapter implements LifecycleExecutionAdapter {

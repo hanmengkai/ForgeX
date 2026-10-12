@@ -10,14 +10,14 @@ test("桌面工作台保持紧凑首屏并支持浅深主题", async ({ page }) 
   await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(
-    page.getByRole("heading", { name: "ForgeX 运行总览" }),
+    page.getByRole("heading", { name: "今天，推进哪一项交付？" }),
   ).toBeVisible();
 
   const sidebar = await page.locator(".sidebar").boundingBox();
   const header = await page.locator(".workspace-header").boundingBox();
   const hero = await page.locator(".dashboard-hero").boundingBox();
   const firstCard = await page.locator(".dashboard-card").first().boundingBox();
-  const foundation = await page.locator(".dashboard-foundation").boundingBox();
+  const foundation = await page.locator(".dashboard-todos").boundingBox();
 
   expect(sidebar?.width).toBeLessThanOrEqual(210);
   expect(header?.height).toBeLessThanOrEqual(58);
@@ -32,7 +32,8 @@ test("桌面工作台保持紧凑首屏并支持浅深主题", async ({ page }) 
     fullPage: true,
   });
 
-  await page.getByRole("link", { name: "需求管理" }).click();
+  await page.getByText("其他工具", { exact: true }).click();
+  await page.getByRole("link", { name: "旧版需求工具" }).click();
   await expect(page.getByRole("heading", { name: "需求管理" })).toBeVisible();
   await page.screenshot({
     path: "test-results/requirements-refined-light.png",

@@ -2,17 +2,24 @@ import { expect, test, type Page } from "@playwright/test";
 
 const login = async (page: Page, role: string) => {
   await page.goto("/delivery");
+  await expect(
+    page
+      .getByRole("button", { name: "退出登录", exact: true })
+      .or(page.getByRole("button", { name: "登录", exact: true })),
+  ).toBeVisible();
   if (await page.getByRole("button", { name: "退出登录" }).count())
     await page.getByRole("button", { name: "退出登录" }).click();
   await page.getByLabel("账号", { exact: true }).fill(`p0.${role}`);
   await page.getByLabel("密码", { exact: true }).fill("P0-Sample-2026!");
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "完整交付", exact: true }),
+    page.getByRole("heading", { name: "交付需求", exact: true }),
   ).toBeVisible();
 };
 const approve = async (page: Page) => {
-  await expect(page.getByRole("region", { name: "当前审核" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "当前审核", exact: true }),
+  ).toBeVisible();
   await page
     .getByLabel("审核意见或处理结论")
     .fill("已核对本轮方案与执行结果，同意进入下一阶段");
@@ -22,6 +29,7 @@ const approve = async (page: Page) => {
       response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "审核通过", exact: true }).click();
+  await page.getByRole("button", { name: "确认提交", exact: true }).click();
   expect((await response).status()).toBe(200);
   await expect(
     page.getByRole("button", { name: "刷新进度", exact: true }),
@@ -33,21 +41,21 @@ test("六种角色在控制台完成审批与部署、真实预约验收及关�
   context,
 }, testInfo) => {
   test.setTimeout(120_000);
-  const title = `访客预约界面验收 ${Date.now()}`;
+  const title = "访客预约与到访查询";
   await login(page, "requester");
-  await expect(page.getByRole("link", { name: "设备与 Agent" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "执行器管理" })).toHaveCount(0);
   await page.getByLabel("需求名称", { exact: true }).fill(title);
   await page
     .getByLabel("业务目标与已有信息")
     .fill("访客提交预约并获得可查询编号，重复提交保持幂等");
   await page.getByRole("button", { name: "提交给需求 AI" }).click();
   const current = page.locator(".lifecycle-stages [aria-current=step]");
-  await expect(current).toHaveText("产品审核需求");
+  await expect(current).toContainText("产品审核需求");
   await login(page, "product_owner");
   await approve(page);
   await login(page, "requester");
   await approve(page);
-  await expect(current).toHaveText("独立设计审核");
+  await expect(current).toContainText("独立设计审核");
   await expect(
     page.getByRole("button", { name: "审核通过", exact: true }),
   ).toHaveCount(0);
@@ -60,18 +68,18 @@ test("六种角色在控制台完成审批与部署、真实预约验收及关�
     fullPage: true,
   });
   await approve(page);
-  await expect(current).toHaveText("研发代码审核");
+  await expect(current).toContainText("研发代码审核");
   await approve(page);
   await login(page, "tester");
-  await expect(current).toHaveText("测试报告审核");
+  await expect(current).toContainText("测试报告审核");
   await approve(page);
   await login(page, "test_ops");
-  await expect(current).toHaveText("需求方测试环境验收");
+  await expect(current).toContainText("需求方测试环境验收");
   await expect(
     page.getByRole("button", { name: "审核通过", exact: true }),
   ).toHaveCount(0);
   await login(page, "requester");
-  await expect(current).toHaveText("需求方测试环境验收");
+  await expect(current).toContainText("需求方测试环境验收");
   const target = await context.newPage();
   const stagingUrl = await page
     .getByRole("link", { name: "打开测试环境", exact: true })
@@ -83,20 +91,21 @@ test("六种角色在控制台完成审批与部署、真实预约验收及关�
   await expect(target.locator("output")).toContainText('"id"');
   await target.close();
   await approve(page);
-  await expect(current).toHaveText("三方生产放行");
+  await expect(current).toContainText("三方生产放行");
   await approve(page);
-  await expect(current).toHaveText("三方生产放行");
+  await expect(current).toContainText("三方生产放行");
   await login(page, "developer");
   await approve(page);
   await login(page, "production_ops");
   await approve(page);
-  await expect(current).toHaveText("三方线上验收");
+  await expect(current).toContainText("三方线上验收");
   await approve(page);
   await login(page, "developer");
   await approve(page);
   await login(page, "requester");
   await approve(page);
-  await expect(current).toHaveText("已关闭");
+  await expect(current).toContainText("已关闭");
+  await page.getByRole("tab", { name: "关联 Bug" }).click();
   await page.getByLabel("问题名称").fill("预约缺少确认说明");
   await page
     .getByLabel("复现步骤与预期结果")
@@ -118,6 +127,89 @@ test("六种角色在控制台完成审批与部署、真实预约验收及关�
   ).toBe(true);
   await page.screenshot({
     path: testInfo.outputPath("closed-mobile-dark.png"),
+    fullPage: true,
+  });
+});
+
+test("工作台待办直达设计审核，审批可取消，执行器与窄屏布局展示实际状态", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(120000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const title = "访客预约：设计方案审核";
+  await login(page, "requester");
+  await page.getByRole("button", { name: "＋ 提出需求", exact: true }).click();
+  await page.getByLabel("需求名称", { exact: true }).fill(title);
+  await page
+    .getByLabel("业务目标与已有信息")
+    .fill("访客提交预约并获得可查询编号，重复提交保持幂等");
+  await page.getByRole("button", { name: "提交给需求 AI" }).click();
+  await login(page, "product_owner");
+  await approve(page);
+  await login(page, "requester");
+  await approve(page);
+  await expect(
+    page.locator(".lifecycle-stages [aria-current=step]"),
+  ).toContainText("独立设计审核");
+  await login(page, "developer");
+  await page.getByRole("link", { name: "工作台", exact: true }).click();
+  await page
+    .getByRole("button", { name: `审核设计：${title}`, exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: title, exact: true }),
+  ).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("workflow")).toBeTruthy();
+  await expect(
+    page.getByRole("list", { name: "交付阶段" }).getByRole("listitem"),
+  ).toHaveCount(6);
+  const approval = await page
+      .getByRole("region", { name: "当前审核", exact: true })
+      .boundingBox(),
+    material = await page
+      .getByRole("region", { name: "当前审核材料", exact: true })
+      .boundingBox();
+  expect(approval!.x).toBeGreaterThan(material!.x);
+  await page.screenshot({
+    path: testInfo.outputPath("delivery-design-desktop.png"),
+    fullPage: true,
+  });
+  await page
+    .getByLabel("审核意见或处理结论")
+    .fill("先核对版本，不写入本次演练审批");
+  await page.getByRole("button", { name: "审核通过", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "确认审核通过" }),
+  ).toContainText(title);
+  await page.screenshot({
+    path: testInfo.outputPath("approval-confirmation.png"),
+    fullPage: true,
+  });
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(
+    page.locator(".lifecycle-stages [aria-current=step]"),
+  ).toContainText("独立设计审核");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "切换为深色主题" }).click();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("delivery-design-mobile-dark.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("link", { name: "执行器管理", exact: true }).click();
+  const fleet = page.getByRole("region", { name: "交付执行器", exact: true });
+  await expect(fleet.locator(".worker-card")).toHaveCount(4);
+  await expect(
+    fleet.getByText("本机 Codex 已登录", { exact: true }),
+  ).toHaveCount(0);
+  await page.screenshot({
+    path: testInfo.outputPath("executors-desktop-dark.png"),
     fullPage: true,
   });
 });

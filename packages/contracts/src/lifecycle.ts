@@ -420,6 +420,30 @@ export const LifecycleBugSchema = z
   })
   .strict();
 export type LifecycleBug = z.infer<typeof LifecycleBugSchema>;
+export const LifecycleDocumentSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    sections: z
+      .array(
+        z
+          .object({
+            title: z.string().min(1).max(100),
+            paragraphs: z.array(z.string().max(100000)).max(20),
+            items: z.array(z.string().max(10000)).max(200),
+          })
+          .strict(),
+      )
+      .max(10),
+    changes: z
+      .object({
+        added: z.array(z.string().max(1000)).max(30),
+        removed: z.array(z.string().max(1000)).max(30),
+        reordered: z.boolean(),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
 export const LifecycleViewSchema = z
   .object({
     schemaVersion: z.literal(2),
@@ -469,6 +493,7 @@ export const LifecycleViewSchema = z
               .array(z.object({ title: summary, passed: z.boolean() }).strict())
               .max(200),
             technical: z.record(z.string(), z.string().max(500)).nullable(),
+            document: LifecycleDocumentSchema.optional(),
           })
           .strict(),
       )
@@ -525,6 +550,43 @@ export const LifecycleNotificationSchema = z
   })
   .strict();
 export type LifecycleNotification = z.infer<typeof LifecycleNotificationSchema>;
+export const LifecycleWorkerHeartbeatSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    displayName: z.string().min(2).max(100),
+    provider: z.enum(["codex", "sample", "controlled_pipeline", "unknown"]),
+    loginState: z.enum(["logged_in", "needs_login", "unknown", "not_required"]),
+    executionState: z
+      .enum(["idle", "executing", "awaiting_confirmation"])
+      .optional(),
+  })
+  .strict();
+export const LifecycleWorkerRecordSchema =
+  LifecycleWorkerHeartbeatSchema.extend({
+    executorKey: key,
+    lastSeenAt: z.iso.datetime(),
+  }).strict();
+export const LifecycleWorkerViewSchema = LifecycleWorkerRecordSchema.omit({
+  lastSeenAt: true,
+})
+  .extend({
+    lastSeenAt: z.iso.datetime().nullable(),
+    status: z.enum([
+      "idle",
+      "working",
+      "offline",
+      "not_connected",
+      "awaiting_confirmation",
+    ]),
+    capabilities: z.array(z.string().max(100)).max(7),
+    currentWork: z.string().max(700).nullable(),
+    identityFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+export type LifecycleWorkerHeartbeat = z.infer<
+  typeof LifecycleWorkerHeartbeatSchema
+>;
+export type LifecycleWorkerView = z.infer<typeof LifecycleWorkerViewSchema>;
 export const LifecycleBugCreateCommandSchema = z
   .object({
     schemaVersion: z.literal(2),

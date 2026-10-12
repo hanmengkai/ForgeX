@@ -9,10 +9,13 @@ import {
   type LifecycleNotification,
   type LifecycleRole,
   type LifecycleView,
+  LifecycleWorkerViewSchema,
+  type LifecycleWorkerView,
 } from "@forgex/contracts/lifecycle";
 import { createBrowserUuid } from "./browser-uuid.js";
 
 export interface LifecycleClient {
+  workers?(): Promise<LifecycleWorkerView[]>;
   context(): Promise<LifecycleContext>;
   list(): Promise<LifecycleView[]>;
   get(workflowKey: string): Promise<LifecycleView>;
@@ -82,6 +85,8 @@ export const createLifecycleClient = (
   };
   const root = "/api/v2/lifecycle";
   return {
+    workers: () =>
+      json("/api/v2/workers", z.array(LifecycleWorkerViewSchema).max(10000)),
     context: () => json(`${root}/context`, LifecycleContextSchema),
     list: () => json(root, z.array(LifecycleViewSchema).max(200)),
     get: (key) => json(`${root}/${key}`, LifecycleViewSchema),

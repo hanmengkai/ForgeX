@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   canonicalLifecycleJson,
   LifecycleArtifactAccessSchema,
+  LifecycleWorkerRecordSchema,
   LifecycleActionCommandSchema,
   LifecycleBugCreateCommandSchema,
   LifecycleBugRepairCommandSchema,
@@ -31,6 +32,7 @@ import {
 import type { AuthenticatedPrincipal } from "./auth.js";
 import { ApplicationError } from "./errors.js";
 import type { LifecycleArtifactStore } from "./lifecycle-artifact-store.js";
+import { lifecycleDocument } from "./lifecycle-document.js";
 
 export const LifecycleStoreSchema = z
   .object({
@@ -68,6 +70,10 @@ export const LifecycleStoreSchema = z
       )
       .max(10_000)
       .default([]),
+    workerHeartbeats: z
+      .array(LifecycleWorkerRecordSchema)
+      .max(10000)
+      .default([]),
   })
   .strict();
 export type LifecycleStore = z.infer<typeof LifecycleStoreSchema>;
@@ -78,6 +84,7 @@ export const emptyLifecycleStore = (): LifecycleStore => ({
   requests: [],
   readNotifications: [],
   productionOwners: [],
+  workerHeartbeats: [],
 });
 export interface LifecycleRepository {
   transaction<T>(
@@ -843,6 +850,14 @@ export class LifecycleService {
       )
       .map((a) => {
         const o = a.output;
+        const index = s.artifacts.findIndex(
+          (item) => item.artifactKey === a.artifactKey,
+        );
+        const previous = s.artifacts
+          .slice(0, index)
+          .filter((item) => item.output.kind === o.kind)
+          .at(-1)?.output;
+        const document = lifecycleDocument(o, previous);
         let content: string | null = null;
         if (o.kind === "requirements")
           content = `目标：${o.spec.goal}\n\n用户故事：\n${o.spec.userStories.map((story) => `${story.role}需要${story.need}，以便${story.value}`).join("\n")}\n\n验收条件：\n${o.spec.acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion.title}：${criterion.description}`).join("\n")}\n\n待澄清：\n${o.spec.openQuestions.length ? o.spec.openQuestions.join("\n") : "无"}`;
@@ -865,6 +880,7 @@ export class LifecycleService {
           url: o.kind === "deployment" ? o.url : null,
           checks,
           technical,
+          ...(document ? { document } : {}),
         };
       });
     const lastJob = s.jobs.find((j) => j.round === s.round);

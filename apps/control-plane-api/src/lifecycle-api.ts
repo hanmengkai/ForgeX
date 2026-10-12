@@ -7,6 +7,8 @@ import {
   type LifecycleService,
   type LifecycleArtifactStore,
   verifyLifecycleArtifact,
+  type LifecycleWorkerService,
+  type LifecycleWorkerDescriptor,
 } from "@forgex/application";
 import {
   LifecycleArtifactAccessSchema,
@@ -15,6 +17,7 @@ import {
 } from "@forgex/contracts/lifecycle";
 
 export interface LifecycleExecutorAuthenticator {
+  directory?(): LifecycleWorkerDescriptor[];
   authenticate(
     authorization: string | undefined,
   ): Promise<LifecycleExecutorPrincipal | null>;
@@ -24,8 +27,25 @@ export class HashedLifecycleExecutorAuthenticator implements LifecycleExecutorAu
     readonly sessions: ReadonlyArray<{
       tokenSha256: string;
       executor: LifecycleExecutorPrincipal;
+      displayName?: string;
+      provider?: LifecycleWorkerDescriptor["provider"];
     }>,
   ) {}
+  directory(): LifecycleWorkerDescriptor[] {
+    return this.sessions.map((s) => ({
+      principal: structuredClone(s.executor),
+      displayName:
+        s.displayName ??
+        (s.executor.capabilities.includes("development")
+          ? "需求与开发执行器"
+          : s.executor.capabilities.includes("testing")
+            ? "独立测试执行器"
+            : s.executor.capabilities.includes("staging_deploy")
+              ? "测试环境执行器"
+              : "发布与恢复执行器"),
+      provider: s.provider ?? "unknown",
+    }));
+  }
   async authenticate(
     authorization: string | undefined,
   ): Promise<LifecycleExecutorPrincipal | null> {
@@ -48,6 +68,7 @@ export const registerLifecycleApi = (
     projectKey: string;
     repositoryKey: string;
     artifactStore?: LifecycleArtifactStore;
+    workers: LifecycleWorkerService;
   },
 ): void => {
   const key = (request: FastifyRequest, name: string): string => {
@@ -172,6 +193,13 @@ export const registerLifecycleApi = (
       );
     return { data: await options.service.claim(options.executor(request)) };
   });
+  app.post("/api/v2/executor/heartbeat", async (request, reply) => {
+    await options.workers.heartbeat(options.executor(request), request.body);
+    return reply.status(204).send();
+  });
+  app.get("/api/v2/workers", async (request) => ({
+    data: await options.workers.list(options.principal(request)),
+  }));
   app.post("/api/v2/executor/jobs/:jobKey/renew", async (request) => ({
     data: await options.service.renew(
       options.executor(request),

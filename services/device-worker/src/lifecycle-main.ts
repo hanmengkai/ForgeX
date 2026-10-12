@@ -6,6 +6,8 @@ import {
   createLifecycleWorkerAdapter,
 } from "./lifecycle-config.js";
 import { DurableLifecycleAdapter } from "./lifecycle-receipt.js";
+import { codexLoginStatus } from "./codex-login-status.js";
+import type { LifecycleWorkerHeartbeat } from "@forgex/contracts/lifecycle";
 import {
   assertLifecyclePrivatePath,
   FileLifecycleJournal,
@@ -31,11 +33,12 @@ const { adapter: inner } = createLifecycleWorkerAdapter(config, [
   path.resolve(config.journalRoot),
 ]);
 const adapter = new DurableLifecycleAdapter(receiptRoot, inner);
+const client = new HttpLifecycleClient({
+  origin: config.controlPlaneOrigin,
+  token: config.token,
+});
 const runtime = new LifecycleExecutorRuntime({
-  client: new HttpLifecycleClient({
-    origin: config.controlPlaneOrigin,
-    token: config.token,
-  }),
+  client,
   adapter,
   journal,
   privateKey,
@@ -43,6 +46,44 @@ const runtime = new LifecycleExecutorRuntime({
 });
 const release = await journal.acquire();
 console.log("独立交付执行器已就绪，等待已批准任务");
+const heartbeat: LifecycleWorkerHeartbeat = {
+  schemaVersion: 1,
+  displayName:
+    config.displayName ??
+    (config.execution ? "本机当前用户 Codex" : "受控交付执行器"),
+  provider:
+    config.execution || config.codex
+      ? "codex"
+      : config.sample
+        ? "sample"
+        : "controlled_pipeline",
+  loginState: config.execution || config.codex ? "unknown" : "not_required",
+};
+let checking = false;
+const sendHeartbeat = async () => {
+  if (checking) return;
+  checking = true;
+  try {
+    if (config.execution)
+      heartbeat.loginState = await codexLoginStatus(
+        config.execution.codexHomePath,
+      );
+    const pending = await journal.load();
+    heartbeat.executionState =
+      pending?.phase === "completed"
+        ? "awaiting_confirmation"
+        : pending
+          ? "executing"
+          : "idle";
+    await client.heartbeat(heartbeat);
+  } catch {
+  } finally {
+    checking = false;
+  }
+};
+await sendHeartbeat();
+const heartbeatTimer = setInterval(() => void sendHeartbeat(), 15000);
+heartbeatTimer.unref();
 let stopped = false;
 let wake: (() => void) | null = null;
 const stop = () => {
@@ -72,5 +113,6 @@ try {
     });
   }
 } finally {
+  clearInterval(heartbeatTimer);
   await release();
 }

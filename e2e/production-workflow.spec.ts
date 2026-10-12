@@ -48,10 +48,11 @@ test("真实 PostgreSQL 中从需求创建推进到独立验证和产品验收",
   await page.getByLabel("密码").fill(fixture.password);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(
-    page.getByRole("heading", { name: "ForgeX 运行总览" }),
+    page.getByRole("heading", { name: "今天，推进哪一项交付？" }),
   ).toBeVisible();
 
-  await page.getByRole("link", { name: "需求管理" }).click();
+  await page.getByText("其他工具", { exact: true }).click();
+  await page.getByRole("link", { name: "旧版需求工具" }).click();
   await expect(page.getByLabel("当前客户")).toHaveValue("验收客户");
   await expect(page.getByLabel("当前项目")).toHaveValue("验收项目");
   await page.getByRole("button", { name: "新建需求" }).first().click();

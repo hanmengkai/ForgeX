@@ -105,7 +105,7 @@ describe("完整交付控制台", () => {
     expect(window.location.pathname).toBe("/delivery");
     expect(client.listRequirementContexts).not.toHaveBeenCalled();
     expect(client.listWorkers).not.toHaveBeenCalled();
-    expect(screen.queryByRole("link", { name: "设备与 Agent" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "执行器管理" })).toBeNull();
     await userEvent.type(screen.getByLabelText("需求名称"), "访客预约");
     await userEvent.type(
       screen.getByLabelText("业务目标与已有信息"),
@@ -121,6 +121,8 @@ describe("完整交付控制台", () => {
         brief: "提交预约并获取可查询编号",
       }),
     );
+    expect(screen.queryByLabelText("需求名称")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "＋ 提出需求" }));
     expect(screen.getByLabelText("需求名称")).toHaveValue("");
   });
   it("有异议时禁用通过，记录处理结论；过期审批显示错误且不重复提交", async () => {
@@ -163,6 +165,7 @@ describe("完整交付控制台", () => {
       expect(screen.getByRole("button", { name: "审核通过" })).toBeEnabled(),
     );
     await userEvent.click(screen.getByRole("button", { name: "审核通过" }));
+    await userEvent.click(screen.getByRole("button", { name: "确认提交" }));
     await screen.findByRole("alert");
     expect(api.decide).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("alert")).toHaveTextContent("交付内容已经更新");
@@ -205,6 +208,7 @@ describe("完整交付控制台", () => {
       return bug;
     });
     render(<LifecycleWorkbench client={client} />);
+    await userEvent.click(await screen.findByRole("tab", { name: "关联 Bug" }));
     await userEvent.type(
       await screen.findByLabelText("问题名称"),
       "预约缺少确认说明",

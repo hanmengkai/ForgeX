@@ -62,6 +62,7 @@ type ConsoleView =
   | "workers"
   | "extensions"
   | "approvals"
+  | "toolApprovals"
   | "accounts"
   | "platformProjects"
   | "integrations";
@@ -73,6 +74,7 @@ const pathByView: Record<ConsoleView, string> = {
   workers: "/agents",
   extensions: "/extensions",
   approvals: "/approvals",
+  toolApprovals: "/tools/approvals",
   accounts: "/platform/accounts",
   platformProjects: "/platform/projects",
   integrations: "/platform/integrations",
@@ -125,6 +127,7 @@ const storeRequirementContext = (
 };
 
 const viewFromPath = (path: string): ConsoleView => {
+  path = new URL(path, window.location.origin).pathname;
   const entry = Object.entries(pathByView).find(
     ([, candidate]) => candidate === path,
   );
@@ -1661,7 +1664,7 @@ export function RequirementWorkbench({
             customer: selectedContextRef.current.customerName,
             project: selectedContextRef.current.projectName,
           }).toString()}`
-        : normalizedPath;
+        : normalizedPath + new URL(path, window.location.origin).search;
     if (`${window.location.pathname}${window.location.search}` !== target) {
       window.history[replace ? "replaceState" : "pushState"](
         { view },
@@ -1719,7 +1722,13 @@ export function RequirementWorkbench({
       navigate(pathByView.dashboard, true);
     }
     const onPopState = () => {
-      if (isRequesterOnly) navigate(pathByView.lifecycle, true);
+      if (
+        isRequesterOnly &&
+        !["/delivery", "/dashboard", "/approvals"].includes(
+          window.location.pathname,
+        )
+      )
+        navigate(pathByView.lifecycle, true);
       else setActiveView(viewFromPath(window.location.pathname));
       selectContextFromLocation(contextCustomersRef.current);
     };
@@ -2052,150 +2061,124 @@ export function RequirementWorkbench({
           </span>
           <span>
             <strong>ForgeX</strong>
-            <small>AI DELIVERY OS</small>
+            <small>AI 软件交付</small>
           </span>
         </div>
         <nav aria-label="主导航">
           <span className="nav-group-label">业务工作</span>
-          <a
-            className={`nav-item ${activeView === "lifecycle" ? "active" : ""}`}
-            href={pathByView.lifecycle}
-            aria-current={activeView === "lifecycle" ? "page" : undefined}
-            onClick={(event) => {
-              event.preventDefault();
-              navigate(pathByView.lifecycle);
-            }}
-          >
-            <RequirementIcon />
-            完整交付
-          </a>
+          {(
+            [
+              { view: "dashboard", label: "工作台", icon: DashboardIcon },
+              { view: "lifecycle", label: "交付需求", icon: RequirementIcon },
+              { view: "approvals", label: "我的审批", icon: ApprovalIcon },
+            ] as const
+          ).map(({ view, label, icon: NavIcon }) => (
+            <a
+              key={view}
+              className={`nav-item ${activeView === view ? "active" : ""}`}
+              href={pathByView[view]}
+              aria-current={activeView === view ? "page" : undefined}
+              onClick={(e) => {
+                e.preventDefault();
+                navigate(pathByView[view]);
+              }}
+            >
+              <NavIcon />
+              {label}
+            </a>
+          ))}
           {!isRequesterOnly ? (
             <>
-              <a
-                className={`nav-item ${activeView === "dashboard" ? "active" : ""}`}
-                href={pathByView.dashboard}
-                aria-label="工作台"
-                aria-current={activeView === "dashboard" ? "page" : undefined}
-                onClick={(event) => {
-                  event.preventDefault();
-                  navigate(pathByView.dashboard);
-                }}
+              <span className="nav-group-label">团队与管理</span>
+              {(
+                [
+                  {
+                    view: "workers",
+                    label: "执行器管理",
+                    icon: AgentIcon,
+                    admin: false,
+                  },
+                  {
+                    view: "extensions",
+                    label: "扩展中心",
+                    icon: ExtensionIcon,
+                    admin: false,
+                  },
+                  {
+                    view: "platformProjects",
+                    label: "客户与项目",
+                    icon: RequirementIcon,
+                    admin: true,
+                  },
+                  {
+                    view: "integrations",
+                    label: "MCP 与外部工具",
+                    icon: ExtensionIcon,
+                    admin: true,
+                  },
+                  {
+                    view: "accounts",
+                    label: "账号管理",
+                    icon: UserIcon,
+                    admin: true,
+                  },
+                ] as const
+              )
+                .filter((n) => !n.admin || isAdministrator)
+                .map(({ view, label, icon: NavIcon }) => (
+                  <a
+                    key={view}
+                    className={`nav-item ${activeView === view ? "active" : ""}`}
+                    href={pathByView[view]}
+                    aria-current={activeView === view ? "page" : undefined}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      navigate(pathByView[view]);
+                    }}
+                  >
+                    <NavIcon />
+                    {label}
+                  </a>
+                ))}
+              <details
+                className="nav-tools"
+                open={["requirements", "toolApprovals"].includes(activeView)}
               >
-                <DashboardIcon />
-                工作台
-              </a>
-              <a
-                className={`nav-item ${activeView === "requirements" ? "active" : ""}`}
-                href={pathByView.requirements}
-                aria-label="需求管理"
-                aria-current={
-                  activeView === "requirements" ? "page" : undefined
-                }
-                onClick={(event) => {
-                  event.preventDefault();
-                  navigate(pathByView.requirements);
-                }}
-              >
-                <RequirementIcon />
-                需求管理
-              </a>
-              <a
-                className={`nav-item ${activeView === "approvals" ? "active" : ""}`}
-                href={pathByView.approvals}
-                aria-label="操作确认"
-                aria-current={activeView === "approvals" ? "page" : undefined}
-                onClick={(event) => {
-                  event.preventDefault();
-                  navigate(pathByView.approvals);
-                }}
-              >
-                <ApprovalIcon />
-                操作确认
-              </a>
-              <span className="nav-group-label">平台管理</span>
-              <a
-                className={`nav-item ${activeView === "workers" ? "active" : ""}`}
-                href={pathByView.workers}
-                aria-label="设备与 Agent"
-                aria-current={activeView === "workers" ? "page" : undefined}
-                onClick={(event) => {
-                  event.preventDefault();
-                  navigate(pathByView.workers);
-                }}
-              >
-                <AgentIcon />
-                设备与 Agent
-              </a>
-              <a
-                className={`nav-item ${activeView === "extensions" ? "active" : ""}`}
-                href={pathByView.extensions}
-                aria-label="扩展中心"
-                aria-current={activeView === "extensions" ? "page" : undefined}
-                onClick={(event) => {
-                  event.preventDefault();
-                  navigate(pathByView.extensions);
-                }}
-              >
-                <ExtensionIcon />
-                扩展中心
-              </a>
-              {isAdministrator ? (
+                <summary>其他工具</summary>
                 <a
-                  className={`nav-item ${activeView === "platformProjects" ? "active" : ""}`}
-                  href={pathByView.platformProjects}
-                  aria-label="客户与项目"
+                  className={`nav-item ${activeView === "requirements" ? "active" : ""}`}
+                  href={pathByView.requirements}
                   aria-current={
-                    activeView === "platformProjects" ? "page" : undefined
+                    activeView === "requirements" ? "page" : undefined
                   }
-                  onClick={(event) => {
-                    event.preventDefault();
-                    navigate(pathByView.platformProjects);
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(pathByView.requirements);
                   }}
                 >
                   <RequirementIcon />
-                  客户与项目
+                  旧版需求工具
                 </a>
-              ) : null}
-              {isAdministrator ? (
                 <a
-                  className={`nav-item ${activeView === "integrations" ? "active" : ""}`}
-                  href={pathByView.integrations}
-                  aria-label="MCP 与外部工具"
-                  aria-current={
-                    activeView === "integrations" ? "page" : undefined
-                  }
-                  onClick={(event) => {
-                    event.preventDefault();
-                    navigate(pathByView.integrations);
+                  className={`nav-item ${activeView === "toolApprovals" ? "active" : ""}`}
+                  href={pathByView.toolApprovals}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(pathByView.toolApprovals);
                   }}
                 >
-                  <ExtensionIcon />
-                  MCP 与外部工具
+                  <ApprovalIcon />
+                  工具操作确认
                 </a>
-              ) : null}
-              {isAdministrator ? (
-                <a
-                  className={`nav-item ${activeView === "accounts" ? "active" : ""}`}
-                  href={pathByView.accounts}
-                  aria-label="账号管理"
-                  aria-current={activeView === "accounts" ? "page" : undefined}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    navigate(pathByView.accounts);
-                  }}
-                >
-                  <UserIcon />
-                  账号管理
-                </a>
-              ) : null}
+              </details>
             </>
           ) : null}
         </nav>
         <div className="sidebar-note">
           <CheckIcon />
           <span>
-            <strong>交付边界已保护</strong>
-            <small>生产操作仍需人工审批</small>
+            <strong>关键决定，由团队确认</strong>
+            <small>设计审核与发布审批独立保留</small>
           </span>
         </div>
       </aside>
@@ -2203,10 +2186,10 @@ export function RequirementWorkbench({
       <main className="workspace" id={activeView}>
         <header className="workspace-header">
           <div className="workspace-context">
-            <span className="system-indicator" aria-label="平台在线" />
+            <span className="system-indicator" aria-label="已登录控制台" />
             <span>
-              <small>当前状态</small>
-              <strong>系统在线</strong>
+              <small>交付工作空间</small>
+              <strong>{projectName}</strong>
             </span>
           </div>
           <div className="workspace-account">
@@ -2234,17 +2217,20 @@ export function RequirementWorkbench({
         </header>
         <div className="workspace-body">
           {activeView === "lifecycle" ? (
-            <LifecycleWorkbench client={client} />
+            <LifecycleWorkbench key="delivery" client={client} />
           ) : activeView === "dashboard" ? (
             <DashboardOverview
+              client={client}
               projectName={projectName}
-              items={items}
-              workers={workerOverview}
-              loading={loading}
-              error={error ?? workerOverviewError}
               onNavigate={navigate}
             />
           ) : activeView === "approvals" ? (
+            <LifecycleWorkbench
+              key="approvals"
+              client={client}
+              mode="approvals"
+            />
+          ) : activeView === "toolApprovals" ? (
             <McpInvocationCenter client={client} />
           ) : activeView === "extensions" ? (
             <ExtensionCenter client={client} />
@@ -2502,10 +2488,7 @@ export function RequirementWorkbench({
           ) : (
             <DashboardOverview
               projectName={projectName}
-              items={items}
-              workers={workerOverview}
-              loading={loading}
-              error={error ?? workerOverviewError}
+              client={client}
               onNavigate={navigate}
             />
           )}

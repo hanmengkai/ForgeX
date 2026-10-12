@@ -165,11 +165,13 @@ describe("ForgeX 控制台框架", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "ForgeX 运行总览" }),
+      await screen.findByRole("heading", { name: "今天，推进哪一项交付？" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("访客预约平台")).toBeInTheDocument();
-    expect(screen.getByText("1 个 / 不限数量")).toBeInTheDocument();
-    expect(screen.getByText("平台运行正常")).toBeInTheDocument();
+    expect(screen.getAllByText(/访客预约平台/).length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("heading", { name: "我的待办" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("平台运行正常")).toBeNull();
     expect(screen.getByText("super.admin")).toBeInTheDocument();
     expect(
       screen.getByText("super.admin").closest(".workspace-identity"),
@@ -191,23 +193,24 @@ describe("ForgeX 控制台框架", () => {
     );
 
     expect(await screen.findByText("业务工作")).toBeInTheDocument();
-    expect(screen.getByText("平台管理")).toBeInTheDocument();
+    expect(screen.getByText("团队与管理")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("link", { name: "需求管理" }));
+    await userEvent.click(screen.getByText("其他工具"));
+    await userEvent.click(screen.getByRole("link", { name: "旧版需求工具" }));
     expect(window.location.pathname).toBe("/requirements");
-    expect(screen.getByRole("link", { name: "需求管理" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "旧版需求工具" })).toHaveAttribute(
       "aria-current",
       "page",
     );
 
-    await userEvent.click(screen.getByRole("link", { name: "设备与 Agent" }));
+    await userEvent.click(screen.getByRole("link", { name: "执行器管理" }));
     expect(window.location.pathname).toBe("/agents");
     expect(await screen.findByText("安装 ForgeX Agent")).toBeInTheDocument();
 
     window.history.back();
     window.dispatchEvent(new PopStateEvent("popstate"));
     await waitFor(() => expect(window.location.pathname).toBe("/requirements"));
-    expect(screen.getByRole("link", { name: "需求管理" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "旧版需求工具" })).toHaveAttribute(
       "aria-current",
       "page",
     );

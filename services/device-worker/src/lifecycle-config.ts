@@ -31,6 +31,7 @@ const projectOptions = {
 export const LifecycleWorkerConfigSchema = z
   .object({
     schemaVersion: z.literal(2),
+    displayName: z.string().min(2).max(100).optional(),
     controlPlaneOrigin: ControlPlaneOriginSchema,
     token: z.string().min(20).max(4096),
     privateKeyPath: absolute,

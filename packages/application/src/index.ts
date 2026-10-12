@@ -256,6 +256,8 @@ export type {
   LifecycleView,
 } from "./lifecycle-service.js";
 export { SqliteLifecycleRepository } from "./sqlite-lifecycle-repository.js";
+export { LifecycleWorkerService } from "./lifecycle-worker-service.js";
+export type { LifecycleWorkerDescriptor } from "./lifecycle-worker-service.js";
 export {
   SqliteLifecycleArtifactStore,
   verifyLifecycleArtifact,

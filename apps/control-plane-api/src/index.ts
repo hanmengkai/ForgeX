@@ -5,6 +5,7 @@ import {
 } from "./lifecycle-api.js";
 import {
   LifecycleService,
+  LifecycleWorkerService,
   InMemoryLifecycleRepository,
   type LifecycleRepository,
   type LifecycleArtifactStore,
@@ -1314,30 +1315,34 @@ export const buildControlPlaneApi = (
     return request.principal;
   };
 
+  const lifecycleRepository =
+    options.lifecycleRepository ?? new InMemoryLifecycleRepository();
   registerLifecycleApi(app, {
-    service: new LifecycleService(
-      options.lifecycleRepository ?? new InMemoryLifecycleRepository(),
-      {
-        projectKey: options.projectKey,
-        repositoryKey: options.repositoryKey,
-        ...(options.clock ? { clock: options.clock } : {}),
-        ...(options.lifecycleArtifactStore
-          ? { artifactStore: options.lifecycleArtifactStore }
-          : {}),
-        assertScope: async (principal, projectKey, repositoryKey) => {
-          if (
-            projectKey === options.projectKey &&
-            repositoryKey === options.repositoryKey
-          )
-            return;
-          await platformConfiguration.getRequirementRepository(
-            principal,
-            projectKey,
-            repositoryKey,
-          );
-        },
-      },
+    workers: new LifecycleWorkerService(
+      lifecycleRepository,
+      () => options.lifecycleExecutorAuthenticator?.directory?.() ?? [],
+      options.clock,
     ),
+    service: new LifecycleService(lifecycleRepository, {
+      projectKey: options.projectKey,
+      repositoryKey: options.repositoryKey,
+      ...(options.clock ? { clock: options.clock } : {}),
+      ...(options.lifecycleArtifactStore
+        ? { artifactStore: options.lifecycleArtifactStore }
+        : {}),
+      assertScope: async (principal, projectKey, repositoryKey) => {
+        if (
+          projectKey === options.projectKey &&
+          repositoryKey === options.repositoryKey
+        )
+          return;
+        await platformConfiguration.getRequirementRepository(
+          principal,
+          projectKey,
+          repositoryKey,
+        );
+      },
+    }),
     principal: principalFrom,
     ...(options.lifecycleArtifactStore
       ? { artifactStore: options.lifecycleArtifactStore }

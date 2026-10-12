@@ -83,20 +83,31 @@ export async function createSampleAutomation({
     });
   let stopped = false,
     running = null,
-    timer;
+    timer,
+    heartbeatTimer;
   return {
     accounts,
     authenticator: new HashedLifecycleExecutorAuthenticator(
       executors.map((item) => ({
         tokenSha256: createHash("sha256").update(item.token).digest("hex"),
         executor: item.executor,
+        provider:
+          ai &&
+          item.executor.capabilities.some((c) =>
+            ["requirements_ai", "testing"].includes(c),
+          )
+            ? "codex"
+            : "sample",
       })),
     ),
     start(origin) {
+      const clients = executors.map(
+        (item) => new HttpLifecycleClient({ origin, token: item.token }),
+      );
       const runtimes = executors.map(
-        (item) =>
+        (item, index) =>
           new LifecycleExecutorRuntime({
-            client: new HttpLifecycleClient({ origin, token: item.token }),
+            client: clients[index],
             adapter: ai?.adapter ?? adapter,
             journal: new MemoryLifecycleJournal(),
             privateKey: item.privateKey,
@@ -104,6 +115,32 @@ export async function createSampleAutomation({
               console.error(`本地样板执行诊断：${message}`),
           }),
       );
+      const reportHeartbeat = () =>
+        Promise.all(
+          clients.map(async (client, index) =>
+            client.heartbeat({
+              schemaVersion: 1,
+              displayName: [
+                "需求设计与开发执行器",
+                "独立测试执行器",
+                "测试环境执行器",
+                "发布与恢复执行器",
+              ][index],
+              provider: ai && [0, 1].includes(index) ? "codex" : "sample",
+              loginState:
+                ai && [0, 1].includes(index) ? "unknown" : "not_required",
+              executionState:
+                (await runtimes[index].options.journal.load())?.phase ===
+                "completed"
+                  ? "awaiting_confirmation"
+                  : (await runtimes[index].options.journal.load())
+                    ? "executing"
+                    : "idle",
+            }),
+          ),
+        ).catch(() => {});
+      void reportHeartbeat();
+      heartbeatTimer = setInterval(() => void reportHeartbeat(), 15000);
       const poll = async () => {
         if (stopped) return;
         try {
@@ -125,6 +162,7 @@ export async function createSampleAutomation({
     async close() {
       stopped = true;
       clearTimeout(timer);
+      clearInterval(heartbeatTimer);
       await running;
       await adapter.close();
       await rm(root, { recursive: true, force: true });

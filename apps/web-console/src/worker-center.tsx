@@ -14,6 +14,7 @@ import type {
   WorkerListItem,
 } from "./api.js";
 import { DownloadIcon } from "./icons.js";
+import type { LifecycleWorkerView } from "@forgex/contracts/lifecycle";
 
 interface WorkerCenterProps {
   client: ForgeXClient;
@@ -33,6 +34,10 @@ export function WorkerCenter({
   const [overview, setOverview] = useState<WorkerFleetOverview | null>(
     initialOverview,
   );
+  const [executors, setExecutors] = useState<LifecycleWorkerView[] | null>(
+      null,
+    ),
+    [executorError, setExecutorError] = useState<string | null>(null);
   const [loading, setLoading] = useState(initialOverview === null);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -50,6 +55,20 @@ export function WorkerCenter({
     const generation = ++generationRef.current;
     setLoading(true);
     setError(null);
+    if (client.lifecycle?.workers) {
+      try {
+        const result = await client.lifecycle.workers();
+        if (generation === generationRef.current) {
+          setExecutors(result);
+          setExecutorError(null);
+        }
+      } catch (caught) {
+        if (generation === generationRef.current)
+          setExecutorError(
+            caught instanceof Error ? caught.message : "交付执行器状态暂不可用",
+          );
+      }
+    }
     try {
       const result = await client.listWorkers();
       if (generation === generationRef.current) setOverview(result);
@@ -67,9 +86,11 @@ export function WorkerCenter({
   }, [client]);
 
   useEffect(() => {
-    if (!initialOverview) void load();
+    if (!initialOverview || client.lifecycle?.workers) void load();
+    const timer = setInterval(() => void load(), 15000);
     return () => {
       generationRef.current += 1;
+      clearInterval(timer);
     };
   }, [initialOverview, load]);
 
@@ -139,9 +160,11 @@ export function WorkerCenter({
     <div className="worker-center">
       <header className="topbar worker-topbar">
         <div>
-          <span className="eyebrow">Codex 并行交付</span>
-          <h1>设备中心</h1>
-          <p>每个账户独立登录在客户设备上，平台只调度任务，不接管登录凭据。</p>
+          <span className="eyebrow">团队执行能力</span>
+          <h1>执行器管理</h1>
+          <p>
+            查看谁能接任务、谁正在执行、哪里需要处理。Codex 登录保留在本机。
+          </p>
         </div>
         <div className="worker-actions">
           {overview?.connectAction ? (
@@ -153,7 +176,7 @@ export function WorkerCenter({
                 setConnectionError(null);
               }}
             >
-              {connecting ? "收起连接表单" : "连接新设备"}
+              {connecting ? "收起连接表单" : "连接传统设备"}
             </button>
           ) : null}
           <button
@@ -167,13 +190,138 @@ export function WorkerCenter({
         </div>
       </header>
 
-      {error ? (
+      {error && !executors ? (
         <div className="page-error" role="alert">
           {error}
           <button type="button" onClick={() => void load()}>
             重新加载
           </button>
         </div>
+      ) : null}
+      {executorError ? (
+        <div className="page-error" role="alert">
+          {executorError}；当前展示的历史状态尚未重新确认。
+        </div>
+      ) : null}
+      {executors ? (
+        <section
+          className="content-section execution-fleet"
+          aria-label="交付执行器"
+        >
+          <div className="fleet-summary">
+            <div>
+              <span>已登记执行器</span>
+              <strong>{executors.length}</strong>
+            </div>
+            <div>
+              <span>正在执行</span>
+              <strong>
+                {executorError
+                  ? "—"
+                  : executors.filter((e) => e.status === "working").length}
+              </strong>
+            </div>
+            <div>
+              <span>可接新任务</span>
+              <strong>
+                {executorError
+                  ? "—"
+                  : executors.filter(
+                      (e) =>
+                        e.status === "idle" &&
+                        (e.loginState === "logged_in" ||
+                          e.loginState === "not_required"),
+                    ).length}
+              </strong>
+            </div>
+          </div>
+          <div className="worker-grid">
+            {executors.map((executor) => (
+              <article className="worker-card" key={executor.executorKey}>
+                <div className="worker-card-heading">
+                  <span className="device-orb running">
+                    {executor.provider === "codex" ? "C" : "⚙"}
+                  </span>
+                  <div>
+                    <strong>{executor.displayName}</strong>
+                    <span>
+                      {executor.provider === "codex"
+                        ? "Codex"
+                        : executor.provider === "sample"
+                          ? "隔离样板"
+                          : executor.provider === "controlled_pipeline"
+                            ? "受控交付流程"
+                            : "执行方式尚未核对"}
+                    </span>
+                  </div>
+                  <span
+                    className={`status-pill ${executor.status === "working" ? "running" : executor.status === "idle" ? "success" : "neutral"}`}
+                  >
+                    {executorError
+                      ? "状态待核对"
+                      : {
+                          idle: "在线空闲",
+                          working: "正在执行",
+                          offline: "已离线",
+                          not_connected: "尚未连接",
+                          awaiting_confirmation: "等待回执确认",
+                        }[executor.status]}
+                  </span>
+                </div>
+                <p className="worker-current-work">
+                  {executor.currentWork ??
+                    (executor.status === "offline"
+                      ? "等待执行端恢复心跳"
+                      : executor.status === "not_connected"
+                        ? "在设备上启动 Worker 后，状态会自动更新"
+                        : "当前没有执行中的任务")}
+                </p>
+                <dl className="executor-facts">
+                  <div>
+                    <dt>登录核对</dt>
+                    <dd>
+                      {(executorError || executor.status === "offline"
+                        ? "上次核对："
+                        : "") +
+                        {
+                          logged_in: "本机 Codex 已登录",
+                          needs_login: "需要在本机重新登录",
+                          unknown: "尚未核对，不计入可接任务",
+                          not_required: "固定受控流程，无需模型登录",
+                        }[executor.loginState]}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>最近心跳</dt>
+                    <dd>
+                      {executor.lastSeenAt
+                        ? new Date(executor.lastSeenAt).toLocaleTimeString(
+                            "zh-CN",
+                          )
+                        : "尚无心跳记录"}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="executor-capabilities">
+                  {executor.capabilities.map((capability) => (
+                    <span key={capability}>{capability}</span>
+                  ))}
+                </div>
+                <details>
+                  <summary>技术详情</summary>
+                  <p>执行器标识：{executor.executorKey}</p>
+                  <p>执行器身份指纹：{executor.identityFingerprint}</p>
+                </details>
+              </article>
+            ))}
+          </div>
+          {!executors.length ? (
+            <div className="delivery-empty">
+              <strong>还没有登记交付执行器</strong>
+              <p>管理员配置本机 Worker 后，这里会显示执行方式、能力和心跳。</p>
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       {connecting ? (
@@ -289,7 +437,11 @@ export function WorkerCenter({
         </section>
       ) : null}
 
-      <section className="content-section agent-installation">
+      <details
+        className="content-section agent-installation"
+        open={!executors?.length && !overview?.workers.length}
+      >
+        <summary>管理员接入与安装说明</summary>
         <div className="agent-install-heading">
           <div>
             <span className="eyebrow">AGENT SETUP</span>
@@ -333,13 +485,13 @@ export function WorkerCenter({
           Codex 登录在目标设备本地完成，ForgeX 控制面不会接收账号密码、Token
           或本地凭据文件。
         </p>
-      </section>
+      </details>
 
       {loading && !overview ? (
         <div className="loading-state" role="status">
           正在汇总设备状态…
         </div>
-      ) : overview ? (
+      ) : overview && (!executors || overview.workers.length > 0) ? (
         <>
           <section className="fleet-capacity" aria-label="账户容量">
             <div>

@@ -210,7 +210,8 @@ test("长需求弹窗在桌面和手机上保持可扫读且关键操作始终�
   await page.getByLabel("账号").fill(username);
   await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "登录" }).click();
-  await page.getByRole("link", { name: "需求管理" }).click();
+  await page.getByText("其他工具", { exact: true }).click();
+  await page.getByRole("link", { name: "旧版需求工具" }).click();
   await page.getByRole("button", { name: `查看${title}详情` }).click();
 
   const dialog = page.getByRole("dialog", { name: `${title}详情` });

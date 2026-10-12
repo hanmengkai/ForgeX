@@ -81,7 +81,9 @@ describe("SessionGate", () => {
       username: "product.owner",
       password: "123456",
     });
-    expect(await screen.findByText("ForgeX 运行总览")).toBeInTheDocument();
+    expect(
+      await screen.findByText("今天，推进哪一项交付？"),
+    ).toBeInTheDocument();
     expect(screen.queryByDisplayValue("123456")).toBeNull();
     expect(screen.getByText("product.owner")).toBeInTheDocument();
 

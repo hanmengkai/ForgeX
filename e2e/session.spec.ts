@@ -13,7 +13,7 @@ test("用户通过账号密码登录后刷新仍保持会话，并可安全注�
   await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(
-    page.getByRole("heading", { name: "ForgeX 运行总览" }),
+    page.getByRole("heading", { name: "今天，推进哪一项交付？" }),
   ).toBeVisible();
   await expect(page.getByText("端到端超级管理员")).toBeVisible();
   await expect(page.getByText(username)).toBeVisible();
@@ -21,7 +21,7 @@ test("用户通过账号密码登录后刷新仍保持会话，并可安全注�
 
   await page.reload();
   await expect(
-    page.getByRole("heading", { name: "ForgeX 运行总览" }),
+    page.getByRole("heading", { name: "今天，推进哪一项交付？" }),
   ).toBeVisible();
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
   expect(await page.evaluate(() => sessionStorage.length)).toBe(0);
@@ -45,7 +45,7 @@ test("移动端可手动切换深色主题，刷新后保留且页面不横向�
   await page.keyboard.type(password);
   await page.keyboard.press("Enter");
   await expect(
-    page.getByRole("heading", { name: "ForgeX 运行总览" }),
+    page.getByRole("heading", { name: "今天，推进哪一项交付？" }),
   ).toBeVisible();
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
