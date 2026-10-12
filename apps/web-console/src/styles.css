@@ -3701,7 +3701,7 @@ h1 {
 }
 
 .dashboard-hero h1 {
-  margin: 6px 0 5px;
+  margin: 6px 0 4px;
   color: var(--hero-ink);
   font-size: clamp(28px, 3vw, 34px);
   letter-spacing: -0.04em;

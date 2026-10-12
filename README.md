@@ -98,7 +98,7 @@ Web Console 位于 `http://localhost:8080`，Control Plane 只在 Compose 内网
 
 浏览器不持有扩展评测私钥。仓库提供独立的本地 `extension-admin`，由受控管理员身份生成 Ed25519 评测身份、把 `SKILL.md` 与 `references/`、`assets/` 下的 Markdown/纯文本/JSON 打成内容寻址制品，再按“发布、登记独立基线评测、激活”顺序提交控制面。脚本、二进制资源、越权权限和控制面明文凭据都会失败关闭。
 
-先把管理员访问令牌放入只允许该管理员身份读取的文件，复制并填写 [bootstrap 示例](services/extension-admin/extension-admin.bootstrap.example.json)，再执行：
+先把管理员访问令牌放入只允许该管理员身份读取的文件，按本机平台复制并填写 [Windows bootstrap 示例](services/extension-admin/extension-admin.bootstrap.example.json)或 [macOS／Linux bootstrap 示例](services/extension-admin/extension-admin.bootstrap.posix.example.json)，再执行：
 
 ```bash
 npm run --workspace @forgex/extension-admin build
@@ -109,7 +109,7 @@ npm run --workspace @forgex/extension-admin admin -- bootstrap \
 
 命令会生成两组彼此独立的 Skill 评测/MCP 探测私钥、`extension-admin.config.json`，以及不含管理员令牌和私钥的 `control-plane.extensions.json`。把公钥片段中的 `skillEvaluators`、`mcpVerifiers` 合并进控制面配置，更新 `FORGEX_CONTROL_PLANE_CONFIG_SHA256` 并重启控制面；私钥、管理员令牌和后续发布包不得提交 Git。
 
-Skill 源码必须先复制到只允许扩展管理员身份访问的私有 staging 目录，目录中必须包含 `SKILL.md`；可选业务资料只放在 `references/` 或 `assets/`。`pack` 会逐项检查目录与文件的 owner、ACL/mode、非符号链接和读取前后身份，不能直接从团队共享、其他用户可写的工作树签名。复制 [发布输入示例](services/extension-admin/skill.release.example.json) 后，先离线生成一个稳定、可安全重试的发布包，再提交：
+Skill 源码必须先复制到只允许扩展管理员身份访问的私有 staging 目录，目录中必须包含 `SKILL.md`；可选业务资料只放在 `references/` 或 `assets/`。`pack` 会逐项检查目录与文件的 owner、ACL/mode、非符号链接和读取前后身份，不能直接从团队共享、其他用户可写的工作树签名。复制 [Windows 发布输入示例](services/extension-admin/skill.release.example.json)或 [macOS／Linux 发布输入示例](services/extension-admin/skill.release.posix.example.json)后，先离线生成一个稳定、可安全重试的发布包，再提交：
 
 ```bash
 npm run --workspace @forgex/extension-admin admin -- pack \

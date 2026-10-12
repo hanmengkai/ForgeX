@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { unlink } from "node:fs/promises";
+import { unlink, realpath } from "node:fs/promises";
 import net, { type Server } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -50,10 +50,13 @@ export class DeviceWorkerInstanceLock {
 
   static async acquire(identity: string): Promise<DeviceWorkerInstanceLock> {
     const digest = createHash("sha256").update(identity, "utf8").digest("hex");
+    // macOS 的默认会话临时路径可能超出 Unix Socket 长度上限；锁端点使用系统短路径。
+    const socketDirectory =
+      process.platform === "darwin" ? await realpath("/tmp") : os.tmpdir();
     const endpoint =
       process.platform === "win32"
         ? `\\\\.\\pipe\\forgex-device-worker-${digest}`
-        : path.join(os.tmpdir(), `forgex-device-worker-${digest}.sock`);
+        : path.join(socketDirectory, `forgex-device-worker-${digest}.sock`);
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const server = net.createServer((socket) => socket.destroy());
       try {

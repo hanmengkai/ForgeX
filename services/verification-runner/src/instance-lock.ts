@@ -4,6 +4,7 @@ import { chmod, readFile } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { darwinProcessLookup, type ProcessLookup } from "./darwin-process.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,11 +68,6 @@ const sameDescriptor = (left: LockDescriptor, right: LockDescriptor): boolean =>
   left.ownerToken === right.ownerToken &&
   left.processId === right.processId &&
   left.processStartKey === right.processStartKey;
-
-type ProcessLookup =
-  | { kind: "found"; startKey: string }
-  | { kind: "missing" }
-  | { kind: "unknown" };
 
 const windowsProcessLookup = async (
   processId: number,
@@ -155,6 +151,7 @@ const uncachedProcessLookup = async (
 ): Promise<ProcessLookup> => {
   if (process.platform === "win32") return windowsProcessLookup(processId);
   if (process.platform === "linux") return linuxProcessLookup(processId);
+  if (process.platform === "darwin") return darwinProcessLookup(processId);
   return { kind: "unknown" };
 };
 

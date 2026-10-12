@@ -93,15 +93,17 @@ afterEach(async () => {
 
 describe("extension admin", () => {
   it("仓库内 bootstrap 与 Skill 发布输入示例符合公开协议", async () => {
+    const suffix =
+      process.platform === "win32" ? "example.json" : "posix.example.json";
     const [bootstrap, release, mcpRelease] = await Promise.all([
       readFile(
         path.resolve(
-          "services/extension-admin/extension-admin.bootstrap.example.json",
+          `services/extension-admin/extension-admin.bootstrap.${suffix}`,
         ),
         "utf8",
       ),
       readFile(
-        path.resolve("services/extension-admin/skill.release.example.json"),
+        path.resolve(`services/extension-admin/skill.release.${suffix}`),
         "utf8",
       ),
       readFile(
@@ -119,6 +121,68 @@ describe("extension admin", () => {
     expect(() =>
       McpReleaseInputSchema.parse(JSON.parse(mcpRelease)),
     ).not.toThrow();
+  });
+
+  it("Windows 与 POSIX 示例标明对应绝对路径；本机输入仍拒绝相对路径", async () => {
+    const suffix =
+      process.platform === "win32" ? "example.json" : "posix.example.json";
+    const bootstrap = JSON.parse(
+      await readFile(
+        `services/extension-admin/extension-admin.bootstrap.${suffix}`,
+        "utf8",
+      ),
+    );
+    const release = JSON.parse(
+      await readFile(
+        `services/extension-admin/skill.release.${suffix}`,
+        "utf8",
+      ),
+    );
+    for (const relative of [
+      "relative/key",
+      "./administrator.key",
+      "../administrator.key",
+      "C:administrator.key",
+    ]) {
+      expect(
+        ExtensionAdminBootstrapInputSchema.safeParse({
+          ...bootstrap,
+          administratorSessionKeyPath: relative,
+        }).success,
+      ).toBe(false);
+      expect(
+        SkillReleaseInputSchema.safeParse({
+          ...release,
+          sourceDirectory: relative,
+        }).success,
+      ).toBe(false);
+    }
+    for (const platform of ["windows", "posix"] as const) {
+      const exampleSuffix =
+        platform === "windows" ? "example.json" : "posix.example.json";
+      const b = JSON.parse(
+        await readFile(
+          `services/extension-admin/extension-admin.bootstrap.${exampleSuffix}`,
+          "utf8",
+        ),
+      );
+      const r = JSON.parse(
+        await readFile(
+          `services/extension-admin/skill.release.${exampleSuffix}`,
+          "utf8",
+        ),
+      );
+      const paths = platform === "windows" ? path.win32 : path.posix;
+      expect(paths.isAbsolute(b.administratorSessionKeyPath)).toBe(true);
+      expect(paths.isAbsolute(r.sourceDirectory)).toBe(true);
+    }
+    if (process.platform !== "win32")
+      expect(
+        ExtensionAdminBootstrapInputSchema.safeParse({
+          ...bootstrap,
+          administratorSessionKeyPath: "C:\\forgex-private\\administrator.key",
+        }).success,
+      ).toBe(false);
   });
 
   it("生成私有评测身份和不含管理员令牌的控制面公钥片段", async () => {

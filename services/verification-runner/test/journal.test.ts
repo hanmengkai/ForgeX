@@ -11,7 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as darwinProcess from "../src/darwin-process.js";
 
 import {
   Ed25519RunnerEvidenceSigner,
@@ -25,6 +26,7 @@ import {
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   const { rm } = await import("node:fs/promises");
   await Promise.all(
     temporaryRoots
@@ -86,6 +88,63 @@ const artifactEntry = verificationArtifactEntry({
 });
 
 describe("FileVerificationJournal", () => {
+  it.skipIf(process.platform !== "darwin")(
+    "macOS 启动身份变化可回收旧锁，身份未知则保留旧持有者",
+    async () => {
+      const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
+      temporaryRoots.push(root);
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      const filePath = path.join(root, "verification-journal.json");
+      const identityHash = createHash("sha256")
+        .update(path.resolve(filePath), "utf8")
+        .digest("hex");
+      const first = await FileVerificationJournal.open(
+        filePath,
+        testJournalOptions,
+      );
+      await first.close();
+      const insert = (pid: number, startKey: string, token: string) => {
+        const database = new DatabaseSync(lockDatabasePath(root));
+        try {
+          database
+            .prepare(
+              "INSERT INTO runner_instance_locks (schema_version,state,identity_hash,owner_token,process_id,process_start_key) VALUES (1,'active',?,?,?,?)",
+            )
+            .run(identityHash, token, pid, startKey);
+        } finally {
+          database.close();
+        }
+      };
+      insert(process.pid, "darwin:old-start", randomUUID());
+      const recovered = await FileVerificationJournal.open(
+        filePath,
+        testJournalOptions,
+      );
+      await recovered.close();
+      const ownerToken = randomUUID();
+      insert(2147483647, "darwin:unknown-start", ownerToken);
+      vi.spyOn(darwinProcess, "darwinProcessLookup").mockResolvedValue({
+        kind: "unknown",
+      });
+      await expect(
+        FileVerificationJournal.open(filePath, testJournalOptions),
+      ).rejects.toThrow("拒绝抢占");
+      const database = new DatabaseSync(lockDatabasePath(root), {
+        readOnly: true,
+      });
+      try {
+        expect(
+          database
+            .prepare(
+              "SELECT owner_token AS ownerToken FROM runner_instance_locks WHERE identity_hash = ?",
+            )
+            .get(identityHash),
+        ).toMatchObject({ ownerToken });
+      } finally {
+        database.close();
+      }
+    },
+  );
   it("原子保存 Preview 与已签名证据，重启后恢复完全相同内容", async () => {
     const root = path.join(os.tmpdir(), `forgex-runner-${randomUUID()}`);
     temporaryRoots.push(root);
