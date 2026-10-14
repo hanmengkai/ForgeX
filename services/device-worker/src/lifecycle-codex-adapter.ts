@@ -16,6 +16,8 @@ import {
 import { type LifecycleExecutionAdapter } from "./lifecycle-runtime.js";
 
 export interface LifecycleCandidatePipeline extends LifecycleExecutionAdapter {
+  testPlanSchema?:
+    typeof SampleLifecycleTestPlanSchema | typeof NodeLifecycleTestPlanSchema;
   run(
     job: LifecycleJob,
     signal: AbortSignal,
@@ -28,7 +30,7 @@ export interface LifecycleCandidatePipeline extends LifecycleExecutionAdapter {
     plan: LifecycleTestPlan,
   ): Promise<LifecycleTaskResult>;
 }
-export const LifecycleTestPlanSchema = z
+export const SampleLifecycleTestPlanSchema = z
   .object({
     schemaVersion: z.literal(1),
     summary: z.string().min(2).max(500),
@@ -51,6 +53,27 @@ export const LifecycleTestPlanSchema = z
       .max(5),
   })
   .strict();
+export const NodeLifecycleTestPlanSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    summary: z.string().min(2).max(500),
+    cases: z
+      .array(
+        z
+          .object({
+            criterionIndex: z.number().int().min(0).max(79),
+            suiteKey: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(80),
+  })
+  .strict();
+export const LifecycleTestPlanSchema = z.discriminatedUnion("schemaVersion", [
+  SampleLifecycleTestPlanSchema,
+  NodeLifecycleTestPlanSchema,
+]);
 export type LifecycleTestPlan = z.infer<typeof LifecycleTestPlanSchema>;
 
 export class CodexLifecycleAdapter implements LifecycleExecutionAdapter {
@@ -102,7 +125,8 @@ export class CodexLifecycleAdapter implements LifecycleExecutionAdapter {
         : job.stage === "design_ai"
           ? LifecycleDesignOutputSchema
           : job.stage === "testing"
-            ? LifecycleTestPlanSchema
+            ? (this.options.pipeline.testPlanSchema ??
+              SampleLifecycleTestPlanSchema)
             : z
                 .object({
                   status: z.enum(["completed", "blocked"]),
@@ -141,7 +165,7 @@ export class CodexLifecycleAdapter implements LifecycleExecutionAdapter {
     });
     const output = schema.parse(JSON.parse(response.finalResponse));
     await this.options.onAgentResult?.(job.stage, response, job);
-    if ("kind" in output || "probes" in output) {
+    if ("kind" in output || "probes" in output || "cases" in output) {
       const status = await this.git.run([
         "-C",
         workspace.path,
@@ -151,10 +175,14 @@ export class CodexLifecycleAdapter implements LifecycleExecutionAdapter {
       ]);
       if (status.stdout.trim())
         throw new Error("需求和设计 Agent 修改了代码，结果被拒绝");
-      if ("probes" in output) {
+      if ("probes" in output || "cases" in output) {
         if (!this.options.pipeline.testWithPlan)
           throw new Error("未配置独立测试探针执行器");
-        return this.options.pipeline.testWithPlan(job, signal, output);
+        return this.options.pipeline.testWithPlan(
+          job,
+          signal,
+          LifecycleTestPlanSchema.parse(output),
+        );
       }
       return { status: "succeeded", output };
     }

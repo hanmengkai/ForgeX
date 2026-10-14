@@ -204,7 +204,7 @@ Logging in again revokes the user's previous session. Logout, server-side expiry
 
 Run `npm run db:migrate` before connecting a production-like Control Plane. The migrator verifies names and SHA-256 digests, serializes execution with a PostgreSQL advisory lock, and records a migration ledger. Never edit an applied migration or skip an intermediate version.
 
-The current chain runs from [`0001_worker_fleet.sql`](packages/postgres/migrations/0001_worker_fleet.sql) through [`0021_project_initializations.sql`](packages/postgres/migrations/0021_project_initializations.sql). Readiness returns `503` if the database ledger is incomplete or has drifted.
+The current chain runs from [`0001_worker_fleet.sql`](packages/postgres/migrations/0001_worker_fleet.sql) through [`0027_lifecycle_artifacts.sql`](packages/postgres/migrations/0027_lifecycle_artifacts.sql). Readiness returns `503` if the database ledger is incomplete or has drifted.
 
 ## Contributing and security
 

@@ -17,7 +17,7 @@ import type {
   LifecycleCandidatePipeline,
   LifecycleTestPlan,
 } from "./lifecycle-codex-adapter.js";
-import type { SampleLifecycleAdapter } from "./lifecycle-sample-adapter.js";
+import { SampleLifecycleTestPlanSchema } from "./lifecycle-codex-adapter.js";
 
 export async function savePrivateJson(
   file: string,
@@ -187,8 +187,11 @@ export class HttpLifecycleArtifactClient {
 
 // 每个执行器使用自己的制品目录，开发只上传已自测且绑定 Git 提交的原始字节。
 export class TransferringLifecyclePipeline implements LifecycleCandidatePipeline {
+  get testPlanSchema() {
+    return this.pipeline.testPlanSchema ?? SampleLifecycleTestPlanSchema;
+  }
   constructor(
-    readonly pipeline: SampleLifecycleAdapter,
+    readonly pipeline: LifecycleCandidatePipeline & { readonly root: string },
     readonly client: HttpLifecycleArtifactClient,
   ) {}
   async #download(job: LifecycleJob, signal: AbortSignal) {
@@ -267,10 +270,12 @@ export class TransferringLifecyclePipeline implements LifecycleCandidatePipeline
     plan: LifecycleTestPlan,
   ) {
     await this.#download(job, signal);
+    if (!this.pipeline.testWithPlan)
+      throw new Error("未配置独立测试计划执行器");
     return this.pipeline.testWithPlan(job, signal, plan);
   }
   async recover(job: LifecycleJob, signal: AbortSignal) {
-    const result = await this.pipeline.recover(job, signal);
+    const result = await this.pipeline.recover?.(job, signal);
     return result ? this.#upload(job, result, signal) : null;
   }
 }

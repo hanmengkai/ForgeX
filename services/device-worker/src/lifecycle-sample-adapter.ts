@@ -170,6 +170,8 @@ export class SampleLifecycleAdapter implements LifecycleExecutionAdapter {
     if (job.stage !== "testing")
       throw new Error("独立测试计划只能用于测试任务");
     const plan = LifecycleTestPlanSchema.parse(raw);
+    if (plan.schemaVersion !== 1)
+      return { status: "blocked", reason: "预约样板不支持此测试计划版本" };
     const requirement = job.input.artifacts.find(
       (a) => a.output.kind === "requirements",
     )?.output;

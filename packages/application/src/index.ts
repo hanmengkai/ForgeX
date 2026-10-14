@@ -260,6 +260,7 @@ export { LifecycleWorkerService } from "./lifecycle-worker-service.js";
 export type { LifecycleWorkerDescriptor } from "./lifecycle-worker-service.js";
 export {
   SqliteLifecycleArtifactStore,
+  LifecycleArtifactScopeSchema,
   verifyLifecycleArtifact,
 } from "./lifecycle-artifact-store.js";
 export type {

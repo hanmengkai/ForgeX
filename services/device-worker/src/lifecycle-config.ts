@@ -19,6 +19,10 @@ import {
   savePrivateJson,
 } from "./lifecycle-transfer.js";
 import { randomUUID } from "node:crypto";
+import {
+  NodeProjectConfigSchema,
+  NodeProjectLifecyclePipeline,
+} from "./lifecycle-node-project.js";
 const absolute = z
   .string()
   .min(1)
@@ -44,6 +48,7 @@ export const LifecycleWorkerConfigSchema = z
       })
       .strict()
       .optional(),
+    nodeProject: NodeProjectConfigSchema.optional(),
     sample: z
       .object({
         schemaVersion: z.literal(1),
@@ -83,20 +88,15 @@ export const LifecycleWorkerConfigSchema = z
   })
   .strict()
   .superRefine((v, ctx) => {
-    if (Boolean(v.sample) === Boolean(v.adapter))
+    if ([v.sample, v.adapter, v.nodeProject].filter(Boolean).length !== 1)
       ctx.addIssue({
         code: "custom",
-        message: "请选择一个受控样板或远程执行适配器",
+        message: "请选择一个受控样板、Node 项目或远程执行适配器",
       });
     if (v.execution && v.codex)
       ctx.addIssue({
         code: "custom",
         message: "不能同时配置两种 Codex 登录方式",
-      });
-    if (v.execution?.testingAgent && v.adapter)
-      ctx.addIssue({
-        code: "custom",
-        message: "远程适配器尚未提供独立测试计划协议",
       });
   });
 export type LifecycleWorkerConfig = z.infer<typeof LifecycleWorkerConfigSchema>;
@@ -105,7 +105,7 @@ export function createLifecycleWorkerAdapter(
   protectedPaths: string[],
 ): {
   adapter: LifecycleExecutionAdapter;
-  pipeline: SampleLifecycleAdapter | null;
+  pipeline: SampleLifecycleAdapter | NodeProjectLifecyclePipeline | null;
 } {
   const sample = config.sample
     ? new SampleLifecycleAdapter({
@@ -117,9 +117,14 @@ export function createLifecycleWorkerAdapter(
         durableDeployments: true,
       })
     : null;
-  const pipeline = sample
+  const local =
+    sample ??
+    (config.nodeProject
+      ? new NodeProjectLifecyclePipeline(config.nodeProject)
+      : null);
+  const pipeline = local
     ? new TransferringLifecyclePipeline(
-        sample,
+        local,
         new HttpLifecycleArtifactClient({
           origin: config.controlPlaneOrigin,
           token: config.token,
@@ -127,7 +132,7 @@ export function createLifecycleWorkerAdapter(
       )
     : new HttpLifecycleAdapter(config.adapter!);
   const execution = config.execution ?? config.codex;
-  if (!execution) return { adapter: pipeline, pipeline: sample };
+  if (!execution) return { adapter: pipeline, pipeline: local };
   if (config.execution && process.platform !== "darwin")
     throw new Error("当前用户 Codex 执行方式仅在已验证的 macOS 沙箱中可用");
   return {
@@ -149,6 +154,13 @@ export function createLifecycleWorkerAdapter(
           ...execution.protectedPaths,
           ...protectedPaths,
           ...(config.sample ? [config.sample.root] : []),
+          ...(config.nodeProject
+            ? [
+                config.nodeProject.root,
+                config.nodeProject.runtimePath,
+                config.nodeProject.suitesPath,
+              ]
+            : []),
         ]),
       ],
       pipeline,
@@ -176,6 +188,6 @@ export function createLifecycleWorkerAdapter(
         console.log(`真实 Codex Agent 已完成：${stage}`);
       },
     }),
-    pipeline: sample,
+    pipeline: local,
   };
 }

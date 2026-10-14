@@ -27,7 +27,10 @@
     "p0:fixture:console": "npm run build:all && node examples/p0-sample/control-plane.mjs",
     "p0:durable:console": "npm run build:all && node examples/p0-sample/durable-control-plane.mjs",
     "p0:durable:verify": "npm run build && node scripts/verify-p0-durable.mjs",
-    "p0:durable:stop": "node examples/p0-sample/durable-cleanup.mjs"
+    "p0:durable:stop": "node examples/p0-sample/durable-cleanup.mjs",
+    "p0:node:verify": "npm run build && node scripts/verify-node-project.mjs",
+    "p0:node:db:start": "npm run build && node scripts/node-project-database.mjs start",
+    "p0:node:db:stop": "node scripts/node-project-database.mjs stop"
   },
   "engines": {
     "node": ">=22.13.0"

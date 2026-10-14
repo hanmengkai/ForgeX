@@ -23,6 +23,11 @@ import {
   type LifecycleTaskResult,
 } from "@forgex/contracts/lifecycle";
 import { ControlPlaneOriginSchema } from "./config.js";
+import {
+  NodeLifecycleTestPlanSchema,
+  LifecycleTestPlanSchema,
+  type LifecycleTestPlan,
+} from "./lifecycle-codex-adapter.js";
 import { assertPrivateWindowsPath } from "./windows-path-security.js";
 
 export type LifecycleSignedCompletion = z.infer<
@@ -374,6 +379,7 @@ export class HttpLifecycleClient implements LifecycleExecutionClient {
   }
 }
 export class HttpLifecycleAdapter implements LifecycleExecutionAdapter {
+  readonly testPlanSchema = NodeLifecycleTestPlanSchema;
   readonly endpoint: URL;
   constructor(
     readonly options: {
@@ -415,6 +421,7 @@ export class HttpLifecycleAdapter implements LifecycleExecutionAdapter {
     signal: AbortSignal,
     recoverOnly = false,
     candidate?: { workspacePath: string; commitSha: string },
+    testPlan?: LifecycleTestPlan,
   ): Promise<LifecycleTaskResult> {
     const response = await (this.options.fetcher ?? fetch)(this.endpoint, {
       method: "POST",
@@ -424,15 +431,27 @@ export class HttpLifecycleAdapter implements LifecycleExecutionAdapter {
         "idempotency-key": job.jobKey,
       },
       body: JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: testPlan ? 3 : 2,
         job,
         recoverOnly,
         ...(candidate ? { candidate } : {}),
+        ...(testPlan
+          ? { testPlan: LifecycleTestPlanSchema.parse(testPlan) }
+          : {}),
       }),
       redirect: "error",
       signal,
     });
     if (!response.ok) throw new Error("受控执行适配器没有返回有效结果");
     return LifecycleTaskResultSchema.parse(await boundedJson(response));
+  }
+  async testWithPlan(
+    job: LifecycleJob,
+    signal: AbortSignal,
+    plan: LifecycleTestPlan,
+  ): Promise<LifecycleTaskResult> {
+    if (job.stage !== "testing")
+      throw new Error("独立测试计划只能用于测试任务");
+    return this.run(job, signal, false, undefined, plan);
   }
 }
